@@ -1,20 +1,77 @@
-# P00 で Claude Code が完成させる雛形
 name: ci
 on:
   pull_request:
   push:
     branches: [main]
+permissions:
+  contents: read
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
+
+# アクションはタグではなくコミット SHA で固定し、コメントにバージョンを併記する。
+# 必須チェックは `build` ジョブのみ。`macos` ジョブは shared/** などの変更時だけ実行され、スキップされてもマージを妨げない。
 jobs:
   build:
+    name: build
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with: { distribution: temurin, java-version: "21" }
-      - uses: gradle/actions/setup-gradle@v4
-      - name: Build (lint, detekt, unit, architecture tests)
-        run: |
-          if [ -f ./gradlew ]; then ./gradlew build --no-daemon; else echo "gradle not bootstrapped yet"; fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Cache Kotlin/Native toolchain
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          # 既定の enhanced は商用のキャッシュサービス。private リポジトリのため OSS 実装を使う。
+          cache-provider: basic
+      - name: Build (ktlint, detekt, Konsist, jvm / js / linuxX64 tests, Kover)
+        run: ./gradlew build
+
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      shared: ${{ steps.filter.outputs.shared }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          filters: |
+            shared:
+              - 'shared/**'
+              - 'build-logic/**'
+              - 'gradle/libs.versions.toml'
+              - '.github/workflows/ci.yml'
+
+  # ADR-0004: macosArm64 は macOS ホストでしか実行できないため、shared/** の変更時のみ検証する。
+  macos:
+    name: macos (macosArm64 tests)
+    needs: changes
+    if: needs.changes.outputs.shared == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Cache Kotlin/Native toolchain
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('gradle/libs.versions.toml') }}
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          cache-provider: basic
+      - name: macosArm64 tests
+        run: ./gradlew macosArm64Test
