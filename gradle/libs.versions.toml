@@ -39,6 +39,7 @@ testcontainers = { module = "org.testcontainers:testcontainers", version.ref = "
 
 # build-logic が convention plugin から適用するプラグインの実体
 gradle-kotlin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
+gradle-kotlin-serialization = { module = "org.jetbrains.kotlin:kotlin-serialization", version.ref = "kotlin" }
 gradle-ksp = { module = "com.google.devtools.ksp:com.google.devtools.ksp.gradle.plugin", version.ref = "ksp" }
 gradle-kotest = { module = "io.kotest:io.kotest.gradle.plugin", version.ref = "kotest" }
 gradle-detekt = { module = "io.gitlab.arturbosch.detekt:detekt-gradle-plugin", version.ref = "detekt" }
