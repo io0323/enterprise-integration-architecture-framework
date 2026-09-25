@@ -4,12 +4,15 @@
 | 対象 | 規約 | 例 |
 |---|---|---|
 | 連携ID | `INT-{DOMAIN}-{NNN}` | INT-SALES-001 |
-| REST | `/v{n}/{resource}`(複数形・kebab-case) | /v1/orders |
+| REST(Gateway 公開) | `/{domain}/v{n}/{resource}`(複数形・kebab-case)(ADR-0005) | /sales/v1/orders |
+| REST(サービス内部) | `/v{n}/{resource}`(Gateway が `/{domain}` を除去して転送) | /v1/orders |
 | Topic | `{domain}.{entity}.{event}.v{n}` | sales.order.created.v1 |
+| Command Topic | `{domain}.{entity}.cmd-{command}.v{n}`(ADR-0006) | inventory.stock.cmd-reserve.v1 |
 | DLQ | `{topic}.dlq` | sales.order.created.v1.dlq |
 | Consumer Group | `{service}.{purpose}` | inventory.reservation |
 | Avro | namespace `{basePackage}.events.{domain}`、record は PascalCase | OrderCreated |
-| File | `{system}_{dataset}_{yyyyMMddHHmmss}_{seq}.{ext}` + `.manifest.json` | sales_daily_20260925010000_001.parquet |
+| File | `{system}_{dataset}_{yyyyMMddHHmmss}_{seq}.{ext}` + 同名の `.manifest.json` | sales_daily_20260925010000_001.parquet / sales_daily_20260925010000_001.manifest.json |
+| File 仕様 | `contracts/files/{system}_{dataset}.v{n}.yaml` | contracts/files/sales_daily.v1.yaml |
 | MQTT | `devices/{tenant}/{deviceId}/{channel}` | devices/t1/d-001/telemetry |
 
 ## 2. 標準ヘッダ
@@ -19,6 +22,9 @@
 | X-Correlation-Id / correlationid | ○ | ○ | 業務トランザクション ID(入口で採番) |
 | Idempotency-Key | POST 必須 | — | 24h 保持 |
 | ce_id, ce_source, ce_type, ce_time, ce_specversion | — | ○ | CloudEvents binary mode |
+
+### File manifest(`contracts/files/manifest.v1.schema.json`)
+必須項目: `file`, `recordCount`, `sha256`, `schemaVersion`, `createdAt`(UTC), `traceparent`, `correlationId`。
 
 ## 3. HTTP ステータスとリトライ
 - Retry 対象: 408, 429, 502, 503, 504, 接続エラー。429/503 は `Retry-After` を優先。

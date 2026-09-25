@@ -35,50 +35,60 @@
 ```
 build-logic/            Gradle convention plugins (kmp-library, jvm-service, quality)
 contracts/              契約の単一の真実 (OpenAPI / AsyncAPI / Avro / Proto / catalog YAML)
+  files/                ファイル連携・EDI 仕様 (manifest JSON Schema / CSV・Parquet レイアウト / EDIFACT サブセット)
 shared/                 KMP モジュール (commonMain 中心・フレームワーク非依存)
   kernel/               Result, DomainError, CorrelationId, IdempotencyKey, RetryPolicy, Clock
+  resilience/           Timeout / Retry / Circuit Breaker / Bulkhead / Fallback, traceparent (ADR-0004)
   canonical-model/      Canonical Model (Customer, Order, Product, Invoice ...)
   integration-sdk/      KMP 連携クライアント SDK (jvm / js / native)
 platform/               JVM 共通連携部品 (再利用可能な Integration Building Blocks)
-  observability/ security/ reliability/ messaging-kafka/ outbox/ file-transfer/ schema-registry/
+  observability/ security/ audit/ reliability/ messaging-kafka/ outbox/ batch/ file-transfer/ schema-registry/
 services/<name>/        サンプル業務サービス。各サービスは下記 4 モジュール構成
-  domain/               KMP commonMain。純粋 Kotlin。外部依存禁止
-  application/          KMP commonMain。UseCase + Port(in/out)。domain のみ依存
+  domain/               KMP commonMain(ターゲットは jvm のみ。ADR-0004)。純粋 Kotlin。外部依存禁止
+  application/          KMP commonMain(同上)。UseCase + Port(in/out)。domain のみ依存
   adapters/             JVM。REST/Kafka/DB/File などの Port 実装
   app/                  JVM。Ktor 起動・Koin 配線・設定
-tools/                  ガバナンスツール (catalog validator, naming linter, compat check)
+tools/                  ガバナンス・開発支援ツール (catalog validator, naming linter, compat check, architecture test)
+  device-simulator/     IoT デバイスシミュレータ CLI (KMP native。integration-sdk を利用)
+tests/
+  e2e/                  E2E シナリオ・障害注入 (docker compose + Toxiproxy。サービスはブラックボックス扱い)
 infra/local/            docker-compose とミドルウェア設定
 docs/                   設計書・ロードマップ・標準・ADR・プロンプト
+  runbooks/             運用 Runbook (DLQ Replay / CDC 再同期 / バッチ再実行 / 証明書更新)
+  reports/              検証・計測レポート (resilience / NFR・SLO 計測)
 ```
 
 ## 4. Clean Architecture 規約(Konsist で自動検証すること)
 - 依存方向は **domain ← application ← adapters ← app** のみ。逆方向・スキップ参照禁止。
-- `domain` / `application` は Ktor・Kafka・Exposed・Koin 等のフレームワークを import しない(commonMain で担保)。
+- `domain` / `application` は Ktor・Kafka・Exposed・Koin 等のフレームワークや `java.*` を import しない(Konsist で担保。禁止リストは ADR-0004)。
 - 外部 I/O は必ず application の **Port(interface)** 経由。Adapter は Port を実装する。
 - ユースケースは 1 クラス 1 ユースケース(`XxxUseCase` / `operator fun invoke`)。
-- 例外は境界で `Result<T, DomainError>` に変換。domain 内で例外を業務制御に使わない。
+- 例外は境界で `Result<T, DomainError>`(`io.eia.kernel.Result`)に変換。domain 内で例外を業務制御に使わない。`kotlin.Result` は使用禁止(ADR-0004)。
 - DTO(契約モデル)と domain モデルを混同しない。変換は adapters のマッパーで行う。
 
 ## 5. 連携実装の必須ルール(Framework 準拠。違反はレビューで却下)
 | 区分 | 必須事項 | 参照章 |
 |---|---|---|
 | Contract First | 実装前に contracts/ に契約を追加し CI 互換性検査を通す | 5, 6, 15, 19 |
-| API | Gateway 経由 / `/v{n}/` / POST は `Idempotency-Key` 必須 / 429+Retry-After | 5 |
+| API | Gateway 経由(公開パス `/{domain}/v{n}/`、サービス内部 `/v{n}/`: ADR-0005)/ POST は `Idempotency-Key` 必須 / 429+Retry-After | 5 |
 | Event | Topic `{domain}.{entity}.{event}.v{n}` / Avro + CloudEvents ヘッダ / BACKWARD 互換 / DLQ `{topic}.dlq` | 6 |
+| Command | Topic `{domain}.{entity}.cmd-{command}.v{n}` / 購読は受信サービスの 1 Consumer Group のみ(ADR-0006) | 4.2, 6.2 |
 | 配信保証 | At-Least-Once + 消費側冪等(processed_message テーブル) | 13 |
-| DB→Event | 二重書込み禁止。**Outbox + Debezium** で発行 | 8 |
+| DB→Event | 二重書込み禁止。**Outbox + Debezium** で発行(形式とクリーンアップは ADR-0007) | 8 |
 | 同期呼出し | Timeout + Retry(Backoff+Jitter) + Circuit Breaker + Fallback の 4 点セット | 13 |
 | 非同期 | 冪等 + DLQ + Replay の 3 点セット | 13 |
 | Batch | 再実行安全(Upsert/パーティション置換) + Checkpoint(Watermark 永続化) | 7 |
-| File | manifest(件数・SHA-256・schema版) + 一時名→リネーム完了通知 | 9 |
+| File | `.manifest.json`(件数・SHA-256・schema版・traceparent)+ 一時名→リネーム完了通知 | 9 |
 | 可観測性 | `traceparent` と `X-Correlation-Id` を全チャネル伝搬 / 構造化 JSON ログ / ペイロード全文ログ禁止 | 14 |
-| Security | Secrets のハードコード禁止(環境変数/.env は .gitignore) / JWT は iss・aud・exp 検証 | 12 |
+| Security | Secrets のハードコード禁止(`SecretProvider` 経由。ローカルは環境変数/.env は .gitignore)/ JWT は iss・aud・exp 検証 / 縮退範囲は ADR-0008 | 12 |
 | Governance | 新規連携は `contracts/catalog/*.yaml` に登録(Owner・Tier・SLO・機密区分) | 16 |
 
 ## 6. 作業プロセス
 1. 着手前に `docs/implementation/ROADMAP.md` の該当フェーズと DoD を読む。大きな変更は **Plan を提示してから実装**。
 2. ブランチ: `feat/p{NN}-{slug}`、`fix/...`、`docs/...`。コミットは Conventional Commits(`feat(order): ...`)。
 3. 1 フェーズ = 1 PR(大きい場合はサブ PR に分割)。PR テンプレートのチェックリストを埋める。
+   - **main に直接 push しない**。変更は必ずブランチ + PR で行う。
+   - **CI が成功していない PR はマージしない**(private リポジトリのためブランチ保護が使えず、運用で担保する)。
 4. アーキテクチャ上の決定は `docs/adr/NNNN-*.md` に ADR として残す(`/adr` コマンド)。
 5. 完了前に必ず以下を実行し、全て成功させる:
    - `./gradlew build`(ktlint・detekt・テスト・Konsist 含む)
@@ -92,7 +102,7 @@ make up / make down           # infra/local の docker compose 起動・停止
 ./gradlew build               # 全ビルド + 品質チェック + 単体テスト
 ./gradlew integrationTest     # Testcontainers 統合テスト
 ./gradlew :services:order:app:run
-make e2e                      # E2E シナリオ (scripts/e2e)
+make e2e                      # E2E シナリオ (tests/e2e)
 ```
 
 ## 8. 禁止事項
