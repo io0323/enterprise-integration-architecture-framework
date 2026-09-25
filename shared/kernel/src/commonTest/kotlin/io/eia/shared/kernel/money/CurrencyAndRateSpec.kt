@@ -4,7 +4,6 @@ import io.eia.shared.kernel.shouldBeErr
 import io.eia.shared.kernel.shouldBeOk
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
-import io.kotest.datatest.withData
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
@@ -64,8 +63,8 @@ class CurrencyAndRateSpec :
         context("divideRounded(java.math.RoundingMode と同じ意味)") {
             // 被除数 / 4 の結果: 2.5, 1.5, 0.5, -0.5, -1.5, -2.5, 2.25, -2.75
             val dividends = listOf(10L, 6, 2, -2, -6, -10, 9, -11)
-            withData(
-                nameFn = { it.first.name },
+            // withData は native で成功したケースがレポートに出ないため、通常のテストとして登録する(全ターゲットで件数を揃える)
+            listOf(
                 RoundingMode.UP to listOf(3L, 2, 1, -1, -2, -3, 3, -3),
                 RoundingMode.DOWN to listOf(2L, 1, 0, 0, -1, -2, 2, -2),
                 RoundingMode.CEILING to listOf(3L, 2, 1, 0, -1, -2, 3, -2),
@@ -73,8 +72,10 @@ class CurrencyAndRateSpec :
                 RoundingMode.HALF_UP to listOf(3L, 2, 1, -1, -2, -3, 2, -3),
                 RoundingMode.HALF_DOWN to listOf(2L, 1, 0, 0, -1, -2, 2, -3),
                 RoundingMode.HALF_EVEN to listOf(2L, 2, 0, 0, -2, -2, 2, -3),
-            ) { (mode, expected) ->
-                dividends.map { divideRounded(it, 4, mode) } shouldBe expected
+            ).forEach { (mode, expected) ->
+                test(mode.name) {
+                    dividends.map { divideRounded(it, 4, mode) } shouldBe expected
+                }
             }
 
             test("割り切れる場合は丸めない・分母は正") {

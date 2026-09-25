@@ -18,6 +18,7 @@ Kotlin / Kotlin Multiplatform / Clean Architecture、Cloud Agnostic(Docker Compo
   file "$JAVA_HOME/bin/java"
   /usr/libexec/java_home -V   # インストール済み JDK とアーキテクチャの一覧(macOS)
   ```
+- Apple Silicon の Mac で x86_64 の JDK を使って Gradle を起動すると、**ビルドは構成時にエラーで失敗する**(`build-logic` の `requireArm64JdkOnAppleSilicon`)。x86_64 の JDK では macosArm64 のテストが黙ってスキップされ、`./gradlew build` が成功しても検証が漏れるため。エラーになったら、arm64 の JDK 21 に `JAVA_HOME` を向け、`./gradlew --stop` で x86_64 の Gradle デーモンを止めてからやり直す。Intel Mac と Linux では検査しない。
 - ビルドに使う JDK 21 の toolchain は、foojay(`org.gradle.toolchains.foojay-resolver-convention`)が自動で取得する(`~/.gradle/jdks`)。ただし Gradle 自体を起動する JVM は `JAVA_HOME` の JDK なので、上記のとおり arm64 の JDK を指定する。
 
 ## Quick Start(P03 以降)
