@@ -1,0 +1,46 @@
+import io.eia.buildlogic.JVM_TOOLCHAIN
+import io.eia.buildlogic.library
+import io.eia.buildlogic.libs
+import org.jetbrains.kotlin.gradle.dsl.KotlinJvmProjectExtension
+
+// platform/*, services/*/adapters, tools/* 用の JVM モジュール。
+plugins {
+    id("org.jetbrains.kotlin.jvm")
+    id("eia.quality")
+}
+
+kotlin {
+    jvmToolchain(JVM_TOOLCHAIN)
+    // CODING_STANDARDS: shared/* と platform/* は明示 API モード
+    if (path.startsWith(":platform:")) explicitApi()
+}
+
+dependencies {
+    testImplementation(libs.library("kotest-runner-junit5"))
+    testImplementation(libs.library("kotest-assertions-core"))
+}
+
+// integrationTest ソースセット規約: src/integrationTest/kotlin。Testcontainers を使うテストはここに置く。
+// `check` には含めず、`./gradlew integrationTest` で明示的に実行する。
+val integrationTest: SourceSet = sourceSets.create("integrationTest")
+configurations.named(integrationTest.implementationConfigurationName) {
+    extendsFrom(configurations.testImplementation.get())
+}
+configurations.named(integrationTest.runtimeOnlyConfigurationName) {
+    extendsFrom(configurations.testRuntimeOnly.get())
+}
+extensions.getByType<KotlinJvmProjectExtension>().target.compilations.run {
+    getByName("integrationTest").associateWith(getByName("main"))
+}
+
+tasks.register<Test>("integrationTest") {
+    description = "Testcontainers などの実ミドルウェアを使う統合テストを実行する。"
+    group = LifecycleBasePlugin.VERIFICATION_GROUP
+    testClassesDirs = integrationTest.output.classesDirs
+    classpath = integrationTest.runtimeClasspath
+    shouldRunAfter(tasks.test)
+}
+
+tasks.withType<Test>().configureEach {
+    useJUnitPlatform()
+}
