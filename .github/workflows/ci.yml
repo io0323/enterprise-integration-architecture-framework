@@ -38,6 +38,10 @@ jobs:
     name: changes
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # paths-filter は pull_request イベントで PR の変更ファイルを API から取得するため pull-requests: read が必要
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       shared: ${{ steps.filter.outputs.shared }}
     steps:
