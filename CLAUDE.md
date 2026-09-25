@@ -87,7 +87,9 @@ docs/                   設計書・ロードマップ・標準・ADR・プロ�
 1. 着手前に `docs/implementation/ROADMAP.md` の該当フェーズと DoD を読む。大きな変更は **Plan を提示してから実装**。
 2. ブランチ: `feat/p{NN}-{slug}`、`fix/...`、`docs/...`。コミットは Conventional Commits(`feat(order): ...`)。
 3. 1 フェーズ = 1 PR(大きい場合はサブ PR に分割)。PR テンプレートのチェックリストを埋める。
-   - **main に直接 push しない**。変更は必ずブランチ + PR で行う。
+   - **main に直接 push しない**。変更は必ずブランチ + PR で行う(`make setup` で登録する pre-push フックが拒否する)。
+   - ブランチは `git switch -c <name> --no-track origin/main` で作る(upstream を main にしない)。
+   - push は `git push -u origin <branch>:<branch>` と送り先を明示する。
    - **CI が成功していない PR はマージしない**(private リポジトリのためブランチ保護が使えず、運用で担保する)。
 4. アーキテクチャ上の決定は `docs/adr/NNNN-*.md` に ADR として残す(`/adr` コマンド)。
 5. 完了前に必ず以下を実行し、全て成功させる:
