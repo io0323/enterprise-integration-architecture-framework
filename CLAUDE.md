@@ -59,11 +59,11 @@ docs/                   設計書・ロードマップ・標準・ADR・プロ�
 ```
 
 ## 4. Clean Architecture 規約(Konsist で自動検証すること)
-- 依存方向は **domain ← application ← adapters ← app** のみ。逆方向・スキップ参照禁止。
+- 依存方向は **domain ← application ← adapters ← app** のみ。逆方向の参照は禁止。コードの参照(import)は外側から内側のどのレイヤへも可(例: adapters のマッパーが domain を参照)。Gradle の依存宣言は直下のレイヤのみとし、それより内側は `api` による推移的依存で参照する(ADR-0010)。
 - `domain` / `application` は Ktor・Kafka・Exposed・Koin 等のフレームワークや `java.*` を import しない(Konsist で担保。禁止リストは ADR-0004)。
 - 外部 I/O は必ず application の **Port(interface)** 経由。Adapter は Port を実装する。
 - ユースケースは 1 クラス 1 ユースケース(`XxxUseCase` / `operator fun invoke`)。
-- 例外は境界で `Result<T, DomainError>`(`io.eia.kernel.Result`)に変換。domain 内で例外を業務制御に使わない。`kotlin.Result` は使用禁止(ADR-0004)。
+- 例外は境界で `Result<T, DomainError>`(`io.eia.shared.kernel.Result`)に変換。domain 内で例外を業務制御に使わない。`kotlin.Result` は使用禁止(ADR-0004)。
 - DTO(契約モデル)と domain モデルを混同しない。変換は adapters のマッパーで行う。
 
 ## 5. 連携実装の必須ルール(Framework 準拠。違反はレビューで却下)
