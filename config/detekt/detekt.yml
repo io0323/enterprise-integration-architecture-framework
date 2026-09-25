@@ -1,0 +1,19 @@
+# detekt の既定設定(buildUponDefaultConfig)に対する差分のみ記載する。
+
+style:
+  # ktlint(.editorconfig の max_line_length)と揃える
+  MaxLineLength:
+    maxLineLength: 140
+  # ADR-0004 §3: kotlin.Result の使用禁止。io.eia.shared.kernel.Result を使う。
+  ForbiddenImport:
+    active: true
+    imports:
+      - value: 'kotlin.Result'
+        reason: 'ADR-0004: kotlin.Result は使用禁止。io.eia.shared.kernel.Result を使う。'
+  # ADR-0004 §3: runCatching の禁止。io.eia.shared.kernel.catching を使う。
+  # ForbiddenMethodCall は型解決が必要なため detektJvmMain など型解決付きタスクでのみ有効。Konsist でも併せて検出する。
+  ForbiddenMethodCall:
+    active: true
+    methods:
+      - value: 'kotlin.runCatching'
+        reason: 'ADR-0004: runCatching は使用禁止。io.eia.shared.kernel.catching を使う。'
