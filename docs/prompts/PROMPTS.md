@@ -4,7 +4,8 @@
 ```bash
 unzip enterprise-integration-architecture-framework.zip && cd enterprise-integration-architecture-framework
 gh auth login
-./scripts/bootstrap-github.sh enterprise-integration-architecture-framework private   # repo作成・ラベル・P00〜P14 マイルストーン/Issue
+./scripts/bootstrap-github.sh --dry-run              # 作成内容の確認(リポジトリ・ラベル・マイルストーン・Issue)
+./scripts/bootstrap-github.sh enterprise-integration-architecture-framework private   # repo作成・ラベル・P00〜P14(P04a/P04b 含む)マイルストーン/Issue
 claude                                               # リポジトリのルートで Claude Code を起動
 ```
 進め方の基本: **1 フェーズ = 1 セッション = 1 PR**。フェーズ完了ごとに `/clear` してコンテキストをリセットする。
@@ -38,9 +39,9 @@ CLAUDE.md と docs/ 配下(architecture/EIA-Framework.md, implementation/*, stan
 ```
 追加指示:
 - Gradle / Kotlin / Ktor / Koin / Exposed / kotest / Konsist / detekt / ktlint 等は、Web またはリポジトリで最新安定版を確認して libs.versions.toml に固定。
-- build-logic に eia.kmp-library(jvm, js(IR), linuxX64, macosArm64)/ eia.jvm-library / eia.jvm-service / eia.quality の convention plugin を作成。
-- tools/architecture-test に Konsist で「domain/application が io.ktor, org.apache.kafka, org.jetbrains.exposed, org.koin を import しない」「依存方向」テストを実装し、違反サンプルで失敗することを確認。
-- .github/workflows/ci.yml を完成させ、Gradle キャッシュを有効化。
+- build-logic に eia.kmp-library(jvm, js(IR), linuxX64, macosArm64)/ eia.kmp-domain(既定 jvm のみ。DSL でターゲット追加可能)/ eia.jvm-library / eia.jvm-service / eia.quality の convention plugin を作成(ADR-0004)。
+- tools/architecture-test に Konsist で「commonMain が ADR-0004 の禁止 import(java.*, io.ktor, org.apache.kafka, org.jetbrains.exposed, org.koin 等)を含まない」「依存方向」「kotlin.Result を使わない」テストを実装し、違反サンプルで失敗することを確認。
+- .github/workflows/ci.yml を完成させ、Gradle キャッシュを有効化。macosArm64 のジョブは shared/** 変更時のみ実行。
 ```
 
 ### P01 Shared Kernel & Canonical Model
@@ -49,7 +50,7 @@ CLAUDE.md と docs/ 配下(architecture/EIA-Framework.md, implementation/*, stan
 - Result/DomainError は sealed 階層で Retryable/NonRetryable を区別可能に。
 - RetryPolicy は副作用なしの純粋関数(attempt → delay)として実装し、jitter は Random をインジェクション。
 - Canonical Model は Framework 15 章に従いドメイン単位(sales, catalog, billing, logistics)でパッケージ分割。全体単一巨大モデルにしない。
-- commonTest で全ターゲットを実行。
+- commonTest を jvm / js / linuxX64 で実行(macosArm64 は macOS ジョブかローカル実行)。
 ```
 
 ### P02 Contracts & Governance CI
@@ -57,25 +58,33 @@ CLAUDE.md と docs/ 配下(architecture/EIA-Framework.md, implementation/*, stan
 追加指示:
 - 互換性検査は main ブランチの契約と PR の契約を比較する方式にする。
 - tools/contract-check は Kotlin CLI とし、失敗理由を「ファイル / ルール / Framework 章」で出力。
-- 違反サンプル(命名違反、Avro 必須フィールド追加、OpenAPI の必須パラメータ追加、Owner 欠落)を test fixtures に置き、全て検出されることをテスト。
+- 違反サンプル(命名違反、Avro 必須フィールド追加、OpenAPI の必須パラメータ追加、Owner 欠落、Canonical と Avro の不一致、コマンドトピックの複数購読)を test fixtures に置き、全て検出されることをテスト。
 ```
 
 ### P03 Local Infrastructure
 ```
 追加指示:
-- docker compose profiles: core(kafka, registry, postgres, keycloak, apisix, otel一式), cdc, iot, file, b2b, chaos。
+- docker compose profiles: core(kafka, registry, postgres, keycloak, apisix, otel一式), cdc, iot, file, b2b, chaos, secure。
+- Kafka / Debezium / Apicurio 等のイメージは最新安定版を確認して固定(ADR-0006 の Share Group 再評価条件も確認)。
+- Toxiproxy 経由で Kafka に接続する専用リスナーを用意。
 - 開発マシン(メモリ 16GB)で core が動くようリソース制限を設定。
 - Keycloak は realm-export.json で client(order-service 等)と scope を自動投入。
 - ポート一覧と起動手順を infra/local/README.md に記載。
 ```
 
-### P04 Platform Libraries
+### P04a Platform: Observability, Security & Audit
 ```
 追加指示:
-- Circuit Breaker / Bulkhead は外部ライブラリ採用 or 自作を比較して ADR に残す(coroutines 親和性・KMP 移植性を評価軸に)。
-- Kafka Consumer は「処理 → processed_message 記録 → オフセットコミット」を同一の冪等性保証で実装。
-- DLQ レコードに error.class / error.message / retry.count / original.topic / original.offset ヘッダを付与。
-- Replay は CLI(DLQ → 元トピック、フィルタ・件数上限・dry-run 付き)。
+- traceparent / Correlation ID の生成・解析は shared/resilience(KMP)に置き、platform/observability は Ktor・OTel への結線のみ。
+- SecretProvider Port を定義し、環境変数実装のみ提供(ADR-0008)。
+- platform/audit はハッシュチェーンの検証 API と、改竄検出のテストを必ず含める。
+```
+
+### P04b Platform: Resilience
+```
+追加指示:
+- Timeout / Retry / Circuit Breaker / Bulkhead / Fallback は shared/resilience に coroutines ベースで自作(ADR-0004)。Clock と Random をインジェクション。
+- Circuit Breaker の状態遷移は commonTest(仮想時間)と Toxiproxy の統合テストの両方で検証。
 ```
 
 ### P05 API Integration
@@ -89,7 +98,8 @@ CLAUDE.md と docs/ 配下(architecture/EIA-Framework.md, implementation/*, stan
 ### P06 Outbox & CDC
 ```
 追加指示:
-- Debezium Outbox Event Router を使い、aggregate_id をパーティションキーに。
+- Outbox は ADR-0007 に従う(Avro を bytea で保存・ByteArrayConverter・topic 列でルーティング・同一 Tx で挿入直後に削除)。aggregate_id をパーティションキーに。
+- platform/messaging-kafka の Producer 側をここで実装。
 - legacy-sim のテーブルは意図的に「レガシーっぽい」命名(例: T_JUCHU, COL_01)にし、Anti-Corruption 変換で Canonical へ。
 - Kafka 停止 → 注文作成 → Kafka 再開 → イベント欠損なし、を Testcontainers で自動テスト。
 ```
@@ -99,7 +109,9 @@ CLAUDE.md と docs/ 配下(architecture/EIA-Framework.md, implementation/*, stan
 追加指示:
 - Saga は Orchestration 方式(order-service が状態機械を保持)。状態遷移表を docs/ に Mermaid stateDiagram で記載。
 - 補償: 在庫引当取消・決済取消。タイムアウト時の補償も実装。
-- Poison Message テストと DLQ→Replay の Runbook(docs/runbooks/dlq-replay.md)を作成。
+- コマンドは `{domain}.{entity}.cmd-{command}.v{n}` トピックで送る(ADR-0006)。
+- platform/messaging-kafka の Consumer 側をここで実装: 「処理 → processed_message 記録 → オフセットコミット」、DLQ ヘッダ(error.class / error.message / retry.count / original.topic / original.offset)、Replay CLI(フィルタ・件数上限・dry-run)。
+- Poison Message テストと DLQ→Replay の Runbook(docs/runbooks/event-dlq-replay.md)を作成。
 ```
 
 ### P08〜P14
@@ -107,9 +119,10 @@ CLAUDE.md と docs/ 配下(architecture/EIA-Framework.md, implementation/*, stan
 /implement-phase P08    # 以降同様。ROADMAP の DoD が受入基準。
 ```
 - P10: Flow 定義 YAML の JSON Schema を用意し、定義ミスを起動時に検出。
-- P11: KMP SDK は commonMain で Ktor Client、プラットフォーム別エンジン(CIO/JS/Darwin/Curl)を expect/actual で選択。
+- P08: platform/batch の DAG ランナーを作成(ADR-0008)。ELT を既定、マスキングが必要なデータセットのみ ETL。
+- P11: KMP SDK は commonMain で Ktor Client、プラットフォーム別エンジン(CIO/JS/Darwin/Curl)を expect/actual で選択。native の MQTT v5 クライアントは ADR で決定。
 - P12: EDI パーサは対象セグメントを限定したサブセットで良いが、Validation 3 段階は完全実装。
-- P14: 障害シナリオごとに「期待挙動 / 観測方法(ダッシュボード)/ 結果」を docs/reports/resilience.md に記録。
+- P14: 障害シナリオごとに「期待挙動 / 観測方法(ダッシュボード)/ 結果」を docs/reports/p14-resilience.md に記録。
 
 ---
 

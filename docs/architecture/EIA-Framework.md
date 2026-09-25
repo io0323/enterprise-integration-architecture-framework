@@ -338,7 +338,7 @@ flowchart LR
   SR -.検証.- C1
   T --> C1[Consumer Group: 在庫]
   T --> C2[Consumer Group: 分析]
-  C1 -->|失敗×3| DLQ[(order.created.dlq)]
+  C1 -->|失敗×3| DLQ[(sales.order.created.v1.dlq)]
   DLQ --> OP[運用: 原因除去→Replay]
 ```
 
@@ -441,7 +441,7 @@ flowchart LR
 - **Compression**: gzip/zstd(テキスト系)、Parquet/Avroは内蔵圧縮(snappy/zstd)
 - **Encryption**: 転送路暗号化(TLS/SSH)+ ファイル自体の暗号化(PGP等、B2B・機密は必須)。鍵は12章のSecrets管理に従う
 - **Checksum**: SHA-256をマニフェストに記載し受信側で必ず検証。件数・合計値のコントロールレコードも併用
-- 命名: `{system}_{dataset}_{yyyyMMddHHmmss}_{seq}.{ext}`、対で `.manifest`(件数/チェックサム/スキーマ版)を送付
+- 命名: `{system}_{dataset}_{yyyyMMddHHmmss}_{seq}.{ext}`、対で `.manifest.json`(件数/チェックサム/スキーマ版/traceparent)を送付
 - 完了通知: 書込み中読取りを防ぐため、一時名→リネーム or マニフェスト到着を完了合図とする
 
 ## 9.3 本章の設計判断
@@ -621,7 +621,7 @@ flowchart LR
 ## 16.1 統制の仕組み
 | 項目 | 標準 |
 |---|---|
-| Naming | 連携ID: `INT-{domain}-{seq}`、API: `/{domain}/{resource}`、Topic: `{domain}.{entity}.{event}.v{n}`、ファイル: 9.2準拠。命名から所有・用途が判別できること |
+| Naming | 連携ID: `INT-{domain}-{seq}`、API: `/{domain}/v{n}/{resource}`(Gateway 公開パス)、Topic: `{domain}.{entity}.{event}.v{n}`、ファイル: 9.2準拠。命名から所有・用途が判別できること |
 | Versioning | 契約のSemVer管理。破壊的変更=メジャー+移行期間(API 6ヶ月/Event 併行トピック)。互換性検査をCIで自動強制 |
 | Review | 新規/変更連携はアーキテクチャレビュー必須。観点: 方式選定根拠(3章)、契約、セキュリティ、信頼性、可観測性のチェックリスト |
 | Approval | P2P例外・Canonical変更・破壊的変更・新方式追加はIntegration Architecture Board承認。定型パターン準拠の連携は軽量承認(セルフサービス)で速度を確保 |
