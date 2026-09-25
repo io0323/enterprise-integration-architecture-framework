@@ -282,7 +282,7 @@ flowchart LR
 - PUT/DELETEは自然冪等に設計。イベント消費側も同様に冪等処理を必須とする(13章と整合)
 
 ## 5.5 Retry
-- 呼出側標準: Exponential Backoff + Jitter(初期0.5s、係数2、最大3回、上限30s)
+- 呼出側標準: Exponential Backoff + Jitter(初期0.5s、係数2、最大3回試行(初回を含む。リトライは2回)、上限30s)
 - リトライ対象: 408/429/5xx・接続断。非対象: 4xx(429除く)
 - リトライは必ずIdempotency-Key併用。Retry Stormを防ぐためCircuit Breaker(13章)と併設
 

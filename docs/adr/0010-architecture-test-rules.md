@@ -21,6 +21,9 @@ P00 で `tools/architecture-test` に Konsist のアーキテクチャテスト�
 
    コメントと文字列リテラルは検査の対象外とする。detekt(`ForbiddenImport`)も同時に使う。`ForbiddenMethodCall` は型解決付きのタスク(`detektJvmMain` など)でのみ有効なので、補助として扱う。
 5. 違反サンプル(`src/test/resources/fixtures/violations`)でルールが失敗すること、準拠サンプル(`fixtures/compliant`)で成功することを、ルールごとにテストする。
+6. **shared の許可リストと DomainError 分類の排他**(P01 で追加):
+   - `shared/kernel` の commonMain は `kotlin.*` と自身(`io.eia.shared.kernel.*`)だけを、`shared/canonical-model` の commonMain はそれに加えて `kotlinx.serialization.*` と `io.eia.shared.canonical.*` だけを import できる。禁止リスト(Decision 3・ADR-0004 §2)は既知のフレームワークしか検出できないため、基盤モジュールでは許可リストでフレームワーク依存ゼロを担保する。
+   - `DomainError.Retryable` と `DomainError.NonRetryable` の両方を、間接的な継承も含めて実装する型を禁止する(ADR-0011 §6)。継承関係はコードベース内の型の単純名で辿る。
 
 ## Alternatives Considered
 - Konsist の `assertArchitecture` を使う: レイヤにファイルが 1 つもないと失敗し、空モジュールの段階(P00)では使えない。サービス間依存と配置の検査も別途必要になる。import ベースの独自検査にした。
@@ -31,3 +34,6 @@ P00 で `tools/architecture-test` に Konsist のアーキテクチャテスト�
 - 完全修飾名で書いた参照(import なし)による依存方向違反は検出できない。Gradle のモジュール依存(Decision 2)で大半を防ぐ。
 - `kotlin.Result` の検出はテキストに基づくため、稀に誤検知しうる。誤検知が出たら、`io.eia.shared.kernel.Result` を明示的に import すれば解消する。
 - 禁止 import のリストはライブラリを追加するたびに更新が必要(ADR-0004 と同じ)。
+
+## 改訂履歴
+- 2026-09-25: Decision 6(shared の許可リスト、DomainError 分類の排他)を追加(P01)

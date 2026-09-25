@@ -28,7 +28,8 @@
 
 ## 3. HTTP ステータスとリトライ
 - Retry 対象: 408, 429, 502, 503, 504, 接続エラー。429/503 は `Retry-After` を優先。
-- 既定 RetryPolicy: initial 500ms, multiplier 2.0, max 3 attempts, cap 30s, full jitter。
+- 既定 RetryPolicy: initial 500ms, multiplier 2.0, max 3 attempts(初回を含む。リトライは 2 回), cap 30s, full jitter(ADR-0011)。
+- Retry-After が上限(cap)を超える場合は待たずに打ち切る(ADR-0011)。
 
 ## 4. イベント互換性
 - Schema Registry 互換モード: BACKWARD(トピック単位)。

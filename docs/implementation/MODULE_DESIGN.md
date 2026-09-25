@@ -9,7 +9,8 @@
 | 対象 | パッケージ | 例 |
 |---|---|---|
 | `services/<service>/<layer>` | `<basePackage>.<service>.<layer>` | `io.eia.order.domain`, `io.eia.order.adapters` |
-| `shared/<module>` | `<basePackage>.shared.<module>` | `io.eia.shared.kernel` |
+| `shared/<module>` | `<basePackage>.shared.<module>` | `io.eia.shared.kernel`, `io.eia.shared.kernel.money` |
+| `shared/canonical-model` | `<basePackage>.shared.canonical.<domain>`(ドメイン単位: common / sales / catalog / billing / logistics。ADR-0011) | `io.eia.shared.canonical.sales` |
 | `platform/<module>` | `<basePackage>.platform.<module>` | `io.eia.platform.observability` |
 | `tools/<module>` | `<basePackage>.tools.<module>` | `io.eia.tools.architecture` |
 

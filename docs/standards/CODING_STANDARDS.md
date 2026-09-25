@@ -5,11 +5,12 @@
 - 明示 API モード(`explicitApi()`)を shared/* と platform/* で有効化。
 - `!!` 禁止。`lateinit` は DI/テスト以外禁止。
 - 値オブジェクトは `@JvmInline value class` で表現(ID・金額・キー)。
-- 時刻は `kotlinx.datetime.Instant`(UTC)。`Clock` をインジェクションしテスト可能にする。
+- 時刻は `kotlin.time.Instant`(UTC)。`kotlin.time.Clock` をインジェクションしテスト可能にする(テストは kernel の `FixedClock`。ADR-0011)。
+- 金額は kernel の `Money`(最小通貨単位の Long + `Currency`)。浮動小数点で金額・率を扱わない。率は `Rate`(分数 / basis points)で表し、率を掛ける演算では `RoundingMode` を必ず明示する(ADR-0011)。
 - 非同期は coroutines。`GlobalScope` 禁止。ブロッキング I/O は `Dispatchers.IO`。
 
 ## エラー処理
-- domain/application: `Result<T, DomainError>`(kernel 提供)で返す。`DomainError` は sealed interface。
+- domain/application: `Result<T, DomainError>`(kernel 提供)で返す。`DomainError` は sealed interface で、直下は `Retryable` / `NonRetryable` の 2 つ。サービスのエラーはどちらか一方だけを実装する(両方の実装は Konsist で禁止。ADR-0011)。
 - adapters: 外部例外を捕捉し、Retryable / NonRetryable に分類して上位へ。
 - REST 応答は RFC 9457 Problem Details(`type`, `title`, `status`, `detail`, `correlationId`)。
 
