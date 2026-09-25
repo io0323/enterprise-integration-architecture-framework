@@ -33,6 +33,17 @@ jobs:
           cache-provider: basic
       - name: Build (ktlint, detekt, Konsist, jvm / js / linuxX64 tests, Kover)
         run: ./gradlew build
+      - name: Test summary
+        if: ${{ !cancelled() }}
+        run: python3 scripts/ci/test-summary.py >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload test results (JUnit XML)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results-build
+          path: "**/build/test-results/**/*.xml"
+          if-no-files-found: warn
+          retention-days: 14
 
   changes:
     name: changes
@@ -79,3 +90,14 @@ jobs:
           cache-provider: basic
       - name: macosArm64 tests
         run: ./gradlew macosArm64Test
+      - name: Test summary
+        if: ${{ !cancelled() }}
+        run: python3 scripts/ci/test-summary.py >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload test results (JUnit XML)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results-macos
+          path: "**/build/test-results/**/*.xml"
+          if-no-files-found: warn
+          retention-days: 14
