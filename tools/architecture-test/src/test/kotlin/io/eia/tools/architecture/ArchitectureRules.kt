@@ -177,6 +177,71 @@ internal object ArchitectureRules {
         }
     }
 
+    /**
+     * shared の基盤モジュールの commonMain が import してよいパッケージ(許可リスト。ADR-0010 §6)。
+     * 禁止リスト([commonMainPurity])だけでは新しいライブラリの混入を検出できないため、フレームワーク依存ゼロを許可リストで担保する。
+     */
+    val SHARED_ALLOWED_IMPORTS: Map<String, List<String>> =
+        mapOf(
+            "shared/kernel/" to listOf("kotlin", "$BASE_PACKAGE.shared.kernel"),
+            "shared/canonical-model/" to
+                listOf("kotlin", "kotlinx.serialization", "$BASE_PACKAGE.shared.kernel", "$BASE_PACKAGE.shared.canonical"),
+        )
+
+    /** shared/kernel と shared/canonical-model の commonMain は [SHARED_ALLOWED_IMPORTS] 以外を import しない。 */
+    fun sharedImportAllowList(codeBase: CodeBase): List<Violation> =
+        SHARED_ALLOWED_IMPORTS.flatMap { (modulePath, allowed) ->
+            codeBase
+                .filesUnder(modulePath)
+                .filter { it.path.contains("/src/commonMain/") }
+                .flatMap { file ->
+                    file.importNames
+                        .filter { import -> allowed.none { import.isInPackage(it) } }
+                        .map { Violation("shared 許可リスト外の import", file.path, "import $it(許可: ${allowed.joinToString()})") }
+                }
+        }
+
+    /**
+     * DomainError の Retryable と NonRetryable の両方を(間接的な継承を含めて)実装する型を禁止する(ADR-0011)。
+     * 継承関係は単純名で辿るため、同名の別の型があると誤検知しうる。
+     */
+    fun domainErrorKindIsExclusive(codeBase: CodeBase): List<Violation> {
+        val types =
+            codeBase.files.flatMap { file ->
+                val declarations =
+                    file.declaration.classes(includeNested = true, includeLocal = true) +
+                        file.declaration.interfaces(includeNested = true) +
+                        file.declaration.objects(includeNested = true)
+                declarations.map { Triple(file.path, it.name, it.parents().map { parent -> parent.name.simpleTypeName() }) }
+            }
+        val parentsByName = types.groupBy({ it.second }, { it.third }).mapValues { (_, lists) -> lists.flatten().toSet() }
+
+        fun ancestors(name: String): Set<String> {
+            val seen = mutableSetOf<String>()
+            val queue = ArrayDeque(parentsByName[name].orEmpty())
+            while (queue.isNotEmpty()) {
+                val parent = queue.removeFirst()
+                if (seen.add(parent)) queue += parentsByName[parent].orEmpty()
+            }
+            return seen
+        }
+
+        return types.mapNotNull { (path, name, _) ->
+            val all = ancestors(name)
+            if (RETRYABLE in all && NON_RETRYABLE in all) {
+                Violation("DomainError 分類の排他", path, "$name が Retryable と NonRetryable の両方を実装しています")
+            } else {
+                null
+            }
+        }
+    }
+
+    private const val RETRYABLE = "Retryable"
+    private const val NON_RETRYABLE = "NonRetryable"
+
+    /** `DomainError.Retryable` や `Foo<Bar>` から単純名を取り出す。 */
+    private fun String.simpleTypeName(): String = substringBefore('<').substringAfterLast('.').trim()
+
     private const val KOTLIN_RESULT = "kotlin.Result"
     private val DECLARES_RESULT = Regex("""\b(class|interface|typealias)\s+Result\b""")
     private val QUALIFIED_KOTLIN_RESULT = Regex("""(?<![\w.])kotlin\.Result\b""")

@@ -40,4 +40,12 @@ class ArchitectureSpec :
         test("kotlin.Result と runCatching を使わない") {
             ArchitectureRules.noKotlinResult(codeBase).assertNone()
         }
+
+        test("shared/kernel と shared/canonical-model はフレームワークに依存しない(許可リスト)") {
+            ArchitectureRules.sharedImportAllowList(codeBase).assertNone()
+        }
+
+        test("Retryable と NonRetryable の両方を実装する型がない") {
+            ArchitectureRules.domainErrorKindIsExclusive(codeBase).assertNone()
+        }
     })

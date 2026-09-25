@@ -66,6 +66,21 @@ class ArchitectureRulesSpec :
                 found.filter { it.path.endsWith("/ImplicitKotlinResult.kt") }.size shouldBe 2
                 shouldThrow<AssertionError> { found.assertNone() }
             }
+
+            test("shared/kernel と shared/canonical-model の許可リスト外の import") {
+                ArchitectureRules.sharedImportAllowList(violations).map {
+                    it.detail.substringAfter("import ").substringBefore('(')
+                } shouldContainExactlyInAnyOrder
+                    listOf("io.eia.platform.observability.Tracer", "kotlinx.datetime.LocalDate", "kotlinx.coroutines.delay")
+            }
+
+            test("Retryable と NonRetryable の両方を直接・間接に実装する型") {
+                ArchitectureRules
+                    .domainErrorKindIsExclusive(
+                        violations,
+                    ).map { it.detail.substringBefore(' ') } shouldContainExactlyInAnyOrder
+                    listOf("BothKinds", "IndirectBoth")
+            }
         }
 
         context("準拠サンプルでは違反がない") {
@@ -80,6 +95,11 @@ class ArchitectureRulesSpec :
                 ArchitectureRules.platformIndependentOfServices(compliant).shouldBeEmpty()
                 ArchitectureRules.commonMainPurity(compliant).shouldBeEmpty()
                 ArchitectureRules.noKotlinResult(compliant).shouldBeEmpty()
+            }
+
+            test("shared の許可リストと DomainError 分類の排他") {
+                ArchitectureRules.sharedImportAllowList(compliant).shouldBeEmpty()
+                ArchitectureRules.domainErrorKindIsExclusive(compliant).shouldBeEmpty()
             }
         }
 
