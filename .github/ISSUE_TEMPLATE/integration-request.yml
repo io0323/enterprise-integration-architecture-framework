@@ -1,0 +1,27 @@
+name: Integration Request
+description: 新規連携の追加依頼(Integration Catalog 登録前提)
+labels: ["type:integration"]
+body:
+  - type: textarea
+    id: usecase
+    attributes: { label: 業務ユースケース }
+    validations: { required: true }
+  - type: input
+    id: provider
+    attributes: { label: Provider(システム / Owner チーム) }
+    validations: { required: true }
+  - type: input
+    id: consumers
+    attributes: { label: Consumers(システム / Owner チーム) }
+  - type: dropdown
+    id: sync
+    attributes: { label: 同期性, options: [同期応答が必要, 非同期で可, バッチで可] }
+  - type: input
+    id: volume
+    attributes: { label: データ量 / 頻度 / 鮮度要件 }
+  - type: dropdown
+    id: tier
+    attributes: { label: Tier, options: ["1", "2", "3"] }
+  - type: dropdown
+    id: classification
+    attributes: { label: データ分類, options: [public, internal, confidential, restricted] }
