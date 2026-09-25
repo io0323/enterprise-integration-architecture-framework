@@ -10,6 +10,7 @@ Kotlin / Kotlin Multiplatform / Clean Architecture、Cloud Agnostic(Docker Compo
 - Claude Code 用プロンプト: [docs/prompts/PROMPTS.md](docs/prompts/PROMPTS.md)
 
 ## 開発環境の前提
+- clone したら最初に `make setup` を実行する。main / master への直接 push を拒否する Git フック(`scripts/git-hooks/pre-push`)を登録し、`push.default=simple` を設定する(どちらもリポジトリ単位の設定)。`simple` では、upstream とブランチ名が違うときに push が拒否されるため、作業ブランチの push が誤って main に送られない。
 - **JDK 21(arm64)** を使う。Apple Silicon で x86_64 の JDK(Rosetta)を使うと、Kotlin/Native がホストを `macos_x64` と判定し、`macosArm64` のテストが動かない。
 - `JAVA_HOME` の JDK のバージョンとアーキテクチャは、次のコマンドで確認する(`arm64` と表示されること)。
   ```bash

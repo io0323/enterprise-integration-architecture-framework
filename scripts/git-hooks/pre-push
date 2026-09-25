@@ -1,0 +1,27 @@
+#!/bin/sh
+# main / master への直接 push を拒否する(CLAUDE.md §3・§6)。`make setup` で core.hooksPath に登録される。
+# git は push するリファレンスごとに "<local ref> <local sha> <remote ref> <remote sha>" を標準入力に渡す。
+
+remote="$1"
+status=0
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+    case "$remote_ref" in
+        refs/heads/main | refs/heads/master)
+            branch=${remote_ref#refs/heads/}
+            cat >&2 <<MSG
+[pre-push] ${remote} の ${branch} への直接 push は禁止されています(送信元: ${local_ref})。
+変更は作業ブランチに push し、PR 経由でマージしてください:
+
+  git switch -c <branch> --no-track origin/main     # 作業ブランチの作成(upstream を main にしない)
+  git push -u origin <branch>:<branch>               # 送り先のブランチ名を明示して push
+  gh pr create --base main --head <branch>           # PR を作成
+
+main の巻き戻しなどの緊急対応は、リポジトリ管理者が GitHub 上で行います。
+MSG
+            status=1
+            ;;
+    esac
+done
+
+exit $status

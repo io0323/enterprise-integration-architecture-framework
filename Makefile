@@ -1,10 +1,15 @@
 # EIAF ローカル開発用コマンド(CLAUDE.md §7)
 GRADLE := ./gradlew
 
-.PHONY: help build check arch-test integration-test format up down e2e
+.PHONY: help setup build check arch-test integration-test format up down e2e
 
 help: ## コマンド一覧
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
+
+setup: ## clone 後に最初に 1 回実行する(Git フックの登録と push 設定。リポジトリ単位)
+	git config core.hooksPath scripts/git-hooks
+	git config push.default simple
+	@echo "Git フック(scripts/git-hooks)を登録し、push.default=simple を設定しました"
 
 build: ## 全ビルド + 品質チェック + 単体テスト + アーキテクチャテスト
 	$(GRADLE) build
