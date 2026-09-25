@@ -1,25 +1,41 @@
 # Module Design
 
 ## 1. Gradle モジュール命名
-`:shared:kernel`, `:shared:canonical-model`, `:shared:integration-sdk`
+`:shared:kernel`, `:shared:resilience`, `:shared:canonical-model`, `:shared:integration-sdk`
 `:platform:<name>`, `:services:<service>:{domain,application,adapters,app}`, `:tools:<name>`
+`:tools:device-simulator`(KMP: linuxX64 / macosArm64 の実行バイナリ)、`:tests:e2e`(JVM。`e2eTest` タスク。通常の build には含めない)
 パッケージ: `<basePackage>.<layer>.<service>`(basePackage は ADR-0001 で決定。既定 `io.eia`)
+
+ターゲット構成と JVM 専用ライブラリの配置は ADR-0004 に従う。
+
+| モジュール | 種別 | ターゲット |
+|---|---|---|
+| `shared/kernel`, `shared/resilience`, `shared/canonical-model`, `shared/integration-sdk` | KMP | jvm, js(IR), linuxX64, macosArm64 |
+| `services/*/domain`, `services/*/application` | KMP(commonMain) | jvm のみ(`eia.kmp-domain` の DSL で追加可能) |
+| `tools/device-simulator` | KMP | linuxX64, macosArm64 |
+| `platform/*`, `services/*/{adapters,app}`, `tools/*`(上記以外), `tests/e2e` | JVM | — |
 
 ## 2. 依存関係
 ```mermaid
 flowchart BT
   kernel[shared:kernel<br/>KMP]
+  res[shared:resilience<br/>KMP] --> kernel
   canon[shared:canonical-model<br/>KMP] --> kernel
+  sdk[shared:integration-sdk<br/>KMP] --> res
   dom[services:x:domain<br/>KMP] --> kernel
   app[services:x:application<br/>KMP] --> dom
   app --> canon
   adp[services:x:adapters<br/>JVM] --> app
   adp --> plat[platform:*<br/>JVM]
-  plat --> kernel
+  plat --> res
   boot[services:x:app<br/>JVM] --> adp
+  sim[tools:device-simulator<br/>KMP native] --> sdk
+  e2e[tests:e2e<br/>JVM] --> sdk
 ```
 - `platform:*` は `services:*` に依存しない。
-- `services` 間のコード依存は禁止(連携は契約経由のみ)。契約モデルは contracts から生成するか `adapters` 内で定義。
+- `services` 間のコード依存は禁止(連携は契約経由のみ)。契約モデルは contracts から生成するか `adapters` 内で定義する。
+- `tests:e2e` は `services:*` にコード依存しない(契約・SDK・公開エンドポイント経由のみで検証する)。
+- `tools:device-simulator` は `shared:integration-sdk` にのみ依存する。
 
 ## 3. サービス内部レイアウト(例: order)
 ```
@@ -37,7 +53,14 @@ services/order/
     Main.kt, Modules.kt(Koin), Config.kt
 ```
 
-## 4. サービス一覧
+## 3.1 Gradle 以外のディレクトリ
+| パス | 内容 | 命名 |
+|---|---|---|
+| `contracts/files/` | ファイル I/F 仕様・manifest スキーマ・EDI サブセット定義 | `{system}_{dataset}.v{n}.yaml`, `manifest.v1.schema.json`, `edi/edifact-orders.v1.yaml` |
+| `docs/runbooks/` | アラートに紐づく運用手順(Framework 13.1・14.1) | `{channel}-{operation}.md` 例: `event-dlq-replay.md` |
+| `docs/reports/` | DoD の証跡となる計測・検証結果 | `{phase}-{topic}.md` 例: `p14-resilience.md` |
+
+## 4. サービス・プラットフォーム一覧
 | サービス | 役割 | 主な連携方式 |
 |---|---|---|
 | order | 受注 API・Saga Orchestrator | REST, Outbox/CDC, Kafka |
@@ -45,18 +68,30 @@ services/order/
 | payment | 決済(モック) | Kafka |
 | shipping | 出荷 | Kafka |
 | legacy-sim | レガシー基幹 DB 模擬 | CDC |
-| batch-etl | 分析基盤への ETL | Batch |
+| batch-etl | 分析基盤への ELT/ETL | Batch |
 | file-exchange | ファイル授受 | MFT (MinIO/SFTP) |
 | saas-mock / webhook-receiver / integration-flow | SaaS 連携 | REST, Webhook |
 | iot-bridge | MQTT→Kafka | MQTT, Kafka |
 | b2b-gateway | EDI | SFTP, EDIFACT |
 | bff-graphql | フロント集約 | GraphQL |
 
+| platform | 役割 | フェーズ |
+|---|---|---|
+| observability | OTel・Correlation ID 伝搬・構造化ログ | P04a |
+| security | JWT 検証・認可・トークン取得・`SecretProvider` | P04a |
+| audit | 追記専用 + ハッシュチェーンの監査記録 | P04a |
+| reliability | `shared/resilience` の Ktor / OTel への結線 | P04b |
+| outbox | Outbox 挿入・削除・保持期間ジョブ | P06 |
+| messaging-kafka | Producer(P06)/ Consumer・DLQ・Replay(P07) | P06, P07 |
+| batch | 軽量 DAG ランナー・Checkpoint・SLA メトリクス | P08 |
+| file-transfer | manifest・checksum・MinIO / SFTP | P09 |
+| schema-registry | Apicurio クライアント・スキーマ ID キャッシュ | P06 |
+
 ## 5. テスト戦略
 | レベル | 対象 | ツール |
 |---|---|---|
 | Unit | domain / application(Port はフェイク) | kotest (commonTest) |
-| Architecture | 依存方向・命名・レイヤ規約 | Konsist |
-| Contract | 契約 ⇔ 実装の一致、互換性 | tools/contract-check, OpenAPI validator |
+| Architecture | 依存方向・命名・レイヤ規約・禁止 import・`kotlin.Result` 禁止 | Konsist |
+| Contract | 契約 ⇔ 実装の一致、互換性、Canonical ⇔ Avro | tools/contract-check, OpenAPI validator |
 | Integration | Adapter ⇔ 実ミドルウェア | Testcontainers |
-| E2E / Chaos | シナリオ・障害注入 | docker compose + Toxiproxy |
+| E2E / Chaos | シナリオ・障害注入 | tests/e2e (kotest) + docker compose + Toxiproxy |
