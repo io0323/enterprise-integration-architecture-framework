@@ -14,6 +14,10 @@
 - adapters: 外部例外を捕捉し、Retryable / NonRetryable に分類して上位へ。
 - REST 応答は RFC 9457 Problem Details(`type`, `title`, `status`, `detail`, `correlationId`)。
 
+## Canonical Model
+- 受信点(REST / Kafka / File / Webhook などのデシリアライズ)で Canonical Model を読むときは `CanonicalCodec.decode` を使い、デシリアライズと `validate()` を必ず一緒に行う。`Json.decodeFromString` を直接使わない(`Money` は `@Contextual` のため Codec なしでは扱えない)。送信時も `CanonicalCodec.encode` で検証を通す(ADR-0011 §5)。
+- 検証エラーのメッセージに金額やペイロードの値を含めない。個人情報を含むエンティティは `toString` で伏せる。
+
 ## ロギング
 - SLF4J + JSON エンコーダ。必須キー: `timestamp`, `level`, `service`, `trace_id`, `span_id`, `correlation_id`, `integration_id`, `message`。
 - ペイロード全文・個人情報・トークンは記録しない(マスキングユーティリティを使う)。
