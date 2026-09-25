@@ -3,7 +3,6 @@ package io.eia.shared.kernel.money
 import io.eia.shared.kernel.shouldBeErr
 import io.eia.shared.kernel.shouldBeOk
 import io.kotest.core.spec.style.FunSpec
-import io.kotest.datatest.withData
 import io.kotest.matchers.collections.shouldContainOnly
 import io.kotest.matchers.longs.shouldBeInRange
 import io.kotest.matchers.shouldBe
@@ -21,8 +20,8 @@ private fun jpy(minor: Long) = Money.ofMinor(minor, Currency.JPY)
 class MoneySpec :
     FunSpec({
         context("parse / toDecimalString") {
-            withData(
-                nameFn = { "${it.first} ${it.second} -> ${it.third}" },
+            // withData は native で成功したケースがレポートに出ないため、通常のテストとして登録する(全ターゲットで件数を揃える)
+            listOf(
                 Triple("1234.50", Currency.USD, 123_450L),
                 Triple("1234.5", Currency.USD, 123_450L),
                 Triple("0.01", Currency.USD, 1L),
@@ -30,8 +29,10 @@ class MoneySpec :
                 Triple("100", Currency.JPY, 100L),
                 Triple("0007", Currency.JPY, 7L),
                 Triple("-0", Currency.JPY, 0L),
-            ) { (text, currency, minor) ->
-                Money.parse(text, currency).shouldBeOk() shouldBe Money.ofMinor(minor, currency)
+            ).forEach { (text, currency, minor) ->
+                test("$text $currency -> $minor") {
+                    Money.parse(text, currency).shouldBeOk() shouldBe Money.ofMinor(minor, currency)
+                }
             }
 
             test("小数桁数を超える値は丸めずにエラーにする") {
