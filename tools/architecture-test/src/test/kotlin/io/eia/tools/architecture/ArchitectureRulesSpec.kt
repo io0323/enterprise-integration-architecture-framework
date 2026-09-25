@@ -1,0 +1,97 @@
+package io.eia.tools.architecture
+
+import io.kotest.assertions.throwables.shouldThrow
+import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
+import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
+import java.io.File
+
+/** ルール自体の検証: 違反サンプルで失敗し、準拠サンプルで成功すること。 */
+class ArchitectureRulesSpec :
+    FunSpec({
+        val fixtures = File(CodeBase.fromSystemProperty().root, "tools/architecture-test/src/test/resources/fixtures")
+        val violations = CodeBase(fixtures.resolve("violations"))
+        val compliant = CodeBase(fixtures.resolve("compliant"))
+
+        fun List<Violation>.fileNames(): List<String> = map { it.path.substringAfterLast('/') }
+
+        fun List<Violation>.rulesOf(fileName: String): Set<String> = filter { it.path.endsWith("/$fileName") }.map { it.rule }.toSet()
+
+        context("違反サンプルを検出する") {
+            test("サービスをディレクトリから列挙する") {
+                violations.services shouldBe listOf("other", "sample")
+            }
+
+            test("依存方向: domain → application / adapters、adapters → app") {
+                val found = ArchitectureRules.layerDependencies(violations, "sample")
+                found.fileNames() shouldContainExactlyInAnyOrder
+                    listOf("DomainDependsOnAdapter.kt", "DomainDependsOnAdapter.kt", "AdapterDependsOnApp.kt")
+                shouldThrow<AssertionError> { found.assertNone() }.message shouldContain "依存方向"
+            }
+
+            test("サービス間依存と、application から platform への依存") {
+                ArchitectureRules.serviceIsolation(violations, "other").fileNames() shouldBe listOf("CrossServiceDependency.kt")
+                ArchitectureRules.serviceIsolation(violations, "sample").fileNames() shouldBe listOf("UsesFrameworks.kt")
+            }
+
+            test("配置と一致しないパッケージ") {
+                ArchitectureRules.packageMatchesLocation(violations, "sample").fileNames() shouldBe listOf("MisplacedPackage.kt")
+            }
+
+            test("platform から services への依存") {
+                ArchitectureRules.platformIndependentOfServices(violations).fileNames() shouldBe
+                    listOf("PlatformDependsOnService.kt")
+            }
+
+            test("commonMain の禁止 import(integration-sdk の io.ktor.client は許可)") {
+                val found = ArchitectureRules.commonMainPurity(violations)
+                found.map { it.detail.substringAfter("import ").substringBefore('(') } shouldContainExactlyInAnyOrder
+                    listOf(
+                        "java.time.Instant",
+                        "kotlin.jvm.Synchronized",
+                        "io.ktor.server.application.Application",
+                        "org.apache.kafka.clients.producer.KafkaProducer",
+                        "org.jetbrains.exposed.sql.Table",
+                        "org.koin.core.module.Module",
+                        "io.ktor.server.engine.EmbeddedServer",
+                    )
+            }
+
+            test("kotlin.Result の import・暗黙の解決・完全修飾名と runCatching") {
+                val found = ArchitectureRules.noKotlinResult(violations)
+                found.rulesOf("UsesKotlinResult.kt") shouldBe setOf("kotlin.Result 禁止", "runCatching 禁止")
+                found.rulesOf("ImplicitKotlinResult.kt") shouldBe setOf("kotlin.Result 禁止")
+                found.filter { it.path.endsWith("/ImplicitKotlinResult.kt") }.size shouldBe 2
+                shouldThrow<AssertionError> { found.assertNone() }
+            }
+        }
+
+        context("準拠サンプルでは違反がない") {
+            test("サービスごとのルール") {
+                compliant.services shouldBe listOf("good")
+                ArchitectureRules.layerDependencies(compliant, "good").shouldBeEmpty()
+                ArchitectureRules.serviceIsolation(compliant, "good").shouldBeEmpty()
+                ArchitectureRules.packageMatchesLocation(compliant, "good").shouldBeEmpty()
+            }
+
+            test("全体のルール(kernel の Result と @JvmInline は許可)") {
+                ArchitectureRules.platformIndependentOfServices(compliant).shouldBeEmpty()
+                ArchitectureRules.commonMainPurity(compliant).shouldBeEmpty()
+                ArchitectureRules.noKotlinResult(compliant).shouldBeEmpty()
+            }
+        }
+
+        context("KotlinSourceText") {
+            test("コメントと文字列リテラルを除去する") {
+                val code =
+                    KotlinSourceText.stripCommentsAndStrings(
+                        "val a = \"runCatching {\" // runCatching {\n/* kotlin.Result */ val b = '\"'\nval c = \"\"\"Result<\"\"\"",
+                    )
+                code shouldContain "val a ="
+                code shouldContain "val c ="
+                listOf("runCatching", "kotlin.Result", "Result<").forEach { (it in code) shouldBe false }
+            }
+        }
+    })

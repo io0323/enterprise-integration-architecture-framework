@@ -1,0 +1,43 @@
+package io.eia.tools.architecture
+
+import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.collections.shouldNotBeEmpty
+
+/**
+ * リポジトリ全体に対するアーキテクチャ規約の検査(CLAUDE.md §4、MODULE_DESIGN §2、ADR-0004)。
+ * サービスごとの検査は services 配下のディレクトリを列挙して生成するため、サービス追加時にテストの修正は不要。
+ */
+class ArchitectureSpec :
+    FunSpec({
+        val codeBase = CodeBase.fromSystemProperty()
+
+        test("services 配下のサービスを検出できる") {
+            codeBase.services.shouldNotBeEmpty()
+        }
+
+        codeBase.services.forEach { service ->
+            context("services/$service") {
+                test("依存方向は domain ← application ← adapters ← app の向きのみ") {
+                    ArchitectureRules.layerDependencies(codeBase, service).assertNone()
+                }
+                test("他サービスに依存せず、domain / application は platform に依存しない") {
+                    ArchitectureRules.serviceIsolation(codeBase, service).assertNone()
+                }
+                test("パッケージが io.eia.$service.<layer> と配置に一致する") {
+                    ArchitectureRules.packageMatchesLocation(codeBase, service).assertNone()
+                }
+            }
+        }
+
+        test("platform は services に依存しない") {
+            ArchitectureRules.platformIndependentOfServices(codeBase).assertNone()
+        }
+
+        test("commonMain は ADR-0004 の禁止 import を含まない") {
+            ArchitectureRules.commonMainPurity(codeBase).assertNone()
+        }
+
+        test("kotlin.Result と runCatching を使わない") {
+            ArchitectureRules.noKotlinResult(codeBase).assertNone()
+        }
+    })
