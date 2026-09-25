@@ -29,9 +29,9 @@ ADR-0001 で domain / application / shared を KMP(commonMain)とした。一方
 (`shared/integration-sdk` の `io.ktor.client.*` だけは例外として許可する)
 
 ### 3. `kotlin.Result` の使用禁止
-- 全モジュールで `kotlin.Result` と `runCatching` の戻り値を業務の制御フローに使うことを禁止し、`io.eia.kernel.Result` に統一する。
+- 全モジュールで `kotlin.Result` と `runCatching` の戻り値を業務の制御フローに使うことを禁止し、`io.eia.shared.kernel.Result` に統一する(パッケージ規約は MODULE_DESIGN §1)。
 - Konsist で「`kotlin.Result` を import または戻り値型に使う宣言」を検出したらテストを失敗させる。detekt のカスタムルール `ForbiddenImport` / `ForbiddenMethodCall` でも併せて検出する。
-- 境界で例外を捕捉するヘルパーは `io.eia.kernel.catching { }` として kernel 側で提供する。
+- 境界で例外を捕捉するヘルパーは `io.eia.shared.kernel.catching { }` として kernel 側で提供する。
 
 ### 4. JVM 専用ライブラリの配置
 | ライブラリ | 使ってよい層 |
@@ -58,3 +58,6 @@ ADR-0001 で domain / application / shared を KMP(commonMain)とした。一方
 - モジュールが 1 つ増える(`shared/resilience`)。CLAUDE.md と MODULE_DESIGN.md に反映する。
 - Konsist の禁止リストはライブラリを追加するたびに更新が必要になる(PR テンプレートのチェック項目で担保する)。
 - avro4k が JVM 専用なので、Canonical Model(commonMain)と Avro スキーマ(contracts)は別々の資産になる。P02 で、両者の一致を JVM テストで検査する。
+
+## 改訂履歴
+- 2026-09-25: パッケージ名を ADR-0010 / MODULE_DESIGN の規約に合わせて修正(決定内容の変更なし)

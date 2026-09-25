@@ -4,7 +4,16 @@
 `:shared:kernel`, `:shared:resilience`, `:shared:canonical-model`, `:shared:integration-sdk`
 `:platform:<name>`, `:services:<service>:{domain,application,adapters,app}`, `:tools:<name>`
 `:tools:device-simulator`(KMP: linuxX64 / macosArm64 の実行バイナリ)、`:tests:e2e`(JVM。`e2eTest` タスク。通常の build には含めない)
-パッケージ: `<basePackage>.<layer>.<service>`(basePackage は ADR-0001 で決定。既定 `io.eia`)
+パッケージ(basePackage は ADR-0001 で決定。既定 `io.eia`):
+
+| 対象 | パッケージ | 例 |
+|---|---|---|
+| `services/<service>/<layer>` | `<basePackage>.<service>.<layer>` | `io.eia.order.domain`, `io.eia.order.adapters` |
+| `shared/<module>` | `<basePackage>.shared.<module>` | `io.eia.shared.kernel` |
+| `platform/<module>` | `<basePackage>.platform.<module>` | `io.eia.platform.observability` |
+| `tools/<module>` | `<basePackage>.tools.<module>` | `io.eia.tools.architecture` |
+
+Konsist はパッケージでレイヤを判定するため、配置(`services/<service>/<layer>/`)とパッケージの一致も検査する(ADR-0010)。
 
 ターゲット構成と JVM 専用ライブラリの配置は ADR-0004 に従う。
 
@@ -40,16 +49,16 @@ flowchart BT
 ## 3. サービス内部レイアウト(例: order)
 ```
 services/order/
-  domain/src/commonMain/kotlin/.../order/domain/
+  domain/src/commonMain/kotlin/io/eia/order/domain/          # package io.eia.order.domain
     Order.kt, OrderLine.kt, OrderStatus.kt, OrderEvent.kt, OrderPolicy.kt
-  application/src/commonMain/kotlin/.../order/application/
-    port/in/PlaceOrderUseCase.kt
-    port/out/OrderRepository.kt, OutboxPort.kt, IdempotencyStore.kt, TransactionRunner.kt
+  application/src/commonMain/kotlin/io/eia/order/application/ # package io.eia.order.application
+    port/inbound/PlaceOrderUseCase.kt          # `in` は Kotlin の予約語のため inbound / outbound とする
+    port/outbound/OrderRepository.kt, OutboxPort.kt, IdempotencyStore.kt, TransactionRunner.kt
     usecase/PlaceOrderService.kt
-  adapters/src/main/kotlin/.../order/adapters/
+  adapters/src/main/kotlin/io/eia/order/adapters/             # package io.eia.order.adapters
     in/rest/OrderRoutes.kt, OrderDtoMapper.kt
     out/persistence/ExposedOrderRepository.kt, ExposedOutbox.kt
-  app/src/main/kotlin/.../order/app/
+  app/src/main/kotlin/io/eia/order/app/                       # package io.eia.order.app
     Main.kt, Modules.kt(Koin), Config.kt
 ```
 

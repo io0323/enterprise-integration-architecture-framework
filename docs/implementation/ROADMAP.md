@@ -14,7 +14,7 @@
 | P04b | Platform: Resilience | 13 |
 | P05 | API Integration: order-service | 5, 12 |
 | P06 | Outbox & CDC | 8 |
-| P07 | Event Integration: inventory / payment / shipping + Saga | 4, 6, 13 |
+| P07 | Event Integration + Saga | 4, 6, 13 |
 | P08 | Batch & ELT/ETL | 7 |
 | P09 | File Integration | 9 |
 | P10 | SaaS / Webhook / iPaaS-like Flow | 10 |
@@ -42,6 +42,7 @@
 - `shared/canonical-model`: ドメイン単位のパッケージ(sales / catalog / billing / logistics)で Customer / Product / Order / OrderLine / Invoice / Shipment を定義する(kotlinx.serialization、UTC、通貨明示)
 - targets: jvm, js(IR), linuxX64, macosArm64(ADR-0004)
 - **DoD**: jvm / js / linuxX64 の commonTest が ubuntu CI で成功し、macosArm64 は macOS ジョブかローカル実行の証跡で成功を示す。フレームワーク依存ゼロ(Konsist)。
+- **DoD**: Kover の閾値(domain / application 90%、全体 75%)の強制を有効にし(`gradle.properties` の `eia.kover.enforce=true`。P00 では閾値の設定のみ)、`./gradlew build` が成功する。
 
 ## P02 Contracts & Governance CI
 - `contracts/openapi/order-api.v1.yaml`(OpenAPI 3.1。`servers` は `/{domain}`、`paths` は `/v{n}/`: ADR-0005)、`contracts/asyncapi/order-events.v1.yaml`(AsyncAPI 3.0)、`contracts/avro/*.avsc`
