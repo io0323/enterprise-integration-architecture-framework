@@ -11,3 +11,4 @@ local.properties
 **/secrets/
 infra/local/data/
 *.log
+.vscode/

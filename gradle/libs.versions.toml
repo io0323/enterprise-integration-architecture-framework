@@ -1,0 +1,46 @@
+# バージョンは実装時点の最新安定版を確認して固定する(alpha / beta / RC は使わない)。
+# 確認日: 2026-09-25(P00)
+[versions]
+kotlin = "2.4.20"
+ksp = "2.3.12"
+kotest = "6.2.5"
+konsist = "0.17.3"
+# detekt 2.x は alpha のみのため 1.23 系の最新安定版を使う。
+detekt = "1.23.8"
+# detekt 1.23.8 がビルドされた Kotlin。detekt 実行用クラスパスだけをこの版に揃える(ビルド本体の Kotlin とは独立)。
+detekt-kotlin = "2.0.21"
+ktlint-gradle = "14.2.0"
+ktlint = "1.8.0"
+kover = "0.9.9"
+coroutines = "1.11.0"
+serialization = "1.11.0"
+datetime = "0.8.0"
+ktor = "3.6.0"
+koin = "4.2.2"
+exposed = "1.5.0"
+mockk = "1.14.11"
+testcontainers = "2.0.5"
+
+[libraries]
+kotest-framework-engine = { module = "io.kotest:kotest-framework-engine", version.ref = "kotest" }
+kotest-assertions-core = { module = "io.kotest:kotest-assertions-core", version.ref = "kotest" }
+kotest-property = { module = "io.kotest:kotest-property", version.ref = "kotest" }
+kotest-runner-junit5 = { module = "io.kotest:kotest-runner-junit5", version.ref = "kotest" }
+konsist = { module = "com.lemonappdev:konsist", version.ref = "konsist" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
+kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "datetime" }
+ktor-server-core = { module = "io.ktor:ktor-server-core", version.ref = "ktor" }
+ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
+koin-core = { module = "io.insert-koin:koin-core", version.ref = "koin" }
+exposed-core = { module = "org.jetbrains.exposed:exposed-core", version.ref = "exposed" }
+mockk = { module = "io.mockk:mockk", version.ref = "mockk" }
+testcontainers = { module = "org.testcontainers:testcontainers", version.ref = "testcontainers" }
+
+# build-logic が convention plugin から適用するプラグインの実体
+gradle-kotlin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
+gradle-ksp = { module = "com.google.devtools.ksp:com.google.devtools.ksp.gradle.plugin", version.ref = "ksp" }
+gradle-kotest = { module = "io.kotest:io.kotest.gradle.plugin", version.ref = "kotest" }
+gradle-detekt = { module = "io.gitlab.arturbosch.detekt:detekt-gradle-plugin", version.ref = "detekt" }
+gradle-ktlint = { module = "org.jlleitschuh.gradle:ktlint-gradle", version.ref = "ktlint-gradle" }
+gradle-kover = { module = "org.jetbrains.kotlinx:kover-gradle-plugin", version.ref = "kover" }
