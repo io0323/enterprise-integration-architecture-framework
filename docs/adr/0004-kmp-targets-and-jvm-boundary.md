@@ -48,7 +48,10 @@ ADR-0001 で domain / application / shared を KMP(commonMain)とした。一方
 - `platform/reliability` と `platform/observability` は、これを Ktor / Kafka / OTel に結線する JVM アダプタとする。
 - traceparent の trace-flags は、W3C Trace Context Level 2(Candidate Recommendation Draft 2024-03-28)に従って扱う。
   - 版 00 の受信では sampled(0x01。§3.2.2.5.1)と random(0x02。§3.2.2.5.2)だけを残す。それ以外のビットは §3.2.2.5.3 Other Flags の「Vendors MUST set those to zero」に従って 0 にする。
-  - 未知の上位版の受信では、sampled だけを読む(§3.2.4 Versioning of traceparent。「unparsed / unknown trace-flags」は送信時に 0 にする)。
+  - 未知の上位版の受信でも、sampled と random を残す。
+    - 根拠 1: §4.1.2 A traceparent is Received は、上位版から「この版の仕様が扱うフラグ」だけを読み、「unparsed / unknown trace-flags」を送信時に 0 にするとしている。Level 2 が扱うフラグには random も含まれる。
+    - 根拠 2: §3.2.2.5.2 は、受信した random フラグを同じ trace-id の送信で立てたままにすることを MUST としている。
+    - §3.2.4 Versioning of traceparent の上位版の解析手順(SHOULD)は「sampled bit」だけを挙げる。しかしこれは Level 1 の文言が残ったもので、根拠 2 の MUST と両立しない。§3.2.4 は将来の版を追加的(additive)とするため、上位版でも 0x02 の意味は変わらないとみなす。
   - 送信時(`format()`)も、定義済みのビット以外を 0 にする。直接組み立てた値にも効かせるため。
   - 勧告(Recommendation)は Level 1(2021-11-23)だが、random フラグは Level 2 で定義されたものである。Level 1 しか知らない受信側にとって 0x02 は未定義のビットになり、0 にされるだけなので、Level 2 に合わせても互換性は損なわない。
 

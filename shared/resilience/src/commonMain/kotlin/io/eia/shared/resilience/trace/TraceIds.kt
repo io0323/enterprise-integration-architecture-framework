@@ -49,9 +49,12 @@ public value class SpanId private constructor(
  * 残すビットの根拠(W3C Trace Context Level 2、Candidate Recommendation Draft 2024-03-28):
  * - §3.2.2.5.1 Sampled flag(0x01)と §3.2.2.5.2 Random Trace ID Flag(0x02)だけが定義されている。
  * - §3.2.2.5.3 Other Flags: それ以外のビット(0x04 以上)は「Vendors MUST set those to zero」。
- * - §3.2.4 Versioning of traceparent: 未知の上位版からは sampled ビットだけを読み、
- *   「unparsed / unknown trace-flags」は送信時に 0 にする。
- * そのため、版 00 の受信では [KNOWN_BITS] を、上位版の受信では sampled だけを残し、送信([outgoing])でも [KNOWN_BITS] 以外を落とす。
+ * - §4.1.2 A traceparent is Received: 上位版を受信したら、この版の仕様が扱うフラグだけを読み、
+ *   「unparsed / unknown trace-flags」は送信時に 0 にする。Level 2 が扱うフラグには random も含まれる。
+ * - §3.2.2.5.2: 受信した random フラグは、同じ trace-id で送信するすべての traceparent で立てたままにしなければならない(MUST)。
+ * - §3.2.4 Versioning of traceparent の上位版の解析手順(SHOULD)は「sampled bit」だけを挙げるが、Level 1 の文言がそのまま残ったもので、
+ *   上の MUST と両立しない。§3.2.4 は将来の版を追加的(additive)とするため、0x02 の意味は上位版でも変わらないとみなす。
+ * そのため、版によらず受信では [KNOWN_BITS] を残し、送信([outgoing])でも [KNOWN_BITS] 以外を落とす。
  */
 @JvmInline
 public value class TraceFlags internal constructor(
@@ -79,8 +82,6 @@ public value class TraceFlags internal constructor(
         /** 版 00 で定義済みのビット(sampled と random)。 */
         internal const val KNOWN_BITS: Int = SAMPLED_BIT or RANDOM_BIT
 
-        /** 未知の上位版から読んでよいビット(sampled のみ。Level 2 §3.2.4)。 */
-        internal const val HIGHER_VERSION_BITS: Int = SAMPLED_BIT
         public val SAMPLED: TraceFlags = TraceFlags(SAMPLED_BIT)
         public val NONE: TraceFlags = TraceFlags(0)
 

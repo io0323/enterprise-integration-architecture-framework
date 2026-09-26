@@ -42,8 +42,7 @@ public data class TraceParent(
          * ヘッダ値を解析する。前後の OWS(RFC 9110 §5.6.3。SP と HTAB のみ)は取り除く。それ以外の空白や改行は不正な値として扱う。
          * - 版 `00` は長さが 55 文字ちょうどでなければならない。
          * - 未知の上位版は、先頭 55 文字を版 00 と同じ形式で読み、続きが `-` で始まる場合だけ受け付ける(W3C の前方互換)。
-         *   trace-flags は sampled ビットだけを残す(Level 2 §3.2.4)。
-         * - 版 00 の trace-flags は sampled と random だけを残す(Level 2 §3.2.2.5.3)。
+         * - trace-flags は版によらず sampled と random だけを残す(Level 2 §3.2.2.5.2・§3.2.2.5.3・§4.1.2。根拠は [TraceFlags])。
          * - 版 `ff`、大文字の 16 進、全 0 の trace-id / parent-id は拒否する。
          *
          * エラーメッセージには受信した値を含めない(ログに載るため)。
@@ -69,16 +68,7 @@ public data class TraceParent(
                 }
 
                 else -> {
-                    parseFields(
-                        value.take(V00_LENGTH),
-                        if (version ==
-                            VERSION
-                        ) {
-                            TraceFlags.KNOWN_BITS
-                        } else {
-                            TraceFlags.HIGHER_VERSION_BITS
-                        },
-                    )
+                    parseFields(value.take(V00_LENGTH))
                 }
             }
         }
@@ -94,15 +84,12 @@ public data class TraceParent(
                 flags = TraceFlags.NONE.withSampled(sampled),
             )
 
-        private fun parseFields(
-            value: String,
-            flagMask: Int,
-        ): Result<TraceParent, ValidationError> {
+        private fun parseFields(value: String): Result<TraceParent, ValidationError> {
             val parts = value.split('-')
             if (parts.size != FIELD_COUNT) return invalid("区切りが不正です")
             return TraceId.parse(parts[1]).flatMap { trace ->
                 SpanId.parse(parts[2]).flatMap { parent ->
-                    parseFlags(parts[FLAGS_INDEX]).map { TraceParent(trace, parent, it.retaining(flagMask)) }
+                    parseFlags(parts[FLAGS_INDEX]).map { TraceParent(trace, parent, it.retaining(TraceFlags.KNOWN_BITS)) }
                 }
             }
         }

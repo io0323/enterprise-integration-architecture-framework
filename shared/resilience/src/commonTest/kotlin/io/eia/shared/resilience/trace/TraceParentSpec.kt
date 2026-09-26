@@ -63,11 +63,11 @@ class TraceParentSpec :
                 parsed.child(Random(1)).flags.value shouldBe 0x03
             }
 
-            test("未知の上位版の trace-flags は sampled だけを読む(Level 2 §3.2.4)") {
+            test("未知の上位版でも sampled と random を残す(Level 2 §3.2.2.5.2 の MUST・§4.1.2)") {
                 TraceParent.parse("cc-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-ff-future").ok().format() shouldBe
-                    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+                    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-03"
                 TraceParent.parse("cc-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-fe").ok().format() shouldBe
-                    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00"
+                    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-02"
             }
 
             test("直接組み立てた値でも、送信時は未定義のフラグを 0 にする") {
