@@ -114,6 +114,7 @@ make e2e                      # E2E シナリオ (tests/e2e)
 - `domain`/`application` へのフレームワーク依存の混入
 - テストの無効化・`@Ignore` での CI 通過
 - 秘密情報のコミット、`--no-verify`、`git push --force`(main)
+- `.env` などの秘密情報のファイルを、Read ツールだけでなく `cat`・`grep`・`head` などのコマンドでも読むこと。変数名を確認するときは `.env.example` を読む(`.claude/settings.json` の deny は Read ツールにしか効かないため、このルールで補う)
 
 ## 9. 参照ドキュメント
 - 設計書: docs/architecture/EIA-Framework.md
