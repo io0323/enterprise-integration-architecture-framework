@@ -12,7 +12,7 @@ import kotlin.random.Random
  * W3C Trace Context の `traceparent`(Framework 14.1)。API はヘッダ、Event はメッセージヘッダ、
  * Batch / File は manifest・ジョブ属性で引き継ぐ。JVM(platform/observability)と KMP SDK(P11)が同じ解析・生成を使う(ADR-0004)。
  *
- * 形式は `{version}-{trace-id}-{parent-id}-{trace-flags}`。送信時は常に版 `00` で出力する。
+ * 形式は `{version}-{trace-id}-{parent-id}-{trace-flags}`。送信時は常に版 `00` で出力し、未定義のフラグは 0 にする([TraceFlags])。
  */
 public data class TraceParent(
     public val traceId: TraceId,
@@ -24,8 +24,8 @@ public data class TraceParent(
     /** 同じトレースで、このコンテキストを親とする新しい span の `traceparent` を作る。 */
     public fun child(random: Random = Random.Default): TraceParent = copy(parentId = SpanId.generate(random))
 
-    /** ヘッダ値(版 `00`)。 */
-    public fun format(): String = "$VERSION-$traceId-$parentId-$flags"
+    /** ヘッダ値(版 `00`)。未定義のフラグは 0 にして出力する。 */
+    public fun format(): String = "$VERSION-$traceId-$parentId-${flags.outgoing()}"
 
     override fun toString(): String = format()
 
@@ -42,6 +42,8 @@ public data class TraceParent(
          * ヘッダ値を解析する。前後の空白(OWS)は取り除く。
          * - 版 `00` は長さが 55 文字ちょうどでなければならない。
          * - 未知の上位版は、先頭 55 文字を版 00 と同じ形式で読み、続きが `-` で始まる場合だけ受け付ける(W3C の前方互換)。
+         *   trace-flags は sampled ビットだけを残す(Level 2 §3.2.4)。
+         * - 版 00 の trace-flags は sampled と random だけを残す(Level 2 §3.2.2.5.3)。
          * - 版 `ff`、大文字の 16 進、全 0 の trace-id / parent-id は拒否する。
          *
          * エラーメッセージには受信した値を含めない(ログに載るため)。
@@ -50,11 +52,34 @@ public data class TraceParent(
             val value = header.trim()
             val version = value.take(2)
             return when {
-                !VERSION_FORMAT.matches(version) || version == INVALID_VERSION -> invalid("版が不正です")
-                version == VERSION && value.length != V00_LENGTH -> invalid("版 00 の長さは $V00_LENGTH 文字です")
-                value.length < V00_LENGTH -> invalid("長さが足りません")
-                value.length > V00_LENGTH && value[V00_LENGTH] != '-' -> invalid("上位版の拡張部は '-' で区切られていません")
-                else -> parseFields(value.take(V00_LENGTH))
+                !VERSION_FORMAT.matches(version) || version == INVALID_VERSION -> {
+                    invalid("版が不正です")
+                }
+
+                version == VERSION && value.length != V00_LENGTH -> {
+                    invalid("版 00 の長さは $V00_LENGTH 文字です")
+                }
+
+                value.length < V00_LENGTH -> {
+                    invalid("長さが足りません")
+                }
+
+                value.length > V00_LENGTH && value[V00_LENGTH] != '-' -> {
+                    invalid("上位版の拡張部は '-' で区切られていません")
+                }
+
+                else -> {
+                    parseFields(
+                        value.take(V00_LENGTH),
+                        if (version ==
+                            VERSION
+                        ) {
+                            TraceFlags.KNOWN_BITS
+                        } else {
+                            TraceFlags.HIGHER_VERSION_BITS
+                        },
+                    )
+                }
             }
         }
 
@@ -69,12 +94,15 @@ public data class TraceParent(
                 flags = TraceFlags.NONE.withSampled(sampled),
             )
 
-        private fun parseFields(value: String): Result<TraceParent, ValidationError> {
+        private fun parseFields(
+            value: String,
+            flagMask: Int,
+        ): Result<TraceParent, ValidationError> {
             val parts = value.split('-')
             if (parts.size != FIELD_COUNT) return invalid("区切りが不正です")
             return TraceId.parse(parts[1]).flatMap { trace ->
                 SpanId.parse(parts[2]).flatMap { parent ->
-                    parseFlags(parts[FLAGS_INDEX]).map { TraceParent(trace, parent, it) }
+                    parseFlags(parts[FLAGS_INDEX]).map { TraceParent(trace, parent, it.retaining(flagMask)) }
                 }
             }
         }

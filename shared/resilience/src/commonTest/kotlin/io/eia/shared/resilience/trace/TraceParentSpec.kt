@@ -49,6 +49,33 @@ class TraceParentSpec :
                 TraceParent.parse("cc-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01").ok().format() shouldBe VALID
             }
 
+            test("版 00 の trace-flags は sampled と random だけを残す(Level 2 §3.2.2.5.3)") {
+                val parsed = TraceParent.parse("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-ff").ok()
+
+                parsed.flags.value shouldBe 0x03
+                parsed.flags.random shouldBe true
+                parsed.format() shouldBe "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-03"
+                parsed.child(Random(1)).flags.value shouldBe 0x03
+            }
+
+            test("未知の上位版の trace-flags は sampled だけを読む(Level 2 §3.2.4)") {
+                TraceParent.parse("cc-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-ff-future").ok().format() shouldBe
+                    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+                TraceParent.parse("cc-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-fe").ok().format() shouldBe
+                    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00"
+            }
+
+            test("直接組み立てた値でも、送信時は未定義のフラグを 0 にする") {
+                val parent = TraceParent.parse(VALID).ok().copy(flags = TraceFlags.of(0xfd).ok())
+
+                parent.format() shouldBe "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+                TraceFlags
+                    .of(0xfe)
+                    .ok()
+                    .outgoing()
+                    .value shouldBe 0x02
+            }
+
             test("不正な値を拒否する") {
                 listOf(
                     "",
