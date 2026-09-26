@@ -6,6 +6,7 @@
 - 章:
 
 ## チェックリスト
+<!-- 対象外の項目は [ ] のまま残さず、チェックボックスを外して「N/A(理由)」と書く。例: - catalog YAML 登録/更新: N/A(変更なし) -->
 - [ ] Contract First(contracts/ 更新・contract-check 成功)
 - [ ] catalog YAML 登録/更新(Owner・Tier・SLO・分類)
 - [ ] Clean Architecture 依存方向(Konsist 成功)
