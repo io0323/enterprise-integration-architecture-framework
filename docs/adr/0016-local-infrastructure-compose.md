@@ -46,7 +46,7 @@ Docker のヘルスチェックはコンテナの中で実行されるため、�
 | bash の `/dev/tcp` で HTTP を送る | keycloak(管理ポートの `/health/ready`)、apisix(`/status/ready`)。どちらも bash はあるが HTTP クライアントがない |
 | 既存の公開イメージ `busybox`(静的リンク)を読み取り専用で `/probe` にマウントし、その `wget` を使う | otel-collector(`health_check` 拡張の `:13133`)、loki(`/ready`)。どちらもシェルも HTTP クライアントもない |
 
-- busybox は `images.env` の `PROBE_IMAGE` に、ほかのイメージと同じくタグとダイジェストで固定する。マウントは Docker の image マウント(`volumes: [{type: image, source: ..., target: /probe}]`)で行う。動作は Docker Engine 29.8.0 / Compose v5.5.1 で確認した。古い Docker Engine は image マウントに対応していない。
+- busybox は `images.env` の `PROBE_IMAGE` に、ほかのイメージと同じくタグとダイジェストで固定する。マウントは Docker の image マウント(`volumes: [{type: image, source: ..., target: /probe}]`)で行う。動作は Docker Engine 29.8.0 / Compose v5.5.1(ローカル)と Docker Engine 28.0.4 / Compose v2.38.2(CI の ubuntu-latest)で確認した。README には確認した最も古い組み合わせを最低バージョンとして書く。古い Docker Engine は image マウントに対応していない。
 - 外からの確認(`verify.sh` から HTTP で叩く)だけにする案は、`up --wait` と `depends_on: condition: service_healthy` が使えなくなるため採らない。外からの確認は、ヘルスチェックに加えて `verify.sh` で行う。
 
 ### 5. Testcontainers も images.env を読む(実装は P04a)

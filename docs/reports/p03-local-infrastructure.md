@@ -110,6 +110,6 @@ HEAD で profile ごとに起動し、`make verify` の後 60 秒おいてから
 
 ## 7. 残っていること
 
-- CI(`.github/workflows/infra.yml`)は push 後に初めて実行される。ubuntu-latest(amd64)での結果は PR で確認する。
+- CI(`.github/workflows/infra.yml`、ubuntu-latest・amd64・Docker Engine 28.0.4 / Compose v2.38.2): image マウントのヘルスチェックを含めて core / iot / file / b2b / chaos は初回から成功した。cdc は、イメージの取得でランナーのディスク使用率が 90% を超えて Loki が WAL の書き込みを止め(`disk usage exceeded threshold`)、Loki の検査だけが失敗した。ワークフローで使わない SDK を削除して空きを作るようにした。
 - secure profile は Issue #26。
 - Object Lock の Compliance モードの厳密さ(管理者の権限での削除・保持期限の短縮)は P04a の Audit の統合テストで確かめる(ADR-0015)。
