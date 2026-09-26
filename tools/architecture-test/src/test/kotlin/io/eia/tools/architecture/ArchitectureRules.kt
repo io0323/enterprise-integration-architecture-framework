@@ -186,9 +186,10 @@ internal object ArchitectureRules {
             "shared/kernel/" to listOf("kotlin", "$BASE_PACKAGE.shared.kernel"),
             "shared/canonical-model/" to
                 listOf("kotlin", "kotlinx.serialization", "$BASE_PACKAGE.shared.kernel", "$BASE_PACKAGE.shared.canonical"),
+            "shared/resilience/" to listOf("kotlin", "$BASE_PACKAGE.shared.kernel", "$BASE_PACKAGE.shared.resilience"),
         )
 
-    /** shared/kernel と shared/canonical-model の commonMain は [SHARED_ALLOWED_IMPORTS] 以外を import しない。 */
+    /** shared の基盤モジュール(kernel / canonical-model / resilience)の commonMain は [SHARED_ALLOWED_IMPORTS] 以外を import しない。 */
     fun sharedImportAllowList(codeBase: CodeBase): List<Violation> =
         SHARED_ALLOWED_IMPORTS.flatMap { (modulePath, allowed) ->
             codeBase
@@ -200,6 +201,20 @@ internal object ArchitectureRules {
                         .map { Violation("shared 許可リスト外の import", file.path, "import $it(許可: ${allowed.joinToString()})") }
                 }
         }
+
+    private const val TEST_SUPPORT_PACKAGE = "$BASE_PACKAGE.platform.testsupport"
+    private const val TEST_SUPPORT_PATH = "platform/test-support/"
+    private val TEST_SOURCE_SET = Regex("""/src/(test|integrationTest|e2eTest|[A-Za-z0-9]+Test)/kotlin/""")
+
+    /** platform/test-support(ADR-0016 §5)はテストのソースセットからだけ参照する。本番コードに Testcontainers を持ち込まない。 */
+    fun testSupportOnlyFromTests(codeBase: CodeBase): List<Violation> =
+        codeBase.files
+            .filter { !it.path.startsWith(TEST_SUPPORT_PATH) && !TEST_SOURCE_SET.containsMatchIn(it.path) }
+            .flatMap { file ->
+                file.importNames
+                    .filter { it.isInPackage(TEST_SUPPORT_PACKAGE) }
+                    .map { Violation("test-support はテスト専用", file.path, "テスト以外のソースセットから import $it") }
+            }
 
     /**
      * DomainError の Retryable と NonRetryable の両方を(間接的な継承を含めて)実装する型を禁止する(ADR-0011)。
