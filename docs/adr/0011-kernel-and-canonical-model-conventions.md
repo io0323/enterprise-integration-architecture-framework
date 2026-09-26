@@ -89,3 +89,4 @@ P01 で `shared/kernel` と `shared/canonical-model`(KMP: jvm / js / linuxX64 / 
 
 ## 改訂履歴
 - 2026-09-26: Money の Avro での表現(§1 で P02 に持ち越した点)は ADR-0012 で決定
+- 2026-09-26: §5 の「BACKWARD 互換の方針」は、ADR-0014 により FULL 互換に読み替える(未知の項目を無視するのは FORWARD 互換のための性質)
