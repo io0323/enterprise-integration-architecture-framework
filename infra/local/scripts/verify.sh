@@ -241,6 +241,60 @@ verify_iot() {
   check "Mosquitto: ホストのポート 19883 で待ち受けている" bash -c "exec 3<>/dev/tcp/127.0.0.1/19883"
 }
 
+# ------------------------------------------------------------------ file / b2b
+# S3 互換ストレージ(SeaweedFS)の互換性検査(scripts/s3-compat.sh を AWS CLI のコンテナで実行する)
+verify_s3() {
+  local output line
+  output="$(docker run --rm --network eiaf \
+    -e AWS_ACCESS_KEY_ID="$S3_ACCESS_KEY" -e AWS_SECRET_ACCESS_KEY="$S3_SECRET_KEY" \
+    -e RUN_ID="$(date +%s)-$$" -e S3_ENDPOINT=http://seaweedfs:8333 -e S3_PUBLIC_ENDPOINT=http://localhost:19333 \
+    -v "$here/scripts/s3-compat.sh:/s3-compat.sh:ro" --entrypoint bash "$AWS_CLI_IMAGE" /s3-compat.sh 2>&1 || true)"
+  while IFS= read -r line; do
+    case "$line" in
+      "OK "*) pass "S3: ${line#OK }" ;;
+      "NG "*) fail "S3: ${line#NG }" ;;
+    esac
+  done <<<"$output"
+  grep -q -E '^(OK|NG) ' <<<"$output" || fail "S3: 検査スクリプトを実行できない ($(tail -1 <<<"$output"))"
+  check "S3: ホストのポート 19333 で応答する" curl -fsS -o /dev/null http://localhost:19333/healthz
+}
+
+# SFTP: 公開鍵認証で接続し、一時名で置いて正式名にリネーム(Framework 9)→ 取得 → 削除できる。パスワード認証は拒否する
+verify_sftp() { # verify_sftp <サービス名> <ホストのポート> <ユーザー> <鍵ファイル名>
+  local service="$1" port="$2" user="$3" key="$here/secrets/$4" name="verify-$$.csv" work
+  local ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10)
+  work="$(mktemp -d)"
+  printf 'id,value\n1,%s\n' "$$" >"$work/$name"
+  if sftp "${ssh_opts[@]}" -i "$key" -P "$port" -b - "$user@127.0.0.1" >/dev/null 2>&1 <<EOF
+put $work/$name inbox/$name.part
+rename inbox/$name.part inbox/$name
+get inbox/$name $work/downloaded.csv
+rm inbox/$name
+EOF
+  then
+    if cmp -s "$work/$name" "$work/downloaded.csv"; then
+      pass "$service: 公開鍵認証で put(一時名)→ rename → get → rm ができる"
+    else
+      fail "$service: 取得した内容が一致しない"
+    fi
+  else
+    fail "$service: 公開鍵認証での SFTP 操作に失敗した"
+  fi
+  if sftp "${ssh_opts[@]}" -o PreferredAuthentications=password -o PubkeyAuthentication=no -o BatchMode=yes \
+    -P "$port" -b - "$user@127.0.0.1" >/dev/null 2>&1 <<<"ls"; then
+    fail "$service: パスワード認証で接続できてしまう"
+  else
+    pass "$service: パスワード認証を拒否する"
+  fi
+  rm -rf "$work"
+}
+
+verify_file() {
+  current=file
+  verify_s3
+  verify_sftp sftp 19222 eiaf-file sftp-file
+}
+
 verify_health
 for p in "${profiles[@]}"; do
   if declare -F "verify_$p" >/dev/null; then "verify_$p"; else current="$p"; fail "verify_$p が未定義"; fi
