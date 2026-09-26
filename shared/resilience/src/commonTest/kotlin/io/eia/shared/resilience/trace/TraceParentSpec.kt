@@ -133,12 +133,19 @@ class TraceParentSpec :
             }
 
             test("sampled ビットだけを切り替え、他のビットは保つ") {
-                val flags = TraceFlags(0x03)
+                val flags = TraceFlags.of(0x03).ok()
 
                 flags.withSampled(false).value shouldBe 0x02
                 flags.withSampled(false).withSampled(true) shouldBe flags
                 TraceFlags.SAMPLED.sampled shouldBe true
-                TraceFlags(0x0a).toString() shouldBe "0a"
+                TraceFlags.of(0x0a).ok().toString() shouldBe "0a"
+            }
+
+            test("1 バイトの範囲外の値は検証エラーにする(例外にしない)") {
+                TraceFlags.of(0).ok() shouldBe TraceFlags.NONE
+                TraceFlags.of(0xff).ok().value shouldBe 0xff
+                TraceFlags.of(-1).shouldBeRejected()
+                TraceFlags.of(0x100).shouldBeRejected()
             }
         }
     })
