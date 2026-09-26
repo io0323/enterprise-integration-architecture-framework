@@ -334,7 +334,8 @@ services:
           exec 3<>/dev/tcp/127.0.0.1/9000 &&
           printf 'GET /health/ready HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3 &&
           read -r status <&3 && [[ "$$status" == *" 200 "* ]]
-      start_period: 60s
+      # start-dev は起動のたびにビルドし直すため、CPU が混んでいると 2 分以上かかることがある
+      start_period: 120s
 
   apisix:
     image: ${APISIX_IMAGE:?}
