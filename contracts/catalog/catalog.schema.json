@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eia.io/contracts/catalog/catalog.schema.json",
+  "title": "Integration Catalog entry",
+  "description": "連携カタログ 1 件の形式(Framework 16.1、INTEGRATION_STANDARDS §5)。1 ファイル 1 連携で、ファイル名は {id}.yaml。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "name", "style", "pattern", "provider", "consumers", "contract", "tier", "dataClassification", "slo", "lifecycle"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^INT-[A-Z][A-Z0-9]*-[0-9]{3}$"
+    },
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "style": {
+      "enum": ["rest", "graphql", "grpc", "webhook", "mqtt", "event", "batch", "etl", "cdc", "file", "edi", "ipaas"]
+    },
+    "pattern": {
+      "description": "queue はコマンドトピック(ADR-0006)",
+      "enum": ["request-reply", "pub-sub", "queue", "scheduled", "file-transfer", "cdc"]
+    },
+    "provider": {
+      "description": "提供側。pattern: queue(コマンド)では、コマンドを受信して処理するサービス",
+      "$ref": "#/$defs/party"
+    },
+    "consumers": {
+      "description": "利用側。event / cdc / queue では購読する Consumer Group ごとに 1 件。queue は受信サービスの 1 件だけ(ADR-0006)",
+      "type": "array",
+      "items": { "$ref": "#/$defs/consumer" }
+    },
+    "senders": {
+      "description": "pattern: queue のコマンドを送信する側",
+      "type": "array",
+      "items": { "$ref": "#/$defs/party" }
+    },
+    "contract": {
+      "description": "リポジトリルートからの相対パス",
+      "type": "string",
+      "pattern": "^contracts/"
+    },
+    "channels": {
+      "description": "この連携が扱うトピック・MQTT トピック・ファイル仕様など。event / cdc では必須",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "tier": { "enum": [1, 2, 3] },
+    "dataClassification": { "enum": ["public", "internal", "confidential", "restricted"] },
+    "slo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["availability", "latencyP99"],
+      "properties": {
+        "availability": { "type": "string", "pattern": "^[0-9]{2}(\\.[0-9]+)?$" },
+        "latencyP99": { "type": "string", "pattern": "^[0-9]+(ms|s|m|h)$" }
+      }
+    },
+    "lifecycle": { "enum": ["proposed", "design", "active", "deprecated", "retired"] }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "style": { "enum": ["event", "cdc"] } } },
+      "then": { "required": ["channels"], "properties": { "channels": { "minItems": 1 } } }
+    }
+  ],
+  "$defs": {
+    "party": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["owner", "system"],
+      "properties": {
+        "owner": { "description": "チーム単位(個人名は不可。Framework 16.2)", "type": "string", "pattern": "^team-[a-z][a-z0-9-]*$" },
+        "system": { "type": "string", "minLength": 1 }
+      }
+    },
+    "consumer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["owner", "system"],
+      "properties": {
+        "owner": { "type": "string", "pattern": "^team-[a-z][a-z0-9-]*$" },
+        "system": { "type": "string", "minLength": 1 },
+        "group": {
+          "description": "Kafka の Consumer Group({service}.{purpose})。event / cdc の消費者では必須",
+          "type": "string"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,333 @@
+openapi: 3.1.0
+info:
+  title: Order API
+  version: 1.0.0
+  summary: 受注 API(INT-SALES-001)
+  description: |
+    注文の登録と参照。Gateway 公開パスは `/sales/v1/...`、サービス内部パスは `/v1/...`(ADR-0005)。
+    エラーは RFC 9457 Problem Details(`application/problem+json`)で返す。
+    Rate Limit は Client ID 単位の Token Bucket(internal: 1000 rps)。超過時は `429` と `Retry-After` を返す(Framework 5.6)。
+  contact:
+    name: team-order
+servers:
+  - url: http://localhost:9080/sales
+    description: ローカル(APISIX)
+security:
+  - oauth2: [orders.read]
+tags:
+  - name: orders
+paths:
+  /v1/orders:
+    post:
+      tags: [orders]
+      operationId: placeOrder
+      summary: 注文を登録する
+      description: 同じ `Idempotency-Key` での再送には、最初の応答と同じ内容を返す(24 時間保持。Framework 5.4)。
+      security:
+        - oauth2: [orders.write]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/Traceparent"
+        - $ref: "#/components/parameters/CorrelationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlaceOrderRequest"
+      responses:
+        "201":
+          description: 登録した
+          headers:
+            Location:
+              description: 登録した注文の URL
+              schema:
+                type: string
+            X-Correlation-Id:
+              $ref: "#/components/headers/CorrelationId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableContent"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /v1/orders/{orderId}:
+    get:
+      tags: [orders]
+      operationId: getOrder
+      summary: 注文を取得する
+      security:
+        - oauth2: [orders.read]
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+        - $ref: "#/components/parameters/Traceparent"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: 注文
+          headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/CorrelationId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+components:
+  securitySchemes:
+    oauth2:
+      type: oauth2
+      description: Keycloak の Client Credentials(Framework 12)
+      flows:
+        clientCredentials:
+          tokenUrl: http://localhost:8180/realms/eiaf/protocol/openid-connect/token
+          scopes:
+            orders.read: 注文の参照
+            orders.write: 注文の登録
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: 冪等キー。サーバは 24 時間、キー単位で最初の応答を保存する。
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+    Traceparent:
+      name: traceparent
+      in: header
+      required: false
+      description: W3C Trace Context
+      schema:
+        type: string
+        pattern: "^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$"
+    CorrelationId:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      description: 業務トランザクション ID。未指定なら Gateway が採番する。
+      schema:
+        type: string
+        maxLength: 128
+  headers:
+    CorrelationId:
+      description: 業務トランザクション ID
+      schema:
+        type: string
+    RetryAfter:
+      description: 再試行までの秒数
+      schema:
+        type: integer
+        minimum: 0
+  responses:
+    BadRequest:
+      description: 構造が不正
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Unauthorized:
+      description: 認証が必要
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Forbidden:
+      description: 権限がない
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    NotFound:
+      description: 存在しない
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Conflict:
+      description: 同じ Idempotency-Key で異なる内容のリクエストを受けた、または処理中
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    UnprocessableContent:
+      description: 値域・業務整合の検証エラー
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    TooManyRequests:
+      description: Rate Limit 超過
+      headers:
+        Retry-After:
+          $ref: "#/components/headers/RetryAfter"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    ServiceUnavailable:
+      description: 一時的に利用できない
+      headers:
+        Retry-After:
+          $ref: "#/components/headers/RetryAfter"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+  schemas:
+    Problem:
+      description: RFC 9457 Problem Details
+      type: object
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+          format: uri-reference
+        correlationId:
+          type: string
+        errors:
+          description: 検証エラーの一覧(422)
+          type: array
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+    Money:
+      description: 金額。amount は通貨の小数桁数で表した 10 進文字列(ADR-0011 §1)。
+      type: object
+      required: [amount, currency]
+      properties:
+        amount:
+          type: string
+          pattern: "^-?(0|[1-9][0-9]*)(\\.[0-9]{1,4})?$"
+          examples: ["1234.50"]
+        currency:
+          type: string
+          pattern: "^[A-Z]{3}$"
+          examples: ["JPY"]
+    Address:
+      type: object
+      required: [countryCode, postalCode, city, line1]
+      properties:
+        countryCode:
+          type: string
+          pattern: "^[A-Z]{2}$"
+        postalCode:
+          type: string
+        region:
+          type: [string, "null"]
+        city:
+          type: string
+        line1:
+          type: string
+        line2:
+          type: [string, "null"]
+    PlaceOrderLine:
+      type: object
+      required: [productId, sku, quantity, unitPrice]
+      properties:
+        productId:
+          type: string
+        sku:
+          type: string
+        quantity:
+          type: integer
+          format: int64
+          minimum: 1
+        unitPrice:
+          $ref: "#/components/schemas/Money"
+    PlaceOrderRequest:
+      type: object
+      required: [customerId, lines, shippingAddress]
+      properties:
+        customerId:
+          type: string
+        lines:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/PlaceOrderLine"
+        shippingAddress:
+          $ref: "#/components/schemas/Address"
+    OrderLine:
+      type: object
+      required: [lineNumber, productId, sku, quantity, unitPrice, lineAmount]
+      properties:
+        lineNumber:
+          type: integer
+          minimum: 1
+        productId:
+          type: string
+        sku:
+          type: string
+        quantity:
+          type: integer
+          format: int64
+        unitPrice:
+          $ref: "#/components/schemas/Money"
+        lineAmount:
+          $ref: "#/components/schemas/Money"
+    Order:
+      type: object
+      required: [id, customerId, status, orderedAt, lines, totalAmount, shippingAddress]
+      properties:
+        id:
+          type: string
+        customerId:
+          type: string
+        status:
+          type: string
+          description: 値は追加されうる。未知の値を受け取ったときの扱いは受信側で決める(Tolerant Reader。Framework 5.3)
+          enum: [PLACED, CONFIRMED, SHIPPED, DELIVERED, CANCELLED]
+        orderedAt:
+          type: string
+          format: date-time
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderLine"
+        totalAmount:
+          $ref: "#/components/schemas/Money"
+        shippingAddress:
+          $ref: "#/components/schemas/Address"

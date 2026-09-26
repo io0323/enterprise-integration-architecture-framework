@@ -1,0 +1,90 @@
+asyncapi: 3.0.0
+info:
+  title: Order Events
+  version: 1.0.0
+  description: |
+    order-service が発行する注文の Domain Event(INT-SALES-002)。
+    Outbox + Debezium で発行する(ADR-0007)。パーティションキーは注文 ID。
+    ヘッダは CloudEvents binary mode(`ce_*`)と `traceparent`・`correlationid`。
+    処理できないメッセージは `{topic}.dlq` に隔離する(Framework 6.5)。
+  contact:
+    name: team-order
+defaultContentType: avro/binary
+servers:
+  local:
+    host: localhost:9092
+    protocol: kafka
+    description: ローカル(P03 の docker compose)
+channels:
+  orderCreated:
+    address: sales.order.created.v1
+    messages:
+      orderCreated:
+        $ref: "#/components/messages/OrderCreated"
+  orderCancelled:
+    address: sales.order.cancelled.v1
+    messages:
+      orderCancelled:
+        $ref: "#/components/messages/OrderCancelled"
+operations:
+  publishOrderCreated:
+    action: send
+    channel:
+      $ref: "#/channels/orderCreated"
+    messages:
+      - $ref: "#/channels/orderCreated/messages/orderCreated"
+  publishOrderCancelled:
+    action: send
+    channel:
+      $ref: "#/channels/orderCancelled"
+    messages:
+      - $ref: "#/channels/orderCancelled/messages/orderCancelled"
+components:
+  messages:
+    OrderCreated:
+      name: OrderCreated
+      title: 注文登録
+      contentType: avro/binary
+      headers:
+        $ref: "#/components/schemas/StandardHeaders"
+      payload:
+        schemaFormat: application/vnd.apache.avro+json;version=1.9.0
+        schema:
+          $ref: "../avro/sales/OrderCreated.avsc"
+    OrderCancelled:
+      name: OrderCancelled
+      title: 注文取消
+      contentType: avro/binary
+      headers:
+        $ref: "#/components/schemas/StandardHeaders"
+      payload:
+        schemaFormat: application/vnd.apache.avro+json;version=1.9.0
+        schema:
+          $ref: "../avro/sales/OrderCancelled.avsc"
+  schemas:
+    StandardHeaders:
+      type: object
+      description: 全イベント共通のヘッダ(INTEGRATION_STANDARDS §2)
+      required: [ce_id, ce_source, ce_type, ce_time, ce_specversion, traceparent, correlationid]
+      properties:
+        ce_id:
+          type: string
+          description: イベント ID(冪等消費のキー)
+        ce_source:
+          type: string
+          description: 発行元(例 /sales/order-service)
+        ce_type:
+          type: string
+          description: イベント種別。トピック名から `.v{n}` を除いた値(例 sales.order.created)
+        ce_time:
+          type: string
+          format: date-time
+        ce_specversion:
+          type: string
+          const: "1.0"
+        traceparent:
+          type: string
+          description: W3C Trace Context
+        correlationid:
+          type: string
+          description: 業務トランザクション ID

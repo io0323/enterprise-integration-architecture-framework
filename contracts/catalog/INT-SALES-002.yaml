@@ -1,0 +1,17 @@
+id: INT-SALES-002
+name: Order Events
+description: 注文の登録・取消を通知する Domain Event
+style: event
+pattern: pub-sub
+provider: { owner: team-order, system: order-service }
+consumers:
+  - { owner: team-inventory, system: inventory-service, group: inventory.reservation }
+  - { owner: team-analytics, system: batch-etl, group: batch-etl.order-ingest }
+contract: contracts/asyncapi/order-events.v1.yaml
+channels:
+  - sales.order.created.v1
+  - sales.order.cancelled.v1
+tier: 1
+dataClassification: confidential
+slo: { availability: "99.99", latencyP99: "5s" }
+lifecycle: design

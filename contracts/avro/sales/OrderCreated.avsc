@@ -1,0 +1,76 @@
+{
+  "type": "record",
+  "name": "OrderCreated",
+  "namespace": "io.eia.events.sales",
+  "doc": "注文が登録された(sales.order.created.v1)。登録時点の注文全体を運ぶ。Canonical Model の Order と項目を一致させる(ADR-0012)。",
+  "fields": [
+    {
+      "name": "order",
+      "type": {
+        "type": "record",
+        "name": "Order",
+        "doc": "Canonical Model: io.eia.shared.canonical.sales.Order",
+        "fields": [
+          { "name": "id", "type": "string" },
+          { "name": "customerId", "type": "string" },
+          {
+            "name": "status",
+            "type": {
+              "type": "enum",
+              "name": "OrderStatus",
+              "symbols": ["PLACED", "CONFIRMED", "SHIPPED", "DELIVERED", "CANCELLED"]
+            }
+          },
+          { "name": "orderedAt", "type": { "type": "long", "logicalType": "timestamp-micros" } },
+          {
+            "name": "lines",
+            "type": {
+              "type": "array",
+              "items": {
+                "type": "record",
+                "name": "OrderLine",
+                "fields": [
+                  { "name": "lineNumber", "type": "int" },
+                  { "name": "productId", "type": "string" },
+                  { "name": "sku", "type": "string" },
+                  { "name": "quantity", "type": "long" },
+                  {
+                    "name": "unitPrice",
+                    "type": {
+                      "type": "record",
+                      "name": "Money",
+                      "namespace": "io.eia.events.common",
+                      "doc": "金額。minorUnits は最小通貨単位(JPY は円、USD はセント)。小数桁数は currency から引く(ADR-0012)。",
+                      "fields": [
+                        { "name": "minorUnits", "type": "long" },
+                        { "name": "currency", "type": "string", "doc": "ISO 4217 の通貨コード" }
+                      ]
+                    }
+                  },
+                  { "name": "lineAmount", "type": "io.eia.events.common.Money" }
+                ]
+              }
+            }
+          },
+          { "name": "totalAmount", "type": "io.eia.events.common.Money" },
+          {
+            "name": "shippingAddress",
+            "type": {
+              "type": "record",
+              "name": "Address",
+              "namespace": "io.eia.events.common",
+              "fields": [
+                { "name": "countryCode", "type": "string", "doc": "ISO 3166-1 alpha-2" },
+                { "name": "postalCode", "type": "string" },
+                { "name": "city", "type": "string" },
+                { "name": "line1", "type": "string" },
+                { "name": "region", "type": ["null", "string"], "default": null },
+                { "name": "line2", "type": ["null", "string"], "default": null }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
