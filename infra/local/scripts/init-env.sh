@@ -21,7 +21,7 @@ if [[ -f "$env_file" ]]; then
     [[ "$value" == "__GENERATE__" ]] && value="$(random_value)"
     printf '%s=%s\n' "$key" "$value" >>"$env_file"
     added=$((added + 1))
-  done <"$here/.env.example"
+  done <"$here/env.example"
   echo "infra/local/.env は既にあります(不足していた変数を ${added} 件追記)"
 else
   umask 077
@@ -31,7 +31,7 @@ else
     else
       printf '%s\n' "$line"
     fi
-  done <"$here/.env.example" >"$env_file"
+  done <"$here/env.example" >"$env_file"
   echo "infra/local/.env を生成しました"
 fi
 

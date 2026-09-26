@@ -7,7 +7,6 @@ build/
 local.properties
 .env
 .env.*
-!.env.example
 **/secrets/
 infra/local/data/
 *.log

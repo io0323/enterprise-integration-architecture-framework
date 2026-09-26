@@ -74,7 +74,7 @@ Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)�
 
 ## 認証情報
 
-値はすべて `make env` がランダムに生成し、`infra/local/.env` と `infra/local/secrets/` に置く(どちらもコミットしない)。変数名は `.env.example` を参照。
+値はすべて `make env` がランダムに生成し、`infra/local/.env` と `infra/local/secrets/` に置く(どちらもコミットしない)。変数名は `env.example` を参照。
 
 | 対象 | 利用者 | 値 |
 |---|---|---|
