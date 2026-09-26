@@ -113,3 +113,19 @@ HEAD で profile ごとに起動し、`make verify` の後 60 秒おいてから
 - CI(`.github/workflows/infra.yml`、ubuntu-latest・amd64・Docker Engine 28.0.4 / Compose v2.38.2): image マウントのヘルスチェックを含めて core / iot / file / b2b / chaos は初回から成功した。cdc は、イメージの取得でランナーのディスク使用率が 90% を超えて Loki が WAL の書き込みを止め(`disk usage exceeded threshold`)、Loki の検査だけが失敗した。ワークフローで使わない SDK を削除して空きを作るようにした。
 - secure profile は Issue #26。
 - Object Lock の Compliance モードの厳密さ(管理者の権限での削除・保持期限の短縮)は P04a の Audit の統合テストで確かめる(ADR-0015)。
+
+## 8. レビュー対応後の再検証(PR #28)
+
+PR #28 のレビューの指摘を直した後、全 profile を空の状態(`make clean`)から起動して検証した。すべて FAIL 0。
+
+| profile | 結果 | 変わった点 |
+|---|---|---|
+| core | PASS 33 / FAIL 0 | PostgreSQL のヘルスチェックを TCP + 初期化の完了の確認に、Kafka の CLI のヒープを上書き、tempo / loki を非 root(uid 10001)に |
+| cdc | PASS 43 / FAIL 0 | Kafka Connect の秘密情報を `EnvVarConfigProvider` で参照させ、config API と `_connect.configs` に平文のパスワードが現れないことの検査を 2 件追加 |
+| iot | PASS 38 / FAIL 0 | — |
+| file | PASS 55 / FAIL 0 | — |
+| b2b | PASS 56 / FAIL 0 | — |
+| chaos | PASS 43 / FAIL 0 | — |
+
+- verify.sh は、空白を含むパスに置いたコピーからも `make verify PROFILE=cdc` が成功することを確かめた。
+- 指摘と対応の一覧は PR #28 のコメントに残した。
