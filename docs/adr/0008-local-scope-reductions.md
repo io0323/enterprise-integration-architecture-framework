@@ -18,6 +18,8 @@ CLAUDE.md §6 の「設計書と乖離する場合は ADR を書く」に従い�
 | 保存データの暗号化(12.2) | Broker・キュー・ステージング・ファイル保管の暗号化、フィールドレベル暗号化 | **範囲外**。ファイルの PGP 暗号化(P09)とマスキングユーティリティのみ実装する | 各基盤の暗号化機能と KMS |
 | Service Mesh(17.2) | 内部同期は gRPC + Service Mesh(mTLS) | **範囲外**。mTLS は上記の範囲で直接設定する | Service Mesh |
 | Event Mesh(4.1) | 複数 Broker・リージョンの接続 | **範囲外**。単一の Kafka クラスタ | 必要時に ADR |
+| 転送路の暗号化(9, 12.2) | 全連携で TLS1.2+(平文禁止) | **ローカルは平文**: Kafka(PLAINTEXT。SASL_SSL は #26)、MQTT(1883)、S3(SeaweedFS の http)、Keycloak(`sslRequired: none`)、APISIX(http)。SFTP は SSH で暗号化される。すべて 127.0.0.1 にだけ公開する(ADR-0016 §6)。TLS 化は #29 | 各基盤の TLS と証明書の自動ローテーション |
+| 基盤の管理 API の認証(12.3) | 境界内でも認証必須 | **ローカルは未認証**: Apicurio の REST、Kafka Connect の REST、Toxiproxy の API、Prometheus の OTLP / remote write 受信、Loki、Tempo、OTel Collector の OTLP 受信。127.0.0.1 にだけ公開する。認証の追加は #29 | 各製品の認証(Apicurio は OIDC、Connect の REST は Basic 認証か mTLS など)とネットワーク分離 |
 
 ## Alternatives Considered
 - Vault(または OpenBao)をコンテナで追加する: ローカル負荷と起動手順が増える割に、Port 経由で差し替えられることは示せる。範囲を限定するために不採用。
@@ -31,3 +33,4 @@ CLAUDE.md §6 の「設計書と乖離する場合は ADR を書く」に従い�
 
 ## 改訂履歴
 - 2026-09-26: Audit の日次アンカーの保存先を MinIO から SeaweedFS に読み替えた(ADR-0015)。Kafka の SSL / ACL の `secure` profile は P03 の範囲から外し、Issue #26 で扱う(ADR-0016 §8)。
+- 2026-09-26: 転送路の暗号化と基盤の管理 API の認証の縮退を表に追加した(PR #28 のレビュー。対応は #29)。
