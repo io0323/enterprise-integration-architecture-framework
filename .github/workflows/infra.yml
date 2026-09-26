@@ -1,0 +1,84 @@
+name: infra
+on:
+  pull_request:
+    paths:
+      - "infra/local/**"
+      - "Makefile"
+      - ".github/workflows/infra.yml"
+  push:
+    branches: [main]
+    paths:
+      - "infra/local/**"
+      - "Makefile"
+      - ".github/workflows/infra.yml"
+permissions:
+  contents: read
+concurrency:
+  group: infra-${{ github.ref }}
+  cancel-in-progress: true
+
+# ADR-0016: ローカル基盤(infra/local)を profile ごとに起動し、`make verify` で healthy と機能の疎通を検査する。
+# 1 ジョブ 1 profile(core + その profile)とし、ランナーのメモリ(private リポジトリの ubuntu-latest は 7GB 程度)に収める。
+# アクションは ci.yml と同じくコミット SHA で固定する。
+jobs:
+  compose-config:
+    name: compose config
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Generate .env
+        run: make env
+      - name: Validate every profile
+        run: |
+          for profile in core cdc iot file b2b chaos; do
+            echo "::group::$profile"
+            docker compose -f infra/local/docker-compose.yml --env-file infra/local/images.env --env-file infra/local/.env \
+              --profile core --profile "$profile" config --quiet
+            echo "::endgroup::"
+          done
+      - name: Every image is pinned by tag and digest
+        run: |
+          bad="$(grep -E '^[A-Z0-9_]+_IMAGE=' infra/local/images.env | grep -v -E '^[A-Z0-9_]+_IMAGE=[^@[:space:]]+:[^@[:space:]]+@sha256:[0-9a-f]{64}$' || true)"
+          if [ -n "$bad" ]; then echo "タグ + ダイジェストで固定されていないイメージがあります:"; echo "$bad"; exit 1; fi
+          if grep -n -E '^\s+image:' infra/local/docker-compose.yml | grep -v -E 'image: \$\{[A-Z0-9_]+_IMAGE:\?[^}]*\}$'; then
+            echo "docker-compose.yml の image は images.env の変数で指定してください"; exit 1
+          fi
+
+  verify:
+    name: verify (${{ matrix.profile }})
+    needs: compose-config
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [core, cdc, iot, file, b2b, chaos]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Docker versions
+        run: docker version --format 'engine {{.Server.Version}}' && docker compose version
+      - name: Up
+        run: make up PROFILE=${{ matrix.profile }}
+      - name: Verify
+        run: |
+          set -o pipefail
+          make verify PROFILE=${{ matrix.profile }} | tee verify.txt
+      - name: Memory
+        if: ${{ !cancelled() }}
+        run: make stats | tee stats.md
+      - name: Summary
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "## infra verify: ${{ matrix.profile }}"
+            echo
+            if [ -f verify.txt ]; then echo '```'; grep -E '^(FAIL|profile=)' verify.txt || true; echo '```'; fi
+            if [ -f stats.md ]; then cat stats.md; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Logs on failure
+        if: ${{ failure() }}
+        run: make ps && docker compose -f infra/local/docker-compose.yml --env-file infra/local/images.env --env-file infra/local/.env --profile '*' logs --tail=200
+      - name: Down
+        if: ${{ always() }}
+        run: make clean
