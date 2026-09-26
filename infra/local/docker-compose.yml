@@ -54,7 +54,8 @@ services:
     mem_limit: 768m
     healthcheck:
       <<: *healthcheck
-      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      # CLI の JVM がブローカーの KAFKA_HEAP_OPTS を引き継がないよう、ヒープを小さく上書きする
+      test: ["CMD-SHELL", "KAFKA_HEAP_OPTS=-Xmx64m /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
       interval: 15s
       timeout: 10s
 

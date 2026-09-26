@@ -4,6 +4,7 @@
 # 2. profile ごとの機能の疎通(下の verify_<profile> 関数)
 # 秘密情報は .env から読むが、出力には出さない。
 set -euo pipefail
+# 補足: kafka コンテナで CLI を実行するときは KAFKA_HEAP_OPTS を上書きし、ブローカーと同じヒープを確保させない
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
 profiles=(core)
@@ -105,19 +106,19 @@ print(d.get("iss"), ",".join(aud), " ".join(sorted(d.get("scope","").split())))'
 
   # Kafka: 自動作成が無効で、明示的に作ったトピックで produce / consume できる
   local topic="eiaf.verify.probed.v1" kbin=/opt/kafka/bin
-  "${compose[@]}" exec -T kafka $kbin/kafka-topics.sh --bootstrap-server kafka:9092 --delete --topic "$topic" >/dev/null 2>&1 || true
+  "${compose[@]}" exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka $kbin/kafka-topics.sh --bootstrap-server kafka:9092 --delete --topic "$topic" >/dev/null 2>&1 || true
   check "Kafka: トピックを作成できる" \
-    "${compose[@]}" exec -T kafka $kbin/kafka-topics.sh --bootstrap-server kafka:9092 --create --topic "$topic" --partitions 1 --replication-factor 1
+    "${compose[@]}" exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka $kbin/kafka-topics.sh --bootstrap-server kafka:9092 --create --topic "$topic" --partitions 1 --replication-factor 1
   check "Kafka: ホストのリスナー(localhost:19092)から produce できる" \
-    bash -c "echo verify-$$ | ${compose[*]} exec -T kafka $kbin/kafka-console-producer.sh --bootstrap-server localhost:19092 --topic $topic"
+    bash -c "echo verify-$$ | ${compose[*]} exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka $kbin/kafka-console-producer.sh --bootstrap-server localhost:19092 --topic $topic"
   check "Kafka: consume できる" \
-    bash -c "${compose[*]} exec -T kafka $kbin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic $topic --from-beginning --max-messages 1 --timeout-ms 15000 | grep -q verify-$$"
-  "${compose[@]}" exec -T kafka $kbin/kafka-topics.sh --bootstrap-server kafka:9092 --delete --topic "$topic" >/dev/null 2>&1 || true
+    bash -c "${compose[*]} exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka $kbin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic $topic --from-beginning --max-messages 1 --timeout-ms 15000 | grep -q verify-$$"
+  "${compose[@]}" exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka $kbin/kafka-topics.sh --bootstrap-server kafka:9092 --delete --topic "$topic" >/dev/null 2>&1 || true
   local produce_output
-  produce_output="$("${compose[@]}" exec -T kafka $kbin/kafka-console-producer.sh --bootstrap-server kafka:9092 \
+  produce_output="$("${compose[@]}" exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka $kbin/kafka-console-producer.sh --bootstrap-server kafka:9092 \
     --topic eiaf.verify.undeclared.v1 --command-property max.block.ms=5000 <<<"x" 2>&1 || true)"
   if grep -q -i -E "not present in metadata|UNKNOWN_TOPIC" <<<"$produce_output" &&
-    ! "${compose[@]}" exec -T kafka $kbin/kafka-topics.sh --bootstrap-server kafka:9092 --list | grep -q -x eiaf.verify.undeclared.v1; then
+    ! "${compose[@]}" exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka $kbin/kafka-topics.sh --bootstrap-server kafka:9092 --list | grep -q -x eiaf.verify.undeclared.v1; then
     pass "Kafka: 未作成のトピックは自動作成されない(auto.create.topics.enable=false)"
   else
     fail "Kafka: 未作成のトピックへの produce が失敗しない"
@@ -176,7 +177,7 @@ verify_cdc() {
       "DROP PUBLICATION IF EXISTS eiaf_verify; DROP TABLE IF EXISTS verify_probe;" >/dev/null 2>&1 || true
     "${compose[@]}" exec -T postgres psql -U postgres -tAc \
       "SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots WHERE slot_name LIKE 'eiaf_verify%' AND NOT active" >/dev/null 2>&1 || true
-    "${compose[@]}" exec -T kafka $kbin/kafka-topics.sh --bootstrap-server kafka:9092 --delete --topic "$topic" >/dev/null 2>&1 || true
+    "${compose[@]}" exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka $kbin/kafka-topics.sh --bootstrap-server kafka:9092 --delete --topic "$topic" >/dev/null 2>&1 || true
   }
 
   check "Kafka Connect: PostgresConnector(Debezium)が使える" bash -c \
@@ -213,7 +214,7 @@ verify_cdc() {
     fail "CDC: config API のパスワードが参照になっていない"
   fi
   local configs_topic
-  configs_topic="$("${compose[@]}" exec -T kafka $kbin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic _connect.configs \
+  configs_topic="$("${compose[@]}" exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka $kbin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic _connect.configs \
     --from-beginning --timeout-ms 5000 2>/dev/null || true)"
   if [[ -n "$configs_topic" ]] && ! grep -q -F -- "$DEBEZIUM_DB_PASSWORD" <<<"$configs_topic"; then
     pass "CDC: _connect.configs トピックに平文のパスワードが含まれない"
@@ -222,7 +223,7 @@ verify_cdc() {
   fi
   psql_as legacy_sim "$LEGACY_SIM_DB_PASSWORD" legacy_sim "INSERT INTO verify_probe VALUES (2, 'streamed')" >/dev/null 2>&1 || true
   local events
-  events="$(retry 15 2 bash -c "${compose[*]} exec -T kafka $kbin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic $topic \
+  events="$(retry 15 2 bash -c "${compose[*]} exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka $kbin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic $topic \
     --from-beginning --max-messages 2 --timeout-ms 10000 2>/dev/null | grep -c '\"op\"'" || true)"
   if [[ "$(printf '%s' "$events" | tail -1)" == 2 ]]; then
     pass "CDC: スナップショット(op=r)と INSERT(op=c)の 2 件が {prefix}.public.verify_probe に届く"
@@ -351,8 +352,8 @@ verify_chaos() {
   metadata="$(kafka_via_proxy $kbin/kafka-broker-api-versions.sh --bootstrap-server toxiproxy:19095 2>/dev/null | head -1 || true)"
   if [[ "$metadata" == "toxiproxy:19095 "* ]]; then pass "Kafka: TOXI_INTERNAL リスナーの advertised が toxiproxy:19095"; else fail "Kafka: TOXI_INTERNAL の advertised が想定外 ('$metadata')"; fi
 
-  "${compose[@]}" exec -T kafka $kbin/kafka-topics.sh --bootstrap-server kafka:9092 --delete --topic "$topic" >/dev/null 2>&1 || true
-  "${compose[@]}" exec -T kafka $kbin/kafka-topics.sh --bootstrap-server kafka:9092 --create --topic "$topic" --partitions 1 --replication-factor 1 >/dev/null 2>&1 || true
+  "${compose[@]}" exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka $kbin/kafka-topics.sh --bootstrap-server kafka:9092 --delete --topic "$topic" >/dev/null 2>&1 || true
+  "${compose[@]}" exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka $kbin/kafka-topics.sh --bootstrap-server kafka:9092 --create --topic "$topic" --partitions 1 --replication-factor 1 >/dev/null 2>&1 || true
   check "Kafka: Toxiproxy 経由(localhost:19094)で produce / consume できる" bash -c "
     echo toxic-$$ | docker run --rm -i --network container:eiaf-toxiproxy-1 --entrypoint $kbin/kafka-console-producer.sh $KAFKA_IMAGE --bootstrap-server localhost:19094 --topic $topic &&
     docker run --rm --network container:eiaf-toxiproxy-1 --entrypoint $kbin/kafka-console-consumer.sh $KAFKA_IMAGE --bootstrap-server localhost:19094 --topic $topic --from-beginning --max-messages 1 --timeout-ms 20000 | grep -q toxic-$$"
@@ -379,7 +380,7 @@ verify_chaos() {
   check "Toxiproxy: proxy を有効に戻すと接続できる" retry 5 1 "${compose[@]}" "${pg[@]}"
 
   toxic_cleanup
-  "${compose[@]}" exec -T kafka $kbin/kafka-topics.sh --bootstrap-server kafka:9092 --delete --topic "$topic" >/dev/null 2>&1 || true
+  "${compose[@]}" exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka $kbin/kafka-topics.sh --bootstrap-server kafka:9092 --delete --topic "$topic" >/dev/null 2>&1 || true
 }
 
 verify_health
