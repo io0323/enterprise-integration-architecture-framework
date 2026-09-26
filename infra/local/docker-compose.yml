@@ -108,6 +108,11 @@ services:
       CONNECT_TOPIC_CREATION_ENABLE: "true"
       # Apicurio の Avro Converter を有効にする(P06 の Outbox で使う)
       ENABLE_APICURIO_CONVERTERS: "true"
+      # コネクタの設定に秘密情報を平文で書かず、${env:VAR} で参照させる(Framework 12.2。ADR-0016 §7)。
+      # 平文で書くと _connect.configs トピックと REST(GET /connectors/{name}/config)から読めてしまう
+      CONNECT_CONFIG_PROVIDERS: env
+      CONNECT_CONFIG_PROVIDERS_ENV_CLASS: org.apache.kafka.common.config.provider.EnvVarConfigProvider
+      DEBEZIUM_DB_PASSWORD: ${DEBEZIUM_DB_PASSWORD:?}
       HEAP_OPTS: -Xms256m -Xmx384m
     ports:
       - 127.0.0.1:19083:8083
@@ -115,7 +120,8 @@ services:
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8083/connector-plugins"]
-      start_period: 40s
+      # 起動時のグループ参加(NotCoordinator の再試行)で REST の待ち受けまで 1 分以上かかることがある
+      start_period: 90s
 
   # ---------------------------------------------------------------- iot
   mosquitto:

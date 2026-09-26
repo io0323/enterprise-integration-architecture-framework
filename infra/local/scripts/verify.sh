@@ -194,16 +194,32 @@ verify_cdc() {
   local config
   config="$(python3 -c 'import json,sys; print(json.dumps({"name":sys.argv[1],"config":{
     "connector.class":"io.debezium.connector.postgresql.PostgresConnector",
-    "database.hostname":"postgres","database.port":"5432","database.user":"debezium","database.password":sys.argv[2],
+    "database.hostname":"postgres","database.port":"5432","database.user":"debezium","database.password":"${env:DEBEZIUM_DB_PASSWORD}",
     "database.dbname":"legacy_sim","topic.prefix":sys.argv[3],"table.include.list":"public.verify_probe",
     "plugin.name":"pgoutput","publication.name":"eiaf_verify","publication.autocreate.mode":"disabled",
     "slot.name":sys.argv[4],"slot.drop.on.stop":"true",
     "key.converter":"org.apache.kafka.connect.json.JsonConverter","key.converter.schemas.enable":"false",
     "value.converter":"org.apache.kafka.connect.json.JsonConverter","value.converter.schemas.enable":"false",
-    "topic.creation.default.replication.factor":"1","topic.creation.default.partitions":"1"}}))' "$connector" "$DEBEZIUM_DB_PASSWORD" "$prefix" "$slot")"
+    "topic.creation.default.replication.factor":"1","topic.creation.default.partitions":"1"}}))' "$connector" unused "$prefix" "$slot")"
   check "CDC: Debezium のコネクタを登録できる" curl -fsS -o /dev/null -X POST "$connect/connectors" -H 'Content-Type: application/json' -d "$config"
   check "CDC: コネクタとタスクが RUNNING" retry 30 2 bash -c \
     "curl -fsS $connect/connectors/$connector/status | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d[\"connector\"][\"state\"]==\"RUNNING\" and d[\"tasks\"] and all(t[\"state\"]==\"RUNNING\" for t in d[\"tasks\"]) else 1)'"
+  # パスワードは EnvVarConfigProvider で参照させ、平文が config API と内部トピックに残らないこと(Framework 12.2)
+  local stored
+  stored="$(curl -fsS "$connect/connectors/$connector/config" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("database.password",""))' || true)"
+  if [[ "$stored" == '${env:DEBEZIUM_DB_PASSWORD}' ]] && ! grep -q -F -- "$DEBEZIUM_DB_PASSWORD" <<<"$stored"; then
+    pass "CDC: config API はパスワードを \${env:...} の参照のまま返し、平文を含まない"
+  else
+    fail "CDC: config API のパスワードが参照になっていない"
+  fi
+  local configs_topic
+  configs_topic="$("${compose[@]}" exec -T kafka $kbin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic _connect.configs \
+    --from-beginning --timeout-ms 5000 2>/dev/null || true)"
+  if [[ -n "$configs_topic" ]] && ! grep -q -F -- "$DEBEZIUM_DB_PASSWORD" <<<"$configs_topic"; then
+    pass "CDC: _connect.configs トピックに平文のパスワードが含まれない"
+  else
+    fail "CDC: _connect.configs トピックを読めないか、平文のパスワードが含まれる"
+  fi
   psql_as legacy_sim "$LEGACY_SIM_DB_PASSWORD" legacy_sim "INSERT INTO verify_probe VALUES (2, 'streamed')" >/dev/null 2>&1 || true
   local events
   events="$(retry 15 2 bash -c "${compose[*]} exec -T kafka $kbin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic $topic \

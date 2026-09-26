@@ -68,6 +68,7 @@ Docker のヘルスチェックはコンテナの中で実行されるため、�
 | Kafka | `auto.create.topics.enable=false` | 命名規約(Framework 6.2)外のトピックが暗黙に作られるのを防ぐ。トピックは各フェーズの初期化で明示的に作り、Kafka Connect は `topic.creation` で出力先を作る |
 | Kafka | Toxiproxy 専用のリスナー `TOXI_HOST`(advertised `localhost:19094`)と `TOXI_INTERNAL`(advertised `toxiproxy:19095`) | メタデータの取得後の接続も Toxiproxy を通るようにする。ホストのテスト(P14)とコンテナ内のサービスの両方で障害を注入できる |
 | Kafka Connect | 内部トピックは `_connect.*`、Consumer Group は `debezium.connect`、Apicurio の Converter を有効化 | 内部トピックを業務トピックと区別する。P06 で Avro + Apicurio を使う |
+| Kafka Connect | `config.providers=env`(`EnvVarConfigProvider`)。コネクタの設定の秘密情報は `${env:DEBEZIUM_DB_PASSWORD}` のように参照で書き、値はコンテナの環境変数(`.env`)から渡す | 平文で書くと `_connect.configs` トピックと REST(`GET /connectors/{name}/config`)から読めてしまう(Framework 12.2)。`make verify PROFILE=cdc` で平文が現れないことを検査する。P06 以降のコネクタも同じ書き方にする |
 | Apicurio | 既定のグローバルルール `apicurio.rules.global.compatibility=FULL_TRANSITIVE`(と `validity=FULL`)、ストレージは PostgreSQL | ADR-0014 の「登録時は全版と FULL」を、アーティファクトごとの設定を忘れても効くよう既定で強制する。再起動でスキーマ ID が変わらないよう永続化する |
 | Keycloak | realm `eiaf`、スコープ `sales.order:read` / `sales.order:write`(Framework 12.3)、`aud` に `order-api`、`iss` を `http://localhost:19180/realms/eiaf` に固定(`KC_HOSTNAME`)し、コンテナ内からのバックチャネルは `keycloak:8080` | ホストとコンテナのどちらでトークンを取っても `iss` が同じになり、JWT の `iss` 検証(CLAUDE.md §5)が環境で揺れない |
 | PostgreSQL | `wal_level=logical`、Debezium 用の `debezium` ユーザー(REPLICATION と CONNECT のみ) | CDC(P06)。テーブルの SELECT とパブリケーションは、テーブルの所有者がマイグレーションで付与する |
