@@ -214,6 +214,20 @@ enum class Rule(
         "互換な変更(任意項目の追加など)にするか、/v{n+1} を新設して並行提供する",
     ),
 
+    // --- 互換性検査の例外(contracts/compat-waivers.yaml) ---
+    WAIVER_INVALID(
+        "CC-WAIVER-001",
+        "互換性検査の例外リストの形式が正しい",
+        "16.1, ADR-0013",
+        "各例外に rule(CC-COMPAT-*)・file・contains・reason・issue・expires(YYYY-MM-DD)を書く",
+    ),
+    WAIVER_EXPIRED(
+        "CC-WAIVER-002",
+        "期限切れの互換性検査の例外が残っていない",
+        "16.1, ADR-0013",
+        "例外が不要になっていれば削除する。まだ必要なら理由を Issue に残して expires を延ばす",
+    ),
+
     // --- Canonical ---
     CANONICAL_AVRO(
         "CC-CANON-001",

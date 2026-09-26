@@ -76,9 +76,29 @@ ID は `CC-{区分}-{連番}`。定義は `src/main/kotlin/io/eia/tools/contract
 | `CC-FILE-001` | manifest スキーマが標準の必須項目を required に含む | 9, INTEGRATION_STANDARDS §2 | required に file, recordCount, sha256, schemaVersion, createdAt, traceparent, correlationId を含める |
 | `CC-COMPAT-001` | Avro スキーマが main の版に対して FULL 互換(BACKWARD かつ FORWARD) | 6.3, 13, 15.3, ADR-0014 | 追加・削除できるのは default 付きの項目だけ。必須項目の追加・削除、型変更、リネーム、enum 値の増減は新しいバージョンのトピック(.v{n+1})で行う |
 | `CC-COMPAT-002` | OpenAPI に main の版からの破壊的変更がない(oasdiff) | 5.3 | 互換な変更(任意項目の追加など)にするか、/v{n+1} を新設して並行提供する |
+| `CC-WAIVER-001` | 互換性検査の例外リストの形式が正しい | 16.1, ADR-0013 | 各例外に rule(CC-COMPAT-*)・file・contains・reason・issue・expires(YYYY-MM-DD)を書く |
+| `CC-WAIVER-002` | 期限切れの互換性検査の例外が残っていない | 16.1, ADR-0013 | 例外が不要になっていれば削除する。まだ必要なら理由を Issue に残して expires を延ばす |
 | `CC-CANON-001` | Canonical Model(Kotlin)と Avro スキーマの項目が一致する | 15.1, ADR-0012 | ADR-0012 の変換規則に従って、項目名・必須性・型を Canonical Model と揃える |
 | `CC-CANON-002` | Canonical Model に対応づけた Avro の型が存在する | 15.1, ADR-0012 | CanonicalBindings の対応表か、contracts/avro の型名を直す |
 | `CC-TOOL-001` | 検査ツール(oasdiff)を実行できる | 19 | --oasdiff に oasdiff の実行ファイルを指定する(./gradlew :tools:contract-check:run は自動で取得する) |
+
+## 互換性検査の例外(`contracts/compat-waivers.yaml`)
+
+利用者がいないことを確認できた v{n} の破壊的変更など、`CC-COMPAT-*` の違反をやむを得ず許可するときに使う(ADR-0013 §6)。
+契約と同じ PR でレビューされるよう `contracts/` に置く。
+
+```yaml
+waivers:
+  - rule: CC-COMPAT-002                          # 例外にできるのは CC-COMPAT-* だけ
+    file: contracts/openapi/order-api.v1.yaml
+    contains: "the security scope `sales.order:" # 違反の内容に含まれる文字列(この文字列を含む違反だけを許可する)
+    reason: 利用者がいない理由など
+    issue: "#25"                                 # 経緯を残した Issue
+    expires: 2026-10-31                          # 翌日から CC-WAIVER-002 で失敗する
+```
+
+- 許可した違反は、出力の「例外で許可した違反」に理由・Issue・期限とともに表示する(違反の件数には数えない)。
+- どの違反にも当たらない例外(main にマージされて比較元と一致したものなど)は「使われていない例外」として表示する。失敗にはしないので、気づいたら削除する。
 
 ## テスト
 
