@@ -295,6 +295,19 @@ verify_file() {
   verify_sftp sftp 19222 eiaf-file sftp-file
 }
 
+verify_b2b() {
+  current=b2b
+  verify_s3
+  verify_sftp sftp-b2b 19223 partner01 sftp-b2b
+  # 取引先の SFTP に社内向けの鍵では入れない(利用者と鍵を分けている)
+  if sftp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=yes \
+    -i "$here/secrets/sftp-file" -P 19223 -b - partner01@127.0.0.1 >/dev/null 2>&1 <<<"ls"; then
+    fail "sftp-b2b: 社内向け(sftp-file)の鍵で接続できてしまう"
+  else
+    pass "sftp-b2b: 社内向け(sftp-file)の鍵を拒否する"
+  fi
+}
+
 verify_health
 for p in "${profiles[@]}"; do
   if declare -F "verify_$p" >/dev/null; then "verify_$p"; else current="$p"; fail "verify_$p が未定義"; fi

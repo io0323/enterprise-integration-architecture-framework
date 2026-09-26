@@ -195,6 +195,30 @@ services:
       <<: *healthcheck
       test: ["CMD", "nc", "-z", "127.0.0.1", "2222"]
 
+  # SFTP(b2b profile。取引先向け。ADR-0008 で B2B のプロトコルは SFTP のみ)。社内向けの sftp とは利用者・鍵・保存領域を分ける
+  sftp-b2b:
+    image: ${SFTP_IMAGE:?}
+    profiles: [b2b]
+    environment:
+      PUID: 1000
+      PGID: 1000
+      TZ: Etc/UTC
+      USER_NAME: partner01
+      PUBLIC_KEY_FILE: /keys/sftp-b2b.pub
+      PASSWORD_ACCESS: "false"
+      SUDO_ACCESS: "false"
+      LOG_STDOUT: "true"
+    ports:
+      - 127.0.0.1:19223:2222
+    volumes:
+      - ./secrets/sftp-b2b.pub:/keys/sftp-b2b.pub:ro
+      - ./sftp/10-directories.sh:/custom-cont-init.d/10-directories.sh:ro
+      - sftp-b2b-data:/config
+    mem_limit: 64m
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "nc", "-z", "127.0.0.1", "2222"]
+
   # ---------------------------------------------------------------- core: data / security / gateway
   postgres:
     image: ${POSTGRES_IMAGE:?}
@@ -401,6 +425,7 @@ volumes:
   mosquitto-data:
   seaweedfs-data:
   sftp-data:
+  sftp-b2b-data:
   postgres-data:
   prometheus-data:
   tempo-data:
