@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eia.io/contracts/files/manifest.v1.schema.json",
+  "title": "File manifest v1",
+  "description": "データファイルと同じ名前で置く `.manifest.json` の形式(Framework 9、INTEGRATION_STANDARDS §2)。受信側は件数と SHA-256 を検証してから取り込む。未知の項目は無視する(Tolerant Reader)。",
+  "type": "object",
+  "required": ["file", "recordCount", "sha256", "schemaVersion", "createdAt", "traceparent", "correlationId"],
+  "properties": {
+    "file": {
+      "description": "対象のデータファイル名(パスを含まない)。{system}_{dataset}_{yyyyMMddHHmmss}_{seq}.{ext}",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*_[a-z][a-z0-9-]*_[0-9]{14}_[0-9]{3,}\\.[a-z0-9]+(\\.[a-z0-9]+)?$"
+    },
+    "recordCount": {
+      "description": "データ行の件数(ヘッダ行を含まない)",
+      "type": "integer",
+      "minimum": 0
+    },
+    "sha256": {
+      "description": "データファイル全体の SHA-256(小文字 16 進)",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "schemaVersion": {
+      "description": "ファイル仕様の名前と版。contracts/files/{system}_{dataset}.v{n}.yaml に対応する(例 sales_daily.v1)",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*_[a-z][a-z0-9-]*\\.v[1-9][0-9]*$"
+    },
+    "createdAt": {
+      "description": "ファイルを作成した時刻(UTC。末尾は Z)",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "traceparent": {
+      "description": "W3C Trace Context",
+      "type": "string",
+      "pattern": "^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$"
+    },
+    "correlationId": {
+      "description": "業務トランザクション ID",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "sizeBytes": {
+      "description": "データファイルのバイト数",
+      "type": "integer",
+      "minimum": 0
+    },
+    "contentType": {
+      "description": "データファイルの MIME タイプ(例 text/csv, application/vnd.apache.parquet)",
+      "type": "string"
+    }
+  }
+}

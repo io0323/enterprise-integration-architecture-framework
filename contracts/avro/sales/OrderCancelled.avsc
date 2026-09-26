@@ -1,0 +1,11 @@
+{
+  "type": "record",
+  "name": "OrderCancelled",
+  "namespace": "io.eia.events.sales",
+  "doc": "注文が取り消された(sales.order.cancelled.v1)。",
+  "fields": [
+    { "name": "orderId", "type": "string" },
+    { "name": "cancelledAt", "type": { "type": "long", "logicalType": "timestamp-micros" } },
+    { "name": "reason", "type": "string", "doc": "取消理由の要約。個人情報を含めない" }
+  ]
+}
