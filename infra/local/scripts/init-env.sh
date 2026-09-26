@@ -39,7 +39,7 @@ fi
 # SFTP のクライアント鍵(公開鍵をサーバに登録し、秘密鍵は verify とアプリが使う)。**/secrets/ は .gitignore 済み。
 secrets_dir="$here/secrets"
 mkdir -p "$secrets_dir"
-for name in sftp-file; do
+for name in sftp-file sftp-b2b; do
   if [[ ! -f "$secrets_dir/$name" ]]; then
     ssh-keygen -q -t ed25519 -N '' -C "eiaf-$name" -f "$secrets_dir/$name"
     echo "infra/local/secrets/$name を生成しました"
