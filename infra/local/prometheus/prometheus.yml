@@ -1,0 +1,35 @@
+# Prometheus(Framework 14)。アプリのメトリクスは OTLP(Collector → /api/v1/otlp)で受ける。
+# ここではミドルウェア自身のメトリクスだけを scrape する。
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+otlp:
+  promote_resource_attributes:
+    - service.name
+    - service.namespace
+    - deployment.environment
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:8888"]
+  - job_name: apisix
+    metrics_path: /apisix/prometheus/metrics
+    static_configs:
+      - targets: ["apisix:9091"]
+  - job_name: keycloak
+    static_configs:
+      - targets: ["keycloak:9000"]
+  - job_name: tempo
+    static_configs:
+      - targets: ["tempo:3200"]
+  - job_name: loki
+    static_configs:
+      - targets: ["loki:3100"]
+  - job_name: apicurio
+    static_configs:
+      - targets: ["apicurio:9000"]

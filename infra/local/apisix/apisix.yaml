@@ -1,0 +1,21 @@
+# ルート定義(standalone)。業務ルート /{domain}/v{n}/ は P05 以降で追加する(ADR-0005)。
+# ファイル末尾の `#END` は APISIX が読み込み完了を判定する印なので消さないこと。
+routes:
+  - id: gateway-health
+    uri: /_gateway/health
+    methods: [GET]
+    plugins:
+      mocking:
+        response_status: 200
+        content_type: application/json
+        response_example: '{"status":"UP"}'
+global_rules:
+  - id: observability
+    plugins:
+      prometheus: {}
+      opentelemetry:
+        sampler:
+          name: always_on
+        additional_header_prefix_attributes:
+          - x-correlation-id
+#END

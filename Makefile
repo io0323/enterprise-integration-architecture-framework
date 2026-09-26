@@ -1,7 +1,15 @@
 # EIAF ローカル開発用コマンド(CLAUDE.md §7)
 GRADLE := ./gradlew
 
-.PHONY: help setup build check arch-test contract-check integration-test format up down e2e
+.PHONY: help setup build check arch-test contract-check integration-test format env up down logs ps verify stats clean e2e
+
+# ローカル基盤(infra/local。ADR-0016)
+# PROFILE: core / cdc / iot / file / b2b / chaos。core は常に含まれる(積み上げ方式)。空白区切りで複数指定できる。
+PROFILE ?= core
+INFRA := infra/local
+COMPOSE := docker compose -f $(INFRA)/docker-compose.yml --env-file $(INFRA)/images.env --env-file $(INFRA)/.env
+COMPOSE_PROFILES_ARGS := --profile core $(foreach p,$(filter-out core,$(PROFILE)),--profile $(p))
+SERVICE ?=
 
 help: ## コマンド一覧
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -30,11 +38,29 @@ integration-test: ## Testcontainers 統合テスト
 format: ## ktlint で自動整形
 	$(GRADLE) ktlintFormat
 
-up: ## ローカルミドルウェア起動(P03 で infra/local を構築)
-	@if [ -f infra/local/docker-compose.yml ]; then docker compose -f infra/local/docker-compose.yml up -d; else echo "infra/local は未構築です(P03)"; exit 1; fi
+env: ## infra/local/.env(秘密情報)をランダム生成する。既にあれば不足分だけ追記
+	@$(INFRA)/scripts/init-env.sh
 
-down: ## ローカルミドルウェア停止
-	@if [ -f infra/local/docker-compose.yml ]; then docker compose -f infra/local/docker-compose.yml down; else echo "infra/local は未構築です(P03)"; exit 1; fi
+up: env ## ローカル基盤を起動し、全コンテナが healthy になるまで待つ(例: make up PROFILE=cdc)
+	$(COMPOSE) $(COMPOSE_PROFILES_ARGS) up -d --wait --wait-timeout 420
+
+down: ## ローカル基盤を停止する(全 profile。データは残す)
+	$(COMPOSE) --profile '*' down --remove-orphans
+
+clean: ## ローカル基盤を停止し、ボリュームも削除する
+	$(COMPOSE) --profile '*' down --remove-orphans --volumes
+
+logs: ## ログを表示する(例: make logs SERVICE=kafka)
+	$(COMPOSE) $(COMPOSE_PROFILES_ARGS) logs -f --tail=200 $(SERVICE)
+
+ps: ## コンテナの状態を表示する
+	$(COMPOSE) --profile '*' ps
+
+verify: ## profile ごとの検証(healthy・機能の疎通。例: make verify PROFILE=file)
+	@$(INFRA)/scripts/verify.sh $(PROFILE)
+
+stats: ## 起動中コンテナのメモリ使用量(docker stats)
+	@$(INFRA)/scripts/stats.sh
 
 e2e: ## E2E シナリオ(P05 で tests/e2e を構築)
 	@if [ -d tests/e2e ]; then $(GRADLE) :tests:e2e:e2eTest; else echo "tests/e2e は未構築です(P05)"; exit 1; fi
