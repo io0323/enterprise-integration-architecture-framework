@@ -216,6 +216,31 @@ verify_cdc() {
   cleanup_cdc
 }
 
+# ------------------------------------------------------------------ iot
+verify_iot() {
+  current=iot
+  local topic="eiaf/verify/$$" message="verify-$$" received
+  # 購読を先に始め、QoS 1 で 1 件 publish して受け取れること(ホストのポート 19883 経由はコンテナ内の 1883 と同じリスナー)
+  received="$(
+    "${compose[@]}" exec -T mosquitto sh -c \
+      "mosquitto_sub -h 127.0.0.1 -u \"\$MQTT_USERNAME\" -P \"\$MQTT_PASSWORD\" -t '$topic' -q 1 -C 1 -W 10 & sleep 1;
+       mosquitto_pub -h 127.0.0.1 -u \"\$MQTT_USERNAME\" -P \"\$MQTT_PASSWORD\" -t '$topic' -q 1 -m '$message'; wait" 2>&1 || true
+  )"
+  if [[ "$received" == *"$message"* ]]; then pass "Mosquitto: 認証つきで QoS 1 の publish / subscribe ができる"; else fail "Mosquitto: publish した値を受け取れない ('$received')"; fi
+
+  if "${compose[@]}" exec -T mosquitto mosquitto_pub -h 127.0.0.1 -t "$topic" -m anonymous >/dev/null 2>&1; then
+    fail "Mosquitto: 匿名接続が許可されている"
+  else
+    pass "Mosquitto: 匿名接続を拒否する"
+  fi
+  if "${compose[@]}" exec -T mosquitto mosquitto_pub -h 127.0.0.1 -u "$MQTT_USERNAME" -P wrong-password -t "$topic" -m x >/dev/null 2>&1; then
+    fail "Mosquitto: 誤ったパスワードで接続できる"
+  else
+    pass "Mosquitto: 誤ったパスワードを拒否する"
+  fi
+  check "Mosquitto: ホストのポート 19883 で待ち受けている" bash -c "exec 3<>/dev/tcp/127.0.0.1/19883"
+}
+
 verify_health
 for p in "${profiles[@]}"; do
   if declare -F "verify_$p" >/dev/null; then "verify_$p"; else current="$p"; fail "verify_$p が未定義"; fi

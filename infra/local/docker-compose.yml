@@ -115,6 +115,34 @@ services:
       test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8083/connector-plugins"]
       start_period: 40s
 
+  # ---------------------------------------------------------------- iot
+  mosquitto:
+    image: ${MOSQUITTO_IMAGE:?}
+    profiles: [iot]
+    # パスワードファイルを .env の値から起動のたびに作り直す(ボリュームには置かない。mosquitto ユーザーの所有・0700 が必要)
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        rm -f /mosquitto/passwd &&
+        mosquitto_passwd -b -c /mosquitto/passwd "$$MQTT_USERNAME" "$$MQTT_PASSWORD" &&
+        chown mosquitto:mosquitto /mosquitto/passwd && chmod 0700 /mosquitto/passwd &&
+        exec /docker-entrypoint.sh mosquitto -c /mosquitto/config/mosquitto.conf
+    environment:
+      MQTT_USERNAME: ${MQTT_USERNAME:?make env を実行してください}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:?}
+    ports:
+      - 127.0.0.1:19883:1883
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto-data:/mosquitto/data
+    mem_limit: 64m
+    healthcheck:
+      <<: *healthcheck
+      test:
+        - CMD-SHELL
+        - mosquitto_sub -h 127.0.0.1 -u "$$MQTT_USERNAME" -P "$$MQTT_PASSWORD" -t '$$SYS/broker/uptime' -C 1 -W 5 >/dev/null
+
   # ---------------------------------------------------------------- core: data / security / gateway
   postgres:
     image: ${POSTGRES_IMAGE:?}
@@ -318,6 +346,7 @@ services:
 
 volumes:
   kafka-data:
+  mosquitto-data:
   postgres-data:
   prometheus-data:
   tempo-data:
