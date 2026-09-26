@@ -43,6 +43,7 @@ shared/                 KMP モジュール (commonMain 中心・フレームワ
   integration-sdk/      KMP 連携クライアント SDK (jvm / js / native)
 platform/               JVM 共通連携部品 (再利用可能な Integration Building Blocks)
   observability/ security/ audit/ reliability/ messaging-kafka/ outbox/ batch/ file-transfer/ schema-registry/
+  test-support/         テスト専用 (images.env のイメージを Testcontainers で使う InfraImages。ADR-0016 §5)
 services/<name>/        サンプル業務サービス。各サービスは下記 4 モジュール構成
   domain/               KMP commonMain(ターゲットは jvm のみ。ADR-0004)。純粋 Kotlin。外部依存禁止
   application/          KMP commonMain(同上)。UseCase + Port(in/out)。domain のみ依存

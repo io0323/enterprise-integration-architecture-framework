@@ -55,7 +55,12 @@ Docker のヘルスチェックはコンテナの中で実行されるため、�
   - `build-logic` の JVM の convention(`eia.jvm-library` / `eia.jvm-service`)で、`Test` タスク(`integrationTest` を含む)に `infra/local/images.env` を入力ファイルとして宣言し(変更時にテストを再実行させる)、パスをシステムプロパティ `eia.images.file` で渡す。
   - テスト用の小さなヘルパー(例 `InfraImages.get("KAFKA_IMAGE"): DockerImageName`)が `KEY=VALUE` の行を読み、コメントと空行を無視して `DockerImageName.parse` する。見つからないキーは例外にする(黙って `latest` にしない)。
   - Testcontainers のモジュールが特定のイメージ名を要求する場合(例 `KafkaContainer`)は `asCompatibleSubstituteFor` で互換を宣言する。
-- ヘルパーを置くモジュール(テスト専用の `platform` のモジュールか `build-logic` か)は P04a で決め、この ADR に追記する。
+- ヘルパーは **テスト専用の JVM モジュール `platform/test-support`**(`io.eia.platform.testsupport.InfraImages`)に置く(P04a で決定)。
+  - `build-logic` に置かない理由: convention plugin のクラスはテストの実行時クラスパスに載らない。テストから使うには、別途ライブラリとして公開する必要がある。
+  - 各モジュールは `testImplementation` / `integrationTestImplementation` からだけ参照する。本番コードに Testcontainers が入らないよう、Konsist(`testSupportOnlyFromTests`)で、テスト以外のソースセットからの import を禁止する。
+  - パスは、相対パスで入力に宣言した `CommandLineArgumentProvider` で渡す(`io.eia.buildlogic.InfraImagesArgument`)。`systemProperty` で絶対パスを渡すと、パスがビルドキャッシュのキーに入り、マシン間でキャッシュが効かなくなるため。
+  - Testcontainers の `DockerImageName` はタグとダイジェストの併記を解釈できない。そのため、タグを落としてダイジェストだけで固定する(`apache/kafka@sha256:...`)。
+- CI: `ci.yml` の `integration` ジョブで `./gradlew integrationTest` を実行する。対象の変更は `platform/**`、`shared/resilience/**`、`infra/local/images.env`、`build-logic/**`、`gradle/libs.versions.toml`、`ci.yml` で、テストの件数は Step Summary に出す。
 
 ### 6. ホスト側のポートと秘密情報
 - ホスト側のポートは **127.0.0.1 の 19000〜19999** に割り当てる(他の開発ツールの既定ポートとの衝突を避け、LAN には公開しない)。一覧は `infra/local/README.md`。
@@ -94,3 +99,6 @@ Docker のヘルスチェックはコンテナの中で実行されるため、�
 - image マウントを使うため、古い Docker Engine では otel-collector と loki が healthy にならない。README に動作を確認した版を書く。
 - PostgreSQL の初期化スクリプト(`postgres/init/`)はデータディレクトリが空のときだけ実行される。スクリプトを変えたら `make clean`(ボリュームの削除)が必要になる。
 - secure profile を後回しにしたため、Framework 12.3 のトピック単位の ACL は Issue #26 まで検証できない。
+
+## 改訂履歴
+- 2026-09-26: §5 のヘルパーの置き場所を `platform/test-support` に決め、CI の `integration` ジョブを追加した(P04a ①)。
