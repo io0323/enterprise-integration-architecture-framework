@@ -61,6 +61,7 @@ Docker のヘルスチェックはコンテナの中で実行されるため、�
 - ホスト側のポートは **127.0.0.1 の 19000〜19999** に割り当てる(他の開発ツールの既定ポートとの衝突を避け、LAN には公開しない)。一覧は `infra/local/README.md`。
 - 秘密情報(DB・Keycloak・Grafana・MQTT・S3 の資格情報、SFTP の鍵)は `make env`(`scripts/init-env.sh`)がランダムに生成し、`infra/local/.env` と `infra/local/secrets/` に置く(どちらも .gitignore 済み)。`.env.example` には変数名だけを書く。compose は `${VAR:?}` で必須にし、未生成なら起動しない。
 - PostgreSQL はサービスごとに DB とユーザーを分け(Shared Database 禁止)、他のサービスの DB には接続できない。
+- **S3(SeaweedFS)の資格情報は現在 1 つ(Admin 権限の `eiaf`)で、P04a で用途別に分ける。** P03 の時点ではバケットがまだ決まっていないため。P04a で audit 専用の資格情報を作り、audit 用のバケットだけを操作できるポリシーを付ける。file-exchange(P09)と b2b-gateway(P12)の資格情報も、それぞれのフェーズで同じ方式で分ける(Framework 12.3 の最小権限、12.4 のアンチパターン「全消費者共有の 1 クレデンシャル」)。記録: #6。
 
 ### 7. 後続フェーズの前提になる設定
 | 対象 | 設定 | 理由 |
