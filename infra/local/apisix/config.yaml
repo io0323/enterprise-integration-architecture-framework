@@ -1,0 +1,39 @@
+# APISIX standalone(etcd なし・YAML 駆動)。CLAUDE.md §2 / Framework 5.2。
+deployment:
+  role: data_plane
+  role_data_plane:
+    config_provider: yaml
+
+apisix:
+  node_listen: 9080
+  enable_admin: false
+  # /status と /status/ready(ヘルスチェック用。コンテナ内のみ)
+  status:
+    ip: 127.0.0.1
+    port: 7085
+
+nginx_config:
+  worker_processes: 2
+  error_log_level: warn
+
+plugins:
+  - mocking
+  - prometheus
+  - opentelemetry
+  - request-id
+  - limit-count
+  - jwt-auth
+  - openid-connect
+  - proxy-rewrite
+
+plugin_attr:
+  prometheus:
+    export_addr:
+      ip: 0.0.0.0
+      port: 9091
+  opentelemetry:
+    resource:
+      service.name: apisix
+    collector:
+      address: otel-collector:4318
+      request_timeout: 3

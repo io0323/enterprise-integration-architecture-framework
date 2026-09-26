@@ -1,0 +1,59 @@
+{
+  "realm": "eiaf",
+  "enabled": true,
+  "displayName": "EIAF Local",
+  "sslRequired": "none",
+  "accessTokenLifespan": 300,
+  "registrationAllowed": false,
+  "clientScopes": [
+    {
+      "name": "sales.order:read",
+      "description": "注文の参照(Framework 12.3。contracts/openapi/order-api.v1.yaml)",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "true", "display.on.consent.screen": "false" }
+    },
+    {
+      "name": "sales.order:write",
+      "description": "注文の登録(Framework 12.3。contracts/openapi/order-api.v1.yaml)",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "true", "display.on.consent.screen": "false" }
+    },
+    {
+      "name": "order-api-audience",
+      "description": "aud に order-api を入れる(CLAUDE.md §5: JWT は aud を検証する)",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "false", "display.on.consent.screen": "false" },
+      "protocolMappers": [
+        {
+          "name": "audience-order-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "order-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "eiaf-e2e",
+      "name": "E2E / 開発用の client-credentials クライアント",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${EIAF_E2E_CLIENT_SECRET}",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "fullScopeAllowed": false,
+      "defaultClientScopes": ["order-api-audience"],
+      "optionalClientScopes": ["sales.order:read", "sales.order:write"]
+    }
+  ]
+}
