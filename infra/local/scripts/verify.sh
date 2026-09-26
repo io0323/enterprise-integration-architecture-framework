@@ -34,6 +34,14 @@ retry() { # retry <回数> <間隔秒> <コマンド...>
   return 1
 }
 json() { python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
+# compose の配列はパスに空白を含みうるので、bash -c の文字列に展開せず、次の関数から配列のまま使う
+kafka_cli() { "${compose[@]}" exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka "$@"; }
+psql_super() { "${compose[@]}" exec -T postgres psql -U postgres -tAc "$1"; }
+equals() { [[ "$("${@:2}")" == "$1" ]]; } # equals <期待値> <コマンド...>
+consume() { # consume <トピック> <件数> <タイムアウト ms>(読めた内容を出力する。失敗しても空で返す)
+  kafka_cli /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic "$1" \
+    --from-beginning --max-messages "$2" --timeout-ms "$3" 2>/dev/null || true
+}
 
 # ------------------------------------------------------------------ 共通: healthy
 verify_health() {
@@ -101,8 +109,7 @@ print(d.get("iss"), ",".join(aud), " ".join(sorted(d.get("scope","").split())))'
   else
     pass "PostgreSQL: order_service は inventory_service に接続できない"
   fi
-  check "PostgreSQL: wal_level=logical" \
-    bash -c "[[ \"\$(${compose[*]} exec -T postgres psql -U postgres -tAc 'show wal_level')\" == logical ]]"
+  check "PostgreSQL: wal_level=logical" equals logical psql_super 'show wal_level'
 
   # Kafka: 自動作成が無効で、明示的に作ったトピックで produce / consume できる
   local topic="eiaf.verify.probed.v1" kbin=/opt/kafka/bin
@@ -110,9 +117,8 @@ print(d.get("iss"), ",".join(aud), " ".join(sorted(d.get("scope","").split())))'
   check "Kafka: トピックを作成できる" \
     "${compose[@]}" exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka $kbin/kafka-topics.sh --bootstrap-server kafka:9092 --create --topic "$topic" --partitions 1 --replication-factor 1
   check "Kafka: ホストのリスナー(localhost:19092)から produce できる" \
-    bash -c "echo verify-$$ | ${compose[*]} exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka $kbin/kafka-console-producer.sh --bootstrap-server localhost:19092 --topic $topic"
-  check "Kafka: consume できる" \
-    bash -c "${compose[*]} exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka $kbin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic $topic --from-beginning --max-messages 1 --timeout-ms 15000 | grep -q verify-$$"
+    kafka_cli $kbin/kafka-console-producer.sh --bootstrap-server localhost:19092 --topic "$topic" <<<"verify-$$"
+  if grep -q -- "verify-$$" <<<"$(consume "$topic" 1 15000)"; then pass "Kafka: consume できる"; else fail "Kafka: consume できる"; fi
   "${compose[@]}" exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka $kbin/kafka-topics.sh --bootstrap-server kafka:9092 --delete --topic "$topic" >/dev/null 2>&1 || true
   local produce_output
   produce_output="$("${compose[@]}" exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka $kbin/kafka-console-producer.sh --bootstrap-server kafka:9092 \
@@ -184,8 +190,8 @@ verify_cdc() {
     "curl -fsS $connect/connector-plugins | python3 -c 'import json,sys; sys.exit(0 if any(p[\"class\"]==\"io.debezium.connector.postgresql.PostgresConnector\" for p in json.load(sys.stdin)) else 1)'"
   check "Kafka Connect: Apicurio の AvroConverter が使える" bash -c \
     "curl -fsS '$connect/connector-plugins?connectorsOnly=false' | python3 -c 'import json,sys; sys.exit(0 if any(p[\"class\"]==\"io.apicurio.registry.utils.converter.AvroConverter\" for p in json.load(sys.stdin)) else 1)'"
-  check "PostgreSQL: debezium ユーザーが REPLICATION を持つ" bash -c \
-    "[[ \"\$(${compose[*]} exec -T postgres psql -U postgres -tAc \"select rolreplication from pg_roles where rolname='debezium'\")\" == t ]]"
+  check "PostgreSQL: debezium ユーザーが REPLICATION を持つ" \
+    equals t psql_super "select rolreplication from pg_roles where rolname = 'debezium'"
 
   # 一時テーブルの変更を Debezium で Kafka に流す(スナップショット 1 件 + INSERT 1 件)
   cleanup_cdc
@@ -222,13 +228,16 @@ verify_cdc() {
     fail "CDC: _connect.configs トピックを読めないか、平文のパスワードが含まれる"
   fi
   psql_as legacy_sim "$LEGACY_SIM_DB_PASSWORD" legacy_sim "INSERT INTO verify_probe VALUES (2, 'streamed')" >/dev/null 2>&1 || true
-  local events
-  events="$(retry 15 2 bash -c "${compose[*]} exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka $kbin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic $topic \
-    --from-beginning --max-messages 2 --timeout-ms 10000 2>/dev/null | grep -c '\"op\"'" || true)"
-  if [[ "$(printf '%s' "$events" | tail -1)" == 2 ]]; then
+  local events=0
+  for ((i = 0; i < 15; i++)); do
+    events="$(grep -c '"op"' <<<"$(consume "$topic" 2 10000)" || true)"
+    [[ "$events" == 2 ]] && break
+    sleep 2
+  done
+  if [[ "$events" == 2 ]]; then
     pass "CDC: スナップショット(op=r)と INSERT(op=c)の 2 件が {prefix}.public.verify_probe に届く"
   else
-    fail "CDC: $topic に届いた変更イベントが 2 件でない ('$(printf '%s' "$events" | tail -1)')"
+    fail "CDC: $topic に届いた変更イベントが 2 件でない ('$events')"
   fi
   cleanup_cdc
 }
