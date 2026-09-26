@@ -1,0 +1,11 @@
+id: INT-SALES-900
+name: Unsecured API(違反例)
+style: rest
+pattern: request-reply
+provider: { owner: team-order, system: order-service }
+consumers: []
+contract: contracts/openapi/unsecured-api.v1.yaml
+tier: 3
+dataClassification: internal
+slo: { availability: "99.0", latencyP99: "1s" }
+lifecycle: proposed

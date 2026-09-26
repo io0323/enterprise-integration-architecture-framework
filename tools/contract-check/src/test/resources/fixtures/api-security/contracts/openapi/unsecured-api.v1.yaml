@@ -1,0 +1,65 @@
+openapi: 3.1.0
+info:
+  title: Unsecured API(CC-API-003 の違反例)
+  version: 1.0.0
+servers:
+  - url: http://localhost:9080/sales
+paths:
+  /v1/public-items:
+    get:
+      operationId: listPublicItems
+      summary: 違反 1 - トップレベルにも operation にも security がない
+      responses:
+        "200":
+          description: OK
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /v1/optional-items:
+    get:
+      operationId: listOptionalItems
+      summary: 違反 2 - 空の要件 {} を含み、匿名でアクセスできる
+      security:
+        - {}
+        - oauth2: [items.read]
+      responses:
+        "200":
+          description: OK
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /v1/disabled-items:
+    get:
+      operationId: listDisabledItems
+      summary: 違反 3 - security を空配列で無効化している
+      security: []
+      responses:
+        "200":
+          description: OK
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /v1/secured-items:
+    get:
+      operationId: listSecuredItems
+      summary: 準拠 - operation に security がある
+      security:
+        - oauth2: [items.read]
+      responses:
+        "200":
+          description: OK
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+components:
+  securitySchemes:
+    oauth2:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: http://localhost:8180/realms/eiaf/protocol/openid-connect/token
+          scopes:
+            items.read: 参照
+  responses:
+    TooManyRequests:
+      description: Rate Limit 超過
+      headers:
+        Retry-After:
+          schema:
+            type: integer

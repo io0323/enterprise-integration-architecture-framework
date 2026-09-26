@@ -1,0 +1,13 @@
+id: INT-SALES-001
+name: Order API (重複 ID の違反例)
+description: 注文の登録と参照(Gateway 公開パス /sales/v1/orders)
+style: rest
+pattern: request-reply
+provider: { owner: team-order, system: order-service }
+consumers:
+  - { owner: team-storefront, system: bff-graphql }
+contract: contracts/openapi/order-api.v1.yaml
+tier: 1
+dataClassification: confidential
+slo: { availability: "99.95", latencyP99: "500ms" }
+lifecycle: design

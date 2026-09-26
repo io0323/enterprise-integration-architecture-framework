@@ -27,4 +27,5 @@ include(
     ":services:order:adapters",
     ":services:order:app",
     ":tools:architecture-test",
+    ":tools:contract-check",
 )

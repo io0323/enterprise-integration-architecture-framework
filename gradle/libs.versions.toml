@@ -20,6 +20,16 @@ koin = "4.2.2"
 exposed = "1.5.0"
 mockk = "1.14.11"
 testcontainers = "2.0.5"
+# P02 contract-check(確認日: 2026-09-26)
+avro = "1.12.2"
+swagger-parser = "2.1.48"
+# json-schema-validator 3.x は Jackson 3(tools.jackson)を使う。swagger-parser の Jackson 2(com.fasterxml.jackson)とはパッケージが別なので共存できる。
+json-schema-validator = "3.0.7"
+jackson3 = "3.2.3"
+# swagger-parser が使う slf4j-api と同じ版(2.1 系は alpha のみ)。ログ出力は不要なので nop を使う。
+slf4j = "2.0.18"
+# 外部 CLI。tools/contract-check の build.gradle.kts がチェックサムを検証して取得する(ADR-0013)。
+oasdiff = "1.32.1"
 
 [libraries]
 kotest-framework-engine = { module = "io.kotest:kotest-framework-engine", version.ref = "kotest" }
@@ -36,6 +46,11 @@ koin-core = { module = "io.insert-koin:koin-core", version.ref = "koin" }
 exposed-core = { module = "org.jetbrains.exposed:exposed-core", version.ref = "exposed" }
 mockk = { module = "io.mockk:mockk", version.ref = "mockk" }
 testcontainers = { module = "org.testcontainers:testcontainers", version.ref = "testcontainers" }
+avro = { module = "org.apache.avro:avro", version.ref = "avro" }
+swagger-parser = { module = "io.swagger.parser.v3:swagger-parser", version.ref = "swagger-parser" }
+json-schema-validator = { module = "com.networknt:json-schema-validator", version.ref = "json-schema-validator" }
+jackson3-dataformat-yaml = { module = "tools.jackson.dataformat:jackson-dataformat-yaml", version.ref = "jackson3" }
+slf4j-nop = { module = "org.slf4j:slf4j-nop", version.ref = "slf4j" }
 
 # build-logic が convention plugin から適用するプラグインの実体
 gradle-kotlin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
