@@ -7,7 +7,7 @@ EIAF の参照実装が使うミドルウェア一式を Docker Compose で起�
 
 | 項目 | 要件 |
 |---|---|
-| Docker | Docker Engine と Compose は image マウント(`volumes: [{type: image}]`)に対応した版が必要(動作確認: Docker Engine 29.8.0 / Compose v5.5.1) |
+| Docker | Docker Engine 28.0.4 以上、Docker Compose v2.38.2 以上(確認した最も古い組み合わせ。CI の ubuntu-latest)。otel-collector と loki のヘルスチェックに image マウント(`volumes: [{type: image}]`)を使うため、これより古い版では healthy にならないことがある。ローカルでは Engine 29.8.0 / Compose v5.5.1 でも確認済み |
 | メモリ | Docker に 8GB 以上を割り当てる。実測値は `docs/reports/p03-local-infrastructure.md`(core だけで約 1.8GB) |
 | CPU | linux/amd64・linux/arm64 のどちらでも動く(全イメージがマルチアーキテクチャ) |
 | ホストのツール | `make`、`bash`、`python3`、`curl`、`ssh-keygen` / `sftp`(file・b2b の検査) |
