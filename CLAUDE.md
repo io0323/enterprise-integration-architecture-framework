@@ -71,7 +71,7 @@ docs/                   設計書・ロードマップ・標準・ADR・プロ�
 |---|---|---|
 | Contract First | 実装前に contracts/ に契約を追加し CI 互換性検査を通す | 5, 6, 15, 19 |
 | API | Gateway 経由(公開パス `/{domain}/v{n}/`、サービス内部 `/v{n}/`: ADR-0005)/ POST は `Idempotency-Key` 必須 / 429+Retry-After | 5 |
-| Event | Topic `{domain}.{entity}.{event}.v{n}` / Avro + CloudEvents ヘッダ / BACKWARD 互換 / DLQ `{topic}.dlq` | 6 |
+| Event | Topic `{domain}.{entity}.{event}.v{n}` / Avro + CloudEvents ヘッダ / FULL 互換(ADR-0014)/ DLQ `{topic}.dlq` | 6 |
 | Command | Topic `{domain}.{entity}.cmd-{command}.v{n}` / 購読は受信サービスの 1 Consumer Group のみ(ADR-0006) | 4.2, 6.2 |
 | 配信保証 | At-Least-Once + 消費側冪等(processed_message テーブル) | 13 |
 | DB→Event | 二重書込み禁止。**Outbox + Debezium** で発行(形式とクリーンアップは ADR-0007) | 8 |

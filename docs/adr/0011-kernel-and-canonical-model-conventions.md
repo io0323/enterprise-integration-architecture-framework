@@ -86,3 +86,6 @@ P01 で `shared/kernel` と `shared/canonical-model`(KMP: jvm / js / linuxX64 / 
 - 率を掛ける演算のたびに丸め方を書く必要があり、記述量は増える。代わりに丸めの仕様がコード上で明示される。
 - Canonical Model(Kotlin)と Avro スキーマ(contracts)は別々の資産として管理する。一致の検査は P02 で行う。
 - 継承関係を型の単純名で辿るため、同名の別の型があると Konsist の検査が誤検知しうる。
+
+## 改訂履歴
+- 2026-09-26: Money の Avro での表現(§1 で P02 に持ち越した点)は ADR-0012 で決定

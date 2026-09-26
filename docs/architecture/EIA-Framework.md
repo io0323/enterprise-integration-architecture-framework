@@ -317,7 +317,7 @@ flowchart LR
 
 ## 6.3 Schema
 - 契約はSchema Registryで管理(15章)。フォーマット既定: Avro(またはProtobuf)+ CloudEvents準拠エンベロープ(id, source, type, time, correlationid)
-- 互換性ポリシー: BACKWARD互換必須(消費者を先に更新せず発行者を進化可能)
+- 互換性ポリシー: FULL互換必須(= BACKWARD かつ FORWARD。消費者を先に更新せず発行者を進化可能で、かつ新しい消費者で過去のイベントをReplay可能)(ADR-0014)
 - 破壊的変更は新バージョントピック(`.v2`)を並行稼働し、消費者移行後に旧を廃止
 
 ## 6.4 Consumer Group
@@ -603,7 +603,7 @@ flowchart LR
 - Validation: 構造(スキーマ)→値域(コード・範囲)→業務整合の3段。エラーは受信点で早期検出し、エラーデータの隔離と通知を標準化
 
 ## 15.3 Schema Registry / Metadata
-- 全イベント・主要APIのスキーマをSchema Registryに登録し、互換性検査(BACKWARD既定)をCI/CDで強制
+- 全イベント・主要APIのスキーマをSchema Registryに登録し、互換性検査(イベントはFULL。ADR-0014)をCI/CDで強制
 - コード値・単位・通貨・タイムゾーン(原則UTC保持+表示時変換)の変換辞書を共通管理
 - Metadata: 連携ID、データ来歴(Lineage: どこから来てどこへ行くか)、機密区分、Ownerをカタログ(16章)に登録し、影響分析を可能にする
 

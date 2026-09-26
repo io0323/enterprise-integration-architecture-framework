@@ -48,7 +48,7 @@
 - `contracts/openapi/order-api.v1.yaml`(OpenAPI 3.1。`servers` は `/{domain}`、`paths` は `/v{n}/`: ADR-0005)、`contracts/asyncapi/order-events.v1.yaml`(AsyncAPI 3.0)、`contracts/avro/*.avsc`
 - `contracts/files/manifest.v1.schema.json`(件数・SHA-256・スキーマ版・traceparent・correlationId)
 - `contracts/catalog/*.yaml`: 連携カタログ(schema は INTEGRATION_STANDARDS.md 参照)
-- `tools/contract-check`: 命名規約 lint(Topic / `cmd-` コマンドトピック / API パス / ファイル)、Avro BACKWARD 互換検査(main との差分。オフラインで実行)、OpenAPI 破壊的変更検知、カタログ必須項目検証、コマンドトピックの購読者が 1 つであることの検査(ADR-0006)
+- `tools/contract-check`: 命名規約 lint(Topic / `cmd-` コマンドトピック / API パス / ファイル)、Avro FULL 互換検査(main との差分。オフラインで実行。ADR-0014)、OpenAPI 破壊的変更検知、カタログ必須項目検証、コマンドトピックの購読者が 1 つであることの検査(ADR-0006)
 - Canonical Model(Kotlin)と Avro スキーマの項目一致を検査する JVM テスト(ADR-0004)
 - GitHub Actions `contract-check.yml`(contracts/** 変更時)
 - **DoD**: 意図的な破壊的変更・命名違反・Owner 欠落・Canonical と Avro の不一致のサンプルで CI が失敗することをテストで示す。
@@ -60,6 +60,7 @@
 - Kafka・Debezium・Apicurio などのイメージは最新の安定版を確認して固定する
 - `make up/down/logs/ps`、ヘルスチェック、Grafana データソース provisioning、ポート一覧(`infra/local/README.md`)
 - **DoD**: profile ごとに `make up PROFILE=<name>` で全コンテナが healthy になる。README に起動手順とポート一覧がある。
+- **DoD**: Apicurio の互換性ルールを FULL_TRANSITIVE に設定する(ADR-0014)。
 
 ## P04a Platform: Observability, Security & Audit
 - `platform/observability`: OTel 初期化、Ktor プラグイン(traceparent / X-Correlation-Id 伝搬。生成と解析は `shared/resilience` を使用)、構造化 JSON ログ(MDC)、マスキングユーティリティ
