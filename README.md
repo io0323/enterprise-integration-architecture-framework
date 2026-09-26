@@ -23,8 +23,11 @@ Kotlin / Kotlin Multiplatform / Clean Architecture、Cloud Agnostic(Docker Compo
 - ビルドに使う JDK 21 の toolchain は、foojay(`org.gradle.toolchains.foojay-resolver-convention`)が自動で取得する(`~/.gradle/jdks`)。ただし Gradle 自体を起動する JVM は `JAVA_HOME` の JDK なので、上記のとおり arm64 の JDK を指定する。
 
 ## Quick Start(P03 以降)
+ローカル基盤(Docker Compose)の profile・ポート一覧・認証情報は [infra/local/README.md](infra/local/README.md) を参照。
+
 ```bash
-make up
+make up                  # ローカル基盤(core)を起動。make up PROFILE=cdc などで profile を追加
+make verify              # 全コンテナが healthy で、各機能が疎通することを検査
 ./gradlew build
 ./gradlew :services:order:app:run
 ```

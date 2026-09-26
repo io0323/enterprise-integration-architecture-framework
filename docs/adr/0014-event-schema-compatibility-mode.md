@@ -19,7 +19,7 @@
 | 段階 | 比較の相手 | モード | 強制する仕組み |
 |---|---|---|---|
 | CI(P02〜) | origin/main の同じファイル(1 つ前の版) | FULL | contract-check の `CC-COMPAT-001`(ADR-0013) |
-| Schema Registry への登録(P03〜) | 登録済みの全バージョン | FULL_TRANSITIVE | Apicurio の互換性ルール(トピック単位) |
+| Schema Registry への登録(P03〜) | 登録済みの全バージョン | FULL_TRANSITIVE | Apicurio の互換性ルール(グローバルの既定ルール。ADR-0016 §7) |
 
 - CI は 1 つ前の版とだけ比べる。main は常に FULL を満たしてきたので、実質的には直近の版との互換性が保たれる。ただし「default 付き項目の削除 → 同名で型の違う項目の追加」のように、2 段階を経ると過去の版と非互換になる変更は CI では検出できない。これは P03 以降、Schema Registry の FULL_TRANSITIVE で登録時に拒否する。
 
@@ -52,3 +52,6 @@
 - 変更できる範囲が狭くなる。項目の追加・削除は default 付きの項目に限られ、それ以外は新しいバージョンのトピックになる。
 - enum に値を追加する可能性がある項目は、最初から enum の `default`(未知の値を表す値)を持たせるか、string で表す必要がある。現在の `OrderStatus` は default を持たないため、値の追加は新しいバージョンのトピックで行う。
 - FULL_TRANSITIVE の強制は P03(Apicurio の導入)まで CI の FULL だけで代替する。
+
+## 改訂履歴
+- 2026-09-26: P03 で Apicurio の既定のグローバルルールを FULL_TRANSITIVE に設定した。トピック(アーティファクト)ごとではなくグローバルの既定で強制する(ADR-0016 §7)。FULL 非互換の版の登録が拒否されることは `make verify` で検査している。

@@ -26,7 +26,7 @@
 - セキュリティ: Keycloak(OAuth2/OIDC)、JWT 検証、mTLS(内部)
 - Gateway: Apache APISIX(standalone YAML)
 - Observability: OpenTelemetry(SDK + Collector)、Prometheus、Grafana、Tempo、Loki
-- File: MinIO(S3互換)、SFTP
+- File: SeaweedFS(S3互換。ADR-0015)、SFTP
 - テスト: kotest、MockK、Testcontainers、Konsist(アーキテクチャテスト)、Toxiproxy(障害注入)
 - 品質: ktlint、detekt、Kover(カバレッジ)
 - ライブラリのバージョンは **実装時点の最新安定版を確認して libs.versions.toml に固定**する。推測でバージョンを書かない。
