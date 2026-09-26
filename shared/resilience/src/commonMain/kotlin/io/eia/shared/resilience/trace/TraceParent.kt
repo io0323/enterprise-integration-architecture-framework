@@ -39,7 +39,7 @@ public data class TraceParent(
         private val VERSION_FORMAT = Regex("^[0-9a-f]{2}$")
 
         /**
-         * ヘッダ値を解析する。前後の空白(OWS)は取り除く。
+         * ヘッダ値を解析する。前後の OWS(RFC 9110 §5.6.3。SP と HTAB のみ)は取り除く。それ以外の空白や改行は不正な値として扱う。
          * - 版 `00` は長さが 55 文字ちょうどでなければならない。
          * - 未知の上位版は、先頭 55 文字を版 00 と同じ形式で読み、続きが `-` で始まる場合だけ受け付ける(W3C の前方互換)。
          *   trace-flags は sampled ビットだけを残す(Level 2 §3.2.4)。
@@ -49,7 +49,7 @@ public data class TraceParent(
          * エラーメッセージには受信した値を含めない(ログに載るため)。
          */
         public fun parse(header: String): Result<TraceParent, ValidationError> {
-            val value = header.trim()
+            val value = header.trim { it == ' ' || it == '\t' }
             val version = value.take(2)
             return when {
                 !VERSION_FORMAT.matches(version) || version == INVALID_VERSION -> {
