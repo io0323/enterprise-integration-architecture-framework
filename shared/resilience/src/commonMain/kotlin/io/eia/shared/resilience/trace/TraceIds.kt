@@ -42,15 +42,14 @@ public value class SpanId private constructor(
     }
 }
 
-/** W3C Trace Context の trace-flags。bit 0 が sampled、bit 1 が random(Level 2)。 */
+/**
+ * W3C Trace Context の trace-flags。bit 0 が sampled、bit 1 が random(Level 2)。
+ * kernel の値オブジェクトと同じく、外部の値は [of] で検証してから作る(ADR-0011)。
+ */
 @JvmInline
-public value class TraceFlags(
+public value class TraceFlags internal constructor(
     public val value: Int,
 ) {
-    init {
-        require(value in 0..MAX) { "trace-flags は 0〜255 です" }
-    }
-
     public val sampled: Boolean get() = value and SAMPLED_BIT != 0
 
     public fun withSampled(sampled: Boolean): TraceFlags = TraceFlags(if (sampled) value or SAMPLED_BIT else value and SAMPLED_BIT.inv())
@@ -62,6 +61,10 @@ public value class TraceFlags(
         private const val SAMPLED_BIT = 0x01
         public val SAMPLED: TraceFlags = TraceFlags(SAMPLED_BIT)
         public val NONE: TraceFlags = TraceFlags(0)
+
+        /** 1 バイト(0〜255)の値から作る。範囲外は検証エラー。 */
+        public fun of(value: Int): Result<TraceFlags, ValidationError> =
+            if (value in 0..MAX) ok(TraceFlags(value)) else err(ValidationError.of("traceFlags", "0〜255 です"))
     }
 }
 
