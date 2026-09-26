@@ -54,8 +54,8 @@
 - **DoD**: 意図的な破壊的変更・命名違反・Owner 欠落・Canonical と Avro の不一致のサンプルで CI が失敗することをテストで示す。
 
 ## P03 Local Infrastructure
-- `infra/local/docker-compose.yml`: Kafka(KRaft)、Kafka Connect + Debezium、Apicurio、PostgreSQL(サービス別 DB)、Keycloak(realm import)、APISIX、Mosquitto、MinIO、SFTP、OTel Collector、Prometheus、Grafana、Tempo、Loki、Toxiproxy
-- profiles: `core`(kafka, registry, postgres, keycloak, apisix, otel 一式)/ `cdc` / `iot` / `file` / `b2b` / `chaos` / `secure`(Kafka の SSL・ACL)。メモリ 16GB の開発マシンで `core` が動くようリソース制限を設定する
+- `infra/local/docker-compose.yml`: Kafka(KRaft)、Kafka Connect + Debezium、Apicurio、PostgreSQL(サービス別 DB)、Keycloak(realm import)、APISIX、Mosquitto、SeaweedFS(S3 互換。ADR-0015 で MinIO から変更)、SFTP、OTel Collector、Prometheus、Grafana、Tempo、Loki、Toxiproxy
+- profiles: `core`(kafka, registry, postgres, keycloak, apisix, otel 一式)/ `cdc` / `iot` / `file` / `b2b` / `chaos`。`secure`(Kafka の SSL・ACL)は P03 から外し Issue #26 で扱う(ADR-0016 §8)。メモリ 16GB の開発マシンで `core` が動くようリソース制限を設定する
 - Toxiproxy 経由で Kafka に接続するための専用リスナー(advertised listeners)を用意する
 - Kafka・Debezium・Apicurio などのイメージは最新の安定版を確認して固定する
 - `make up/down/logs/ps`、ヘルスチェック、Grafana データソース provisioning、ポート一覧(`infra/local/README.md`)
@@ -65,7 +65,7 @@
 ## P04a Platform: Observability, Security & Audit
 - `platform/observability`: OTel 初期化、Ktor プラグイン(traceparent / X-Correlation-Id 伝搬。生成と解析は `shared/resilience` を使用)、構造化 JSON ログ(MDC)、マスキングユーティリティ
 - `platform/security`: Ktor JWT 検証(JWKS, iss/aud/exp)、スコープ認可、Client Credentials トークン取得クライアント、`SecretProvider` Port と環境変数による実装(ADR-0008)
-- `platform/audit`: 追記専用テーブル + ハッシュチェーン、MinIO(Object Lock)への日次アンカー保存(ADR-0008)
+- `platform/audit`: 追記専用テーブル + ハッシュチェーン、S3 互換ストレージ(SeaweedFS。Object Lock)への日次アンカー保存(ADR-0008・ADR-0015)
 - **DoD**: 各部品に単体テストと Testcontainers 統合テストがある。改竄したレコードをハッシュチェーンの検証が検出する。不正な iss / aud / exp の JWT を拒否する。
 
 ## P04b Platform: Resilience
@@ -111,7 +111,7 @@
 
 ## P09 File Integration
 - 日次売上ファイル出力: Parquet / CSV、gzip、SHA-256 manifest(`contracts/files` のスキーマに準拠)、一時名 → リネーム
-- MinIO / SFTP 送信、受信側の検証(checksum・件数・スキーマ版)、PGP 暗号化オプション
+- S3 互換ストレージ(SeaweedFS)/ SFTP 送信、受信側の検証(checksum・件数・スキーマ版)、PGP 暗号化オプション
 - Parquet の書き出し手段(ライブラリ)を比較して ADR に残す
 - **DoD**: 改竄・欠損ファイルを受信側が拒否するテストがある。manifest の traceparent でトレースがつながる。
 
@@ -129,7 +129,7 @@
 
 ## P12 B2B / EDI Gateway
 - `b2b-gateway`: Trading Partner 台帳、SFTP 受信(AS2 は範囲外: ADR-0008)、EDIFACT ORDERS(サブセット。仕様は `contracts/files/edi/`)パーサ、3 段 Validation、Canonical 変換、CONTRL 相当の受領応答
-- 原本保管(MinIO, Object Lock)と `platform/audit` への記録
+- 原本保管(S3 互換ストレージ, Object Lock)と `platform/audit` への記録
 - **DoD**: 構文・スキーマ・業務のそれぞれのエラーで、正しいエラー応答と運用通知が出る。受信した全ドキュメントが Audit に記録され、ハッシュチェーンの検証が通る。
 
 ## P13 gRPC & GraphQL BFF

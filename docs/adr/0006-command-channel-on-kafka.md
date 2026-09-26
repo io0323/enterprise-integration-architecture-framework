@@ -40,3 +40,12 @@ ADR-0003 のミドルウェア構成には Queue 専用の基盤がない。
 
 ## 改訂履歴
 - 2026-09-26: コマンドトピックのカタログでは、受信側を provider、送信側を senders とする(ADR-0013)
+- 2026-09-26: P03 で Kafka を **4.3.1** に固定したため(ADR-0016)、Share Group の採否を再評価した。**結論: 不採用のまま**(本 ADR の決定を維持する)。
+  - 4.3.1 で DLQ は使えない: 4.3.1 の `TopicConfig.java` には Share Group の DLQ(KIP-1191)の設定がなく、trunk にだけ `errors.deadletterqueue.group.enable`(「share group の dead-letter queue として使えるようにする」)がある。つまり KIP-1191 は 4.4 以降になる。4.4.0 は 2026-09-26 時点で RC(Docker Hub に `4.4.0-rc2`)で、安定版は出ていない。
+  - 移行条件の判定:
+    1. KIP-1191 が採用中の安定版で GA: **満たさない**(上記)。
+    2. 順序が不要で、パーティション数を超える並列処理が必要なワークキュー: **満たさない**(現在の連携にない。非同期推論ジョブなどは未計画)。
+    3. share consumer の lag・delivery count を OTel / Prometheus で監視できる: **未評価**(1・2 を満たさないため評価していない)。
+    4. `platform/messaging-kafka` の API を変えずに差し替えられる: **未評価**(同上。API は P06・P07 で作る)。
+  - 参考: Share Group は 4.2 から production-ready で、4.3.1 には Share Group の経路のデッドロックの修正(KAFKA-20505)が入っている。単一ブローカーで Share Group を使う場合は `share.coordinator.state.topic.replication.factor` と `min.isr` を 1 にする必要があり、ローカル基盤では設定済み(`infra/local/docker-compose.yml`)。
+  - 次の再評価: Kafka を 4.4 系の安定版に上げるとき。

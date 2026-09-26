@@ -79,7 +79,7 @@ services/order/
 | shipping | 出荷 | Kafka |
 | legacy-sim | レガシー基幹 DB 模擬 | CDC |
 | batch-etl | 分析基盤への ELT/ETL | Batch |
-| file-exchange | ファイル授受 | MFT (MinIO/SFTP) |
+| file-exchange | ファイル授受 | MFT (S3 互換ストレージ/SFTP) |
 | saas-mock / webhook-receiver / integration-flow | SaaS 連携 | REST, Webhook |
 | iot-bridge | MQTT→Kafka | MQTT, Kafka |
 | b2b-gateway | EDI | SFTP, EDIFACT |
@@ -94,7 +94,7 @@ services/order/
 | outbox | Outbox 挿入・削除・保持期間ジョブ | P06 |
 | messaging-kafka | Producer(P06)/ Consumer・DLQ・Replay(P07) | P06, P07 |
 | batch | 軽量 DAG ランナー・Checkpoint・SLA メトリクス | P08 |
-| file-transfer | manifest・checksum・MinIO / SFTP | P09 |
+| file-transfer | manifest・checksum・S3 互換ストレージ / SFTP | P09 |
 | schema-registry | Apicurio クライアント・スキーマ ID キャッシュ | P06 |
 
 ## 5. テスト戦略
