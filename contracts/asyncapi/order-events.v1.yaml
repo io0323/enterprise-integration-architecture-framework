@@ -12,9 +12,9 @@ info:
 defaultContentType: avro/binary
 servers:
   local:
-    host: localhost:9092
+    host: localhost:19092
     protocol: kafka
-    description: ローカル(P03 の docker compose)
+    description: ローカル(P03 の docker compose。ホスト用の EXTERNAL リスナー。コンテナ内からは kafka:9092)
 channels:
   orderCreated:
     address: sales.order.created.v1
