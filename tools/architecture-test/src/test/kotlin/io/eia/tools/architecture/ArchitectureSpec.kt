@@ -41,8 +41,12 @@ class ArchitectureSpec :
             ArchitectureRules.noKotlinResult(codeBase).assertNone()
         }
 
-        test("shared/kernel と shared/canonical-model はフレームワークに依存しない(許可リスト)") {
+        test("shared/kernel・canonical-model・resilience はフレームワークに依存しない(許可リスト)") {
             ArchitectureRules.sharedImportAllowList(codeBase).assertNone()
+        }
+
+        test("platform/test-support はテストのソースセットからだけ参照する") {
+            ArchitectureRules.testSupportOnlyFromTests(codeBase).assertNone()
         }
 
         test("Retryable と NonRetryable の両方を実装する型がない") {

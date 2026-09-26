@@ -67,11 +67,20 @@ class ArchitectureRulesSpec :
                 shouldThrow<AssertionError> { found.assertNone() }
             }
 
-            test("shared/kernel と shared/canonical-model の許可リスト外の import") {
+            test("shared/kernel・canonical-model・resilience の許可リスト外の import") {
                 ArchitectureRules.sharedImportAllowList(violations).map {
                     it.detail.substringAfter("import ").substringBefore('(')
                 } shouldContainExactlyInAnyOrder
-                    listOf("io.eia.platform.observability.Tracer", "kotlinx.datetime.LocalDate", "kotlinx.coroutines.delay")
+                    listOf(
+                        "io.eia.platform.observability.Tracer",
+                        "kotlinx.datetime.LocalDate",
+                        "kotlinx.coroutines.delay",
+                        "kotlinx.serialization.Serializable",
+                    )
+            }
+
+            test("テスト以外のソースセットから platform/test-support を参照する") {
+                ArchitectureRules.testSupportOnlyFromTests(violations).fileNames() shouldBe listOf("UsesTestSupportInMain.kt")
             }
 
             test("Retryable と NonRetryable の両方を直接・間接に実装する型") {
@@ -97,8 +106,9 @@ class ArchitectureRulesSpec :
                 ArchitectureRules.noKotlinResult(compliant).shouldBeEmpty()
             }
 
-            test("shared の許可リストと DomainError 分類の排他") {
+            test("shared の許可リスト・DomainError 分類の排他・test-support の参照元") {
                 ArchitectureRules.sharedImportAllowList(compliant).shouldBeEmpty()
+                ArchitectureRules.testSupportOnlyFromTests(compliant).shouldBeEmpty()
                 ArchitectureRules.domainErrorKindIsExclusive(compliant).shouldBeEmpty()
             }
         }
