@@ -44,6 +44,11 @@ class TraceParentSpec :
                 parsed.flags.toString() shouldBe "00"
             }
 
+            test("OWS(SP と HTAB)だけを取り除き、改行や全角空白は拒否する") {
+                TraceParent.parse("\t$VALID \t").ok().format() shouldBe VALID
+                listOf("$VALID\n", "\r$VALID", "　$VALID", "$VALID ").forEach { TraceParent.parse(it).shouldBeRejected() }
+            }
+
             test("未知の上位版は先頭 55 文字を読み、送信時は版 00 に戻す") {
                 TraceParent.parse("cc-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-future").ok().format() shouldBe VALID
                 TraceParent.parse("cc-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01").ok().format() shouldBe VALID
