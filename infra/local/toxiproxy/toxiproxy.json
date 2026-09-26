@@ -1,0 +1,20 @@
+[
+  {
+    "name": "kafka-host",
+    "listen": "0.0.0.0:19094",
+    "upstream": "kafka:9094",
+    "enabled": true
+  },
+  {
+    "name": "kafka-internal",
+    "listen": "0.0.0.0:19095",
+    "upstream": "kafka:9095",
+    "enabled": true
+  },
+  {
+    "name": "postgres",
+    "listen": "0.0.0.0:19433",
+    "upstream": "postgres:5432",
+    "enabled": true
+  }
+]

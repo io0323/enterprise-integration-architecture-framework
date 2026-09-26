@@ -308,6 +308,64 @@ verify_b2b() {
   fi
 }
 
+# ------------------------------------------------------------------ chaos
+verify_chaos() {
+  current=chaos
+  local api=http://localhost:19474 kbin=/opt/kafka/bin topic="eiaf.verify.toxic.v1"
+  # Toxiproxy のネットワーク名前空間で Kafka のクライアントを動かす。localhost:19094 がホストから見た場合と同じく Toxiproxy に当たる
+  kafka_via_proxy() { docker run --rm -i --network container:eiaf-toxiproxy-1 --entrypoint "$1" "$KAFKA_IMAGE" "${@:2}"; }
+  elapsed_ms() { python3 -c 'import subprocess,sys,time; t=time.time(); r=subprocess.run(sys.argv[1:],capture_output=True); print(int((time.time()-t)*1000) if r.returncode==0 else -1)' "$@"; }
+  toxic_cleanup() {
+    for proxy in kafka-host kafka-internal postgres; do
+      curl -sS -o /dev/null -X POST "$api/proxies/$proxy" -H 'Content-Type: application/json' -d '{"enabled":true}' || true
+      curl -sS -o /dev/null -X DELETE "$api/proxies/$proxy/toxics/verify_latency" || true
+    done
+  }
+  toxic_cleanup
+
+  check "Toxiproxy: kafka-host / kafka-internal / postgres の proxy が有効" bash -c \
+    "curl -fsS $api/proxies | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if all(d.get(n,{}).get(\"enabled\") for n in [\"kafka-host\",\"kafka-internal\",\"postgres\"]) else 1)'"
+  check "Toxiproxy: ホストのポート 19094(Kafka)と 19433(PostgreSQL)で待ち受けている" bash -c \
+    "exec 3<>/dev/tcp/127.0.0.1/19094 && exec 4<>/dev/tcp/127.0.0.1/19433"
+
+  # 専用リスナー: bootstrap も、メタデータで返る advertised(localhost:19094 / toxiproxy:19095)も Toxiproxy を指す
+  local metadata
+  metadata="$(kafka_via_proxy $kbin/kafka-broker-api-versions.sh --bootstrap-server localhost:19094 2>/dev/null | head -1 || true)"
+  if [[ "$metadata" == "localhost:19094 "* ]]; then pass "Kafka: TOXI_HOST リスナーの advertised が localhost:19094(Toxiproxy)"; else fail "Kafka: TOXI_HOST の advertised が想定外 ('$metadata')"; fi
+  metadata="$(kafka_via_proxy $kbin/kafka-broker-api-versions.sh --bootstrap-server toxiproxy:19095 2>/dev/null | head -1 || true)"
+  if [[ "$metadata" == "toxiproxy:19095 "* ]]; then pass "Kafka: TOXI_INTERNAL リスナーの advertised が toxiproxy:19095"; else fail "Kafka: TOXI_INTERNAL の advertised が想定外 ('$metadata')"; fi
+
+  "${compose[@]}" exec -T kafka $kbin/kafka-topics.sh --bootstrap-server kafka:9092 --delete --topic "$topic" >/dev/null 2>&1 || true
+  "${compose[@]}" exec -T kafka $kbin/kafka-topics.sh --bootstrap-server kafka:9092 --create --topic "$topic" --partitions 1 --replication-factor 1 >/dev/null 2>&1 || true
+  check "Kafka: Toxiproxy 経由(localhost:19094)で produce / consume できる" bash -c "
+    echo toxic-$$ | docker run --rm -i --network container:eiaf-toxiproxy-1 --entrypoint $kbin/kafka-console-producer.sh $KAFKA_IMAGE --bootstrap-server localhost:19094 --topic $topic &&
+    docker run --rm --network container:eiaf-toxiproxy-1 --entrypoint $kbin/kafka-console-consumer.sh $KAFKA_IMAGE --bootstrap-server localhost:19094 --topic $topic --from-beginning --max-messages 1 --timeout-ms 20000 | grep -q toxic-$$"
+
+  # latency の toxic: 応答が注入した遅延(下り 1500ms)以上に遅くなり、toxic を消すと戻る
+  local base slow
+  base="$(elapsed_ms docker run --rm --network container:eiaf-toxiproxy-1 --entrypoint $kbin/kafka-broker-api-versions.sh "$KAFKA_IMAGE" --bootstrap-server localhost:19094)"
+  curl -fsS -o /dev/null -X POST "$api/proxies/kafka-host/toxics" -H 'Content-Type: application/json' \
+    -d '{"name":"verify_latency","type":"latency","stream":"downstream","attributes":{"latency":1500,"jitter":0}}'
+  slow="$(elapsed_ms docker run --rm --network container:eiaf-toxiproxy-1 --entrypoint $kbin/kafka-broker-api-versions.sh "$KAFKA_IMAGE" --bootstrap-server localhost:19094)"
+  if [[ "$base" -ge 0 && "$slow" -ge $((base + 1500)) ]]; then
+    pass "Toxiproxy: latency の toxic で Kafka の応答が遅くなる (${base}ms → ${slow}ms)"
+  else
+    fail "Toxiproxy: latency の toxic が効かない (${base}ms → ${slow}ms)"
+  fi
+  curl -sS -o /dev/null -X DELETE "$api/proxies/kafka-host/toxics/verify_latency" || true
+
+  # proxy を無効にすると PostgreSQL に接続できなくなり、有効に戻すと接続できる
+  local pg=(exec -T -e PGPASSWORD="$ORDER_DB_PASSWORD" -e PGCONNECT_TIMEOUT=5 postgres psql -h toxiproxy -p 19433 -U order_service -d order_service -tAc 'select 1')
+  check "PostgreSQL: Toxiproxy 経由(toxiproxy:19433)で接続できる" "${compose[@]}" "${pg[@]}"
+  curl -fsS -o /dev/null -X POST "$api/proxies/postgres" -H 'Content-Type: application/json' -d '{"enabled":false}'
+  if "${compose[@]}" "${pg[@]}" >/dev/null 2>&1; then fail "Toxiproxy: proxy を無効にしても接続できる"; else pass "Toxiproxy: proxy を無効にすると PostgreSQL に接続できない"; fi
+  curl -fsS -o /dev/null -X POST "$api/proxies/postgres" -H 'Content-Type: application/json' -d '{"enabled":true}'
+  check "Toxiproxy: proxy を有効に戻すと接続できる" retry 5 1 "${compose[@]}" "${pg[@]}"
+
+  toxic_cleanup
+  "${compose[@]}" exec -T kafka $kbin/kafka-topics.sh --bootstrap-server kafka:9092 --delete --topic "$topic" >/dev/null 2>&1 || true
+}
+
 verify_health
 for p in "${profiles[@]}"; do
   if declare -F "verify_$p" >/dev/null; then "verify_$p"; else current="$p"; fail "verify_$p が未定義"; fi

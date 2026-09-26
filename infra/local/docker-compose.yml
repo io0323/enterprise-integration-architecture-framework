@@ -30,9 +30,11 @@ services:
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       # PLAINTEXT: コンテナ間 / EXTERNAL: ホスト(アプリ・テスト)
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:19092
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:19092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      # TOXI_HOST / TOXI_INTERNAL: Toxiproxy 経由の専用リスナー(chaos profile)。advertised を Toxiproxy のアドレスにし、
+      # メタデータ取得後の接続も Toxiproxy を通るようにする(ホスト: localhost:19094 / コンテナ: toxiproxy:19095)
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:19092,TOXI_HOST://:9094,TOXI_INTERNAL://:9095
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:19092,TOXI_HOST://localhost:19094,TOXI_INTERNAL://toxiproxy:19095
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT,TOXI_HOST:PLAINTEXT,TOXI_INTERNAL:PLAINTEXT
       # 単一ブローカー
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
@@ -218,6 +220,29 @@ services:
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "nc", "-z", "127.0.0.1", "2222"]
+
+  # ---------------------------------------------------------------- chaos
+  # 障害注入(Framework 13 / P04b・P14)。proxies は toxiproxy/toxiproxy.json、toxic は API(:19474)で入れる
+  toxiproxy:
+    image: ${TOXIPROXY_IMAGE:?}
+    profiles: [chaos]
+    command: ["-host=0.0.0.0", "-config=/config/toxiproxy.json"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    ports:
+      - 127.0.0.1:19474:8474
+      - 127.0.0.1:19094:19094
+      - 127.0.0.1:19433:19433
+    volumes:
+      - ./toxiproxy/toxiproxy.json:/config/toxiproxy.json:ro
+    mem_limit: 64m
+    healthcheck:
+      <<: *healthcheck
+      # イメージ同梱の CLI で API(:8474)に問い合わせる
+      test: ["CMD", "/toxiproxy-cli", "list"]
 
   # ---------------------------------------------------------------- core: data / security / gateway
   postgres:
