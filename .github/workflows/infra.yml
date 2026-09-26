@@ -58,6 +58,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Docker versions
         run: docker version --format 'engine {{.Server.Version}}' && docker compose version
+      # ランナーのディスクは cdc などのイメージを取得すると 90% を超え、Loki が WAL の書き込みを止める
+      # (disk usage exceeded threshold)。使わない SDK を削除して空きを作る。
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker system prune --all --force >/dev/null
+          df -h /
       - name: Up
         run: make up PROFILE=${{ matrix.profile }}
       - name: Verify
@@ -66,7 +74,7 @@ jobs:
           make verify PROFILE=${{ matrix.profile }} | tee verify.txt
       - name: Memory
         if: ${{ !cancelled() }}
-        run: make stats | tee stats.md
+        run: make stats | tee stats.md && df -h /
       - name: Summary
         if: ${{ !cancelled() }}
         run: |
