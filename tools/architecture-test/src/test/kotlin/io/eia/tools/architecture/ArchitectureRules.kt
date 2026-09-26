@@ -206,14 +206,28 @@ internal object ArchitectureRules {
     private const val TEST_SUPPORT_PATH = "platform/test-support/"
     private val TEST_SOURCE_SET = Regex("""/src/(test|integrationTest|e2eTest|[A-Za-z0-9]+Test)/kotlin/""")
 
-    /** platform/test-support(ADR-0016 §5)はテストのソースセットからだけ参照する。本番コードに Testcontainers を持ち込まない。 */
+    private val TEST_SUPPORT_QUALIFIED_USE = Regex("""(?<![\w.])${Regex.escape(TEST_SUPPORT_PACKAGE)}\.""")
+    private val IMPORT_OR_PACKAGE_LINE = Regex("""^\s*(import|package)\s.*$""", RegexOption.MULTILINE)
+
+    /**
+     * platform/test-support(ADR-0016 §5)はテストのソースセットからだけ参照する。本番コードに Testcontainers を持ち込まない。
+     * import と完全修飾名での参照の両方を検査する。Gradle の依存宣言(main のクラスパスに載ること)は build-logic が検査する。
+     */
     fun testSupportOnlyFromTests(codeBase: CodeBase): List<Violation> =
         codeBase.files
             .filter { !it.path.startsWith(TEST_SUPPORT_PATH) && !TEST_SOURCE_SET.containsMatchIn(it.path) }
             .flatMap { file ->
-                file.importNames
-                    .filter { it.isInPackage(TEST_SUPPORT_PACKAGE) }
-                    .map { Violation("test-support はテスト専用", file.path, "テスト以外のソースセットから import $it") }
+                val imports =
+                    file.importNames
+                        .filter { it.isInPackage(TEST_SUPPORT_PACKAGE) }
+                        .map { Violation("test-support はテスト専用", file.path, "テスト以外のソースセットから import $it") }
+                val qualified =
+                    if (TEST_SUPPORT_QUALIFIED_USE.containsMatchIn(file.code.replace(IMPORT_OR_PACKAGE_LINE, ""))) {
+                        listOf(Violation("test-support はテスト専用", file.path, "テスト以外のソースセットから完全修飾名で参照しています"))
+                    } else {
+                        emptyList()
+                    }
+                imports + qualified
             }
 
     /**
