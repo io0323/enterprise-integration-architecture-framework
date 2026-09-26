@@ -56,8 +56,8 @@ Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)�
 | 19081 | `apicurio:8080` | Apicurio Registry | core | REST API(`/apis/registry/v3`、Confluent 互換 `/apis/ccompat/v7`) |
 | 19083 | `kafka-connect:8083` | Kafka Connect(Debezium) | cdc | Connect REST API |
 | 19090 | `prometheus:9090` | Prometheus | core | UI / API(OTLP 受信 `/api/v1/otlp`) |
-| 19092 | `kafka:9092` | Kafka | core | ホストのクライアント用リスナー(コンテナからは `kafka:9092`) |
-| 19094 | `toxiproxy:19095` | Kafka(Toxiproxy 経由) | chaos | ホスト用の `TOXI_HOST` リスナー。コンテナからは `toxiproxy:19095`(`TOXI_INTERNAL`) |
+| 19092 | `kafka:19092` | Kafka | core | ホストのクライアント用の `EXTERNAL` リスナー(advertised `localhost:19092`)。コンテナからは `kafka:9092`(`PLAINTEXT`) |
+| 19094 | `toxiproxy:19094` → `kafka:9094` | Kafka(Toxiproxy 経由) | chaos | proxy `kafka-host`。ホスト用の `TOXI_HOST` リスナー(advertised `localhost:19094`)。コンテナからは proxy `kafka-internal` の `toxiproxy:19095` → `kafka:9095`(`TOXI_INTERNAL`) |
 | 19180 | `keycloak:8080` | Keycloak | core | OIDC(realm `eiaf`)。管理コンソール `/admin` |
 | 19222 | `sftp:2222` | SFTP(社内向け) | file | 利用者 `eiaf-file`、公開鍵認証のみ |
 | 19223 | `sftp-b2b:2222` | SFTP(取引先向け) | b2b | 利用者 `partner01`、公開鍵認証のみ |
