@@ -81,6 +81,40 @@ services:
       <<: *healthcheck
       test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:9000/health/ready"]
 
+  # ---------------------------------------------------------------- cdc
+  kafka-connect:
+    image: ${DEBEZIUM_CONNECT_IMAGE:?}
+    profiles: [cdc]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      apicurio:
+        condition: service_healthy
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      # Connect の内部トピックと Consumer Group(業務トピックの命名規約の対象外。先頭の _ で区別する)
+      GROUP_ID: debezium.connect
+      CONFIG_STORAGE_TOPIC: _connect.configs
+      OFFSET_STORAGE_TOPIC: _connect.offsets
+      STATUS_STORAGE_TOPIC: _connect.status
+      CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      STATUS_STORAGE_REPLICATION_FACTOR: 1
+      # auto.create.topics.enable=false のため、コネクタの出力先トピックは Connect が明示的に作る(topic.creation.*)
+      CONNECT_TOPIC_CREATION_ENABLE: "true"
+      # Apicurio の Avro Converter を有効にする(P06 の Outbox で使う)
+      ENABLE_APICURIO_CONVERTERS: "true"
+      HEAP_OPTS: -Xms256m -Xmx384m
+    ports:
+      - 127.0.0.1:19083:8083
+    mem_limit: 1g
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8083/connector-plugins"]
+      start_period: 40s
+
   # ---------------------------------------------------------------- core: data / security / gateway
   postgres:
     image: ${POSTGRES_IMAGE:?}
@@ -106,6 +140,7 @@ services:
       BATCH_ETL_DB_PASSWORD: ${BATCH_ETL_DB_PASSWORD:?}
       KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?}
       APICURIO_DB_PASSWORD: ${APICURIO_DB_PASSWORD:?}
+      DEBEZIUM_DB_PASSWORD: ${DEBEZIUM_DB_PASSWORD:?make env を実行してください}
     ports:
       - 127.0.0.1:19432:5432
     volumes:

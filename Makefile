@@ -44,16 +44,16 @@ env: ## infra/local/.env(秘密情報)をランダム生成する。既にあれ
 up: env ## ローカル基盤を起動し、全コンテナが healthy になるまで待つ(例: make up PROFILE=cdc)
 	$(COMPOSE) $(COMPOSE_PROFILES_ARGS) up -d --wait --wait-timeout 420
 
-down: ## ローカル基盤を停止する(全 profile。データは残す)
+down: env ## ローカル基盤を停止する(全 profile。データは残す)
 	$(COMPOSE) --profile '*' down --remove-orphans
 
-clean: ## ローカル基盤を停止し、ボリュームも削除する
+clean: env ## ローカル基盤を停止し、ボリュームも削除する
 	$(COMPOSE) --profile '*' down --remove-orphans --volumes
 
-logs: ## ログを表示する(例: make logs SERVICE=kafka)
+logs: env ## ログを表示する(例: make logs SERVICE=kafka)
 	$(COMPOSE) $(COMPOSE_PROFILES_ARGS) logs -f --tail=200 $(SERVICE)
 
-ps: ## コンテナの状態を表示する
+ps: env ## コンテナの状態を表示する
 	$(COMPOSE) --profile '*' ps
 
 verify: ## profile ごとの検証(healthy・機能の疎通。例: make verify PROFILE=file)

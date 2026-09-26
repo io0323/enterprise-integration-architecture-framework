@@ -152,6 +152,70 @@ print(d.get("iss"), ",".join(aud), " ".join(sorted(d.get("scope","").split())))'
   done
 }
 
+# ------------------------------------------------------------------ cdc
+verify_cdc() {
+  current=cdc
+  # 実行ごとに名前を変える(同じ名前だと Connect に残ったオフセットから再開し、スナップショットが走らない)
+  local run_id connect=http://localhost:19083
+  run_id="$(date +%s)"
+  local connector="eiaf-verify-cdc-$run_id" prefix="eiaf-verify-$run_id" slot="eiaf_verify_$run_id"
+  local topic="$prefix.public.verify_probe"
+  local kbin=/opt/kafka/bin
+  psql_as() { # psql_as <user> <password> <db> <sql>
+    "${compose[@]}" exec -T -e PGPASSWORD="$2" postgres psql -h 127.0.0.1 -v ON_ERROR_STOP=1 -U "$1" -d "$3" -tAc "$4"
+  }
+  cleanup_cdc() {
+    # コネクタを止めてからオフセットを消し、コネクタを削除する(Kafka Connect 3.6+ の offsets API)
+    if curl -fsS -o /dev/null "$connect/connectors/$connector" 2>/dev/null; then
+      curl -sS -o /dev/null -X PUT "$connect/connectors/$connector/stop" || true
+      retry 10 1 bash -c "curl -fsS $connect/connectors/$connector/status | grep -q STOPPED" || true
+      curl -sS -o /dev/null -X DELETE "$connect/connectors/$connector/offsets" || true
+      curl -sS -o /dev/null -X DELETE "$connect/connectors/$connector" || true
+    fi
+    psql_as legacy_sim "$LEGACY_SIM_DB_PASSWORD" legacy_sim \
+      "DROP PUBLICATION IF EXISTS eiaf_verify; DROP TABLE IF EXISTS verify_probe;" >/dev/null 2>&1 || true
+    "${compose[@]}" exec -T postgres psql -U postgres -tAc \
+      "SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots WHERE slot_name LIKE 'eiaf_verify%' AND NOT active" >/dev/null 2>&1 || true
+    "${compose[@]}" exec -T kafka $kbin/kafka-topics.sh --bootstrap-server kafka:9092 --delete --topic "$topic" >/dev/null 2>&1 || true
+  }
+
+  check "Kafka Connect: PostgresConnector(Debezium)が使える" bash -c \
+    "curl -fsS $connect/connector-plugins | python3 -c 'import json,sys; sys.exit(0 if any(p[\"class\"]==\"io.debezium.connector.postgresql.PostgresConnector\" for p in json.load(sys.stdin)) else 1)'"
+  check "Kafka Connect: Apicurio の AvroConverter が使える" bash -c \
+    "curl -fsS '$connect/connector-plugins?connectorsOnly=false' | python3 -c 'import json,sys; sys.exit(0 if any(p[\"class\"]==\"io.apicurio.registry.utils.converter.AvroConverter\" for p in json.load(sys.stdin)) else 1)'"
+  check "PostgreSQL: debezium ユーザーが REPLICATION を持つ" bash -c \
+    "[[ \"\$(${compose[*]} exec -T postgres psql -U postgres -tAc \"select rolreplication from pg_roles where rolname='debezium'\")\" == t ]]"
+
+  # 一時テーブルの変更を Debezium で Kafka に流す(スナップショット 1 件 + INSERT 1 件)
+  cleanup_cdc
+  check "CDC: 一時テーブルとパブリケーションを作り、debezium に SELECT を付与できる" psql_as legacy_sim "$LEGACY_SIM_DB_PASSWORD" legacy_sim \
+    "CREATE TABLE verify_probe (id int PRIMARY KEY, note text); INSERT INTO verify_probe VALUES (1, 'snapshot');
+     GRANT SELECT ON verify_probe TO debezium; CREATE PUBLICATION eiaf_verify FOR TABLE verify_probe;"
+  local config
+  config="$(python3 -c 'import json,sys; print(json.dumps({"name":sys.argv[1],"config":{
+    "connector.class":"io.debezium.connector.postgresql.PostgresConnector",
+    "database.hostname":"postgres","database.port":"5432","database.user":"debezium","database.password":sys.argv[2],
+    "database.dbname":"legacy_sim","topic.prefix":sys.argv[3],"table.include.list":"public.verify_probe",
+    "plugin.name":"pgoutput","publication.name":"eiaf_verify","publication.autocreate.mode":"disabled",
+    "slot.name":sys.argv[4],"slot.drop.on.stop":"true",
+    "key.converter":"org.apache.kafka.connect.json.JsonConverter","key.converter.schemas.enable":"false",
+    "value.converter":"org.apache.kafka.connect.json.JsonConverter","value.converter.schemas.enable":"false",
+    "topic.creation.default.replication.factor":"1","topic.creation.default.partitions":"1"}}))' "$connector" "$DEBEZIUM_DB_PASSWORD" "$prefix" "$slot")"
+  check "CDC: Debezium のコネクタを登録できる" curl -fsS -o /dev/null -X POST "$connect/connectors" -H 'Content-Type: application/json' -d "$config"
+  check "CDC: コネクタとタスクが RUNNING" retry 30 2 bash -c \
+    "curl -fsS $connect/connectors/$connector/status | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d[\"connector\"][\"state\"]==\"RUNNING\" and d[\"tasks\"] and all(t[\"state\"]==\"RUNNING\" for t in d[\"tasks\"]) else 1)'"
+  psql_as legacy_sim "$LEGACY_SIM_DB_PASSWORD" legacy_sim "INSERT INTO verify_probe VALUES (2, 'streamed')" >/dev/null 2>&1 || true
+  local events
+  events="$(retry 15 2 bash -c "${compose[*]} exec -T kafka $kbin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic $topic \
+    --from-beginning --max-messages 2 --timeout-ms 10000 2>/dev/null | grep -c '\"op\"'" || true)"
+  if [[ "$(printf '%s' "$events" | tail -1)" == 2 ]]; then
+    pass "CDC: スナップショット(op=r)と INSERT(op=c)の 2 件が {prefix}.public.verify_probe に届く"
+  else
+    fail "CDC: $topic に届いた変更イベントが 2 件でない ('$(printf '%s' "$events" | tail -1)')"
+  fi
+  cleanup_cdc
+}
+
 verify_health
 for p in "${profiles[@]}"; do
   if declare -F "verify_$p" >/dev/null; then "verify_$p"; else current="$p"; fail "verify_$p が未定義"; fi
