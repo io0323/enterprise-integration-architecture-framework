@@ -285,7 +285,14 @@ services:
     mem_limit: 384m
     healthcheck:
       <<: *healthcheck
-      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      # 初期化中の一時サーバは Unix ソケットだけで待ち受けるため、TCP で接続し、
+      # 初期化スクリプト(postgres/init/)が最後に作る DB(apicurio)とロール(debezium)があることまで確かめる
+      test:
+        - CMD-SHELL
+        - >-
+          pg_isready -h 127.0.0.1 -U postgres -d postgres &&
+          [ "$$(PGPASSWORD="$$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U postgres -d apicurio -tAc
+          "select count(*) from pg_roles where rolname = 'debezium'")" = 1 ]
 
   keycloak:
     image: ${KEYCLOAK_IMAGE:?}
