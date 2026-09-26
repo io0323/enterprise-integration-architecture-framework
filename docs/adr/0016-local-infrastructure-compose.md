@@ -62,7 +62,7 @@ Docker のヘルスチェックはコンテナの中で実行されるため、�
     - Gradle の依存宣言: `eia.jvm-library` の `verifyNoTestSupportInMain`(`check` に含まれる)で、`main` の `compileClasspath` / `runtimeClasspath` に `:platform:test-support` が推移的にも含まれないことを検査する。
   - パスは、相対パスで入力に宣言した `CommandLineArgumentProvider` で渡す(`io.eia.buildlogic.InfraImagesArgument`)。`systemProperty` で絶対パスを渡すと、パスがビルドキャッシュのキーに入り、マシン間でキャッシュが効かなくなるため。
   - Testcontainers の `DockerImageName` はタグとダイジェストの併記を解釈できない。そのため、タグを落としてダイジェストだけで固定する(`apache/kafka@sha256:...`)。
-- CI: `ci.yml` の `integration` ジョブで `./gradlew integrationTest` を実行する。対象の変更は `platform/**`、`shared/resilience/**`、`infra/local/images.env`、`build-logic/**`、`gradle/libs.versions.toml`、`ci.yml` で、テストの件数は Step Summary に出す。
+- CI: `ci.yml` の `integration` ジョブで `./gradlew integrationTest` を実行する。対象の変更は `platform/**`、`shared/**`(統合テストが使う kernel などを含む)、`services/*/adapters/**`、`**/src/integrationTest/**`(P05 以降にサービスやツールへ置く統合テスト)、`infra/local/images.env`、`build-logic/**`、`gradle/libs.versions.toml`、`ci.yml` で、テストの件数は Step Summary に出す。
 
 ### 6. ホスト側のポートと秘密情報
 - ホスト側のポートは **127.0.0.1 の 19000〜19999** に割り当てる(他の開発ツールの既定ポートとの衝突を避け、LAN には公開しない)。一覧は `infra/local/README.md`。

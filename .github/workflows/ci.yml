@@ -70,7 +70,9 @@ jobs:
               - '.github/workflows/ci.yml'
             integration:
               - 'platform/**'
-              - 'shared/resilience/**'
+              - 'shared/**'
+              - 'services/*/adapters/**'
+              - '**/src/integrationTest/**'
               - 'infra/local/images.env'
               - 'build-logic/**'
               - 'gradle/libs.versions.toml'
