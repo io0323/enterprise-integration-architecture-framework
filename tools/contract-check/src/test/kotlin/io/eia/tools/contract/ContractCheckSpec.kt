@@ -65,7 +65,7 @@ private val cases =
                 .replace(COMMAND_CATALOG, "inventory.stock.cmd-reserve.v1", "inventory.stock.cmdreserve.v1")
         },
         Case("servers が /{domain} で終わらず、paths が /v{n}/ で始まらない", setOf("CC-NAMING-003", "CC-NAMING-004")) {
-            replace(OPENAPI, "url: http://localhost:9080/sales", "url: http://localhost:9080/sales/v1")
+            replace(OPENAPI, "url: http://localhost:19080/sales", "url: http://localhost:19080/sales/v1")
                 .replace(OPENAPI, "  /v1/orders:", "  /orders:")
         },
         Case("contracts/files のファイル名が規約外", setOf("CC-NAMING-005")) { overlay("file-naming") },
@@ -84,7 +84,7 @@ private val cases =
             replace(OPENAPI, "  version: 1.0.0", "  version: 2.0.0")
         },
         Case("servers の domain が連携 ID の domain と異なる", setOf("CC-NAMING-010")) {
-            replace(OPENAPI, "url: http://localhost:9080/sales", "url: http://localhost:9080/billing")
+            replace(OPENAPI, "url: http://localhost:19080/sales", "url: http://localhost:19080/billing")
         },
         // --- API ---
         Case("POST に Idempotency-Key がない", setOf("CC-API-001")) {

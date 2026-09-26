@@ -52,7 +52,7 @@ ID は `CC-{区分}-{連番}`。定義は `src/main/kotlin/io/eia/tools/contract
 | `CC-STRUCT-005` | JSON Schema(manifest・カタログ)がメタスキーマに適合すること | 9, 16.1 | JSON Schema 2020-12 の仕様に合わせて直す |
 | `CC-NAMING-001` | Topic は {domain}.{entity}.{event}.v{n} | 6.2, 16.1 | 小文字・kebab-case の 4 セグメントに直す(例 sales.order.created.v1)。DLQ は {topic}.dlq |
 | `CC-NAMING-002` | Command Topic の event セグメントは cmd-{command} | 6.2, ADR-0006 | event セグメントを cmd-{command}(kebab-case)にする(例 inventory.stock.cmd-reserve.v1) |
-| `CC-NAMING-003` | OpenAPI の servers[*].url は /{domain} で終わる | 5.2, ADR-0005 | servers には Gateway 公開 URL を /{domain} まで書く(例 http://localhost:9080/sales) |
+| `CC-NAMING-003` | OpenAPI の servers[*].url は /{domain} で終わる | 5.2, ADR-0005 | servers には Gateway 公開 URL を /{domain} まで書く(例 http://localhost:19080/sales) |
 | `CC-NAMING-004` | OpenAPI の paths は /v{n}/{resource}(kebab-case) | 5.3, ADR-0005 | paths を /v{n}/ で始め、リソース名を小文字の kebab-case にする(例 /v1/orders/{orderId}) |
 | `CC-NAMING-005` | contracts/files のファイル名 | 9, 16.1 | {system}_{dataset}.v{n}.yaml、manifest.v{n}.schema.json、edi/{name}.v{n}.yaml のいずれかにする |
 | `CC-NAMING-006` | 連携 ID は INT-{DOMAIN}-{NNN} で、カタログのファイル名は {id}.yaml | 16.1 | id を INT-{DOMAIN}-{NNN} にし、ファイル名を id と一致させる |

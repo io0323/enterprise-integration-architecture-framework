@@ -10,10 +10,10 @@ info:
   contact:
     name: team-order
 servers:
-  - url: http://localhost:9080/sales
+  - url: http://localhost:19080/sales
     description: ローカル(APISIX)
 security:
-  - oauth2: [orders.read]
+  - oauth2: [sales.order:read]
 tags:
   - name: orders
 paths:
@@ -24,7 +24,7 @@ paths:
       summary: 注文を登録する
       description: 同じ `Idempotency-Key` での再送には、最初の応答と同じ内容を返す(24 時間保持。Framework 5.4)。
       security:
-        - oauth2: [orders.write]
+        - oauth2: [sales.order:write]
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/Traceparent"
@@ -69,7 +69,7 @@ paths:
       operationId: getOrder
       summary: 注文を取得する
       security:
-        - oauth2: [orders.read]
+        - oauth2: [sales.order:read]
       parameters:
         - name: orderId
           in: path
@@ -104,13 +104,13 @@ components:
   securitySchemes:
     oauth2:
       type: oauth2
-      description: Keycloak の Client Credentials(Framework 12)
+      description: Keycloak の Client Credentials。スコープ名は Framework 12.3(`{domain}.{entity}:{action}`)
       flows:
         clientCredentials:
-          tokenUrl: http://localhost:8180/realms/eiaf/protocol/openid-connect/token
+          tokenUrl: http://localhost:19180/realms/eiaf/protocol/openid-connect/token
           scopes:
-            orders.read: 注文の参照
-            orders.write: 注文の登録
+            sales.order:read: 注文の参照
+            sales.order:write: 注文の登録
   parameters:
     IdempotencyKey:
       name: Idempotency-Key

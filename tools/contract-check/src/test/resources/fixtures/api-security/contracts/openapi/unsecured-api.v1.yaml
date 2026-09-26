@@ -3,7 +3,7 @@ info:
   title: Unsecured API(CC-API-003 の違反例)
   version: 1.0.0
 servers:
-  - url: http://localhost:9080/sales
+  - url: http://localhost:19080/sales
 paths:
   /v1/public-items:
     get:
@@ -53,7 +53,7 @@ components:
       type: oauth2
       flows:
         clientCredentials:
-          tokenUrl: http://localhost:8180/realms/eiaf/protocol/openid-connect/token
+          tokenUrl: http://localhost:19180/realms/eiaf/protocol/openid-connect/token
           scopes:
             items.read: 参照
   responses:
