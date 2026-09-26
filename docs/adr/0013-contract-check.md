@@ -54,6 +54,13 @@ INTEGRATION_STANDARDS §5 のカタログに次の項目を追加し、`contract
 - `senders`: `pattern: queue`(コマンド)を送信する側。
 - `pattern: queue` の連携は、`provider` をコマンドを受信して処理するサービスとし、`consumers` はその受信サービスの 1 件(`group: {service}.command`)だけにする。同じコマンドトピックをほかのカタログから購読することも含めて、購読者が 1 件でなければ失敗させる(`CC-COMMAND-001`)。
 
+### 6. 互換性検査の例外(2026-09-26 追加。#25)
+- `contracts/compat-waivers.yaml` に書いた例外に当たる `CC-COMPAT-*` の違反は、失敗にせず「例外で許可した違反」として出力する。
+- 例外 1 件は `rule`(`CC-COMPAT-*` のみ)・`file`・`contains`(違反の内容に含まれる文字列)・`reason`・`issue`・`expires` を必須とする。形式の誤りは `CC-WAIVER-001`、期限(`expires`)を過ぎた例外が残っていれば `CC-WAIVER-002` で失敗させる。期限を過ぎた例外は違反を許可しない。
+- どの違反にも当たらない例外は「使われていない例外」として出力するが、失敗にはしない。main にマージされると比較元が新しい版になり、例外は必ず使われなくなるため、これを失敗にすると main への push の検査が失敗する。
+- 例外を置くのは、利用者がいないことを確認できた変更(実装前の v{n} の誤りの修正など)に限る。利用者がいる API の破壊的変更は、従来どおり `/v{n+1}` で行う(Framework 5.3)。
+- 最初の例外は、`order-api.v1.yaml` のスコープ名を Framework 12.3 の `{domain}.{entity}:{action}` に直す変更(`orders.read` → `sales.order:read`)。v1 の実装は P05 からで利用者がいない。
+
 ## Alternatives Considered
 - **比較元として Schema Registry(Apicurio)を使う**: 登録済みの版と比べられるが、CI でレジストリを起動する必要があり、P03 より前には使えない。main のファイルを比較元にすれば、レジストリなしで同じ判定ができる。不採用(P06 以降、レジストリ側の互換モードでも二重に守る)。
 - **openapi-diff を使う**: 依存の取得は簡単だが、上の表のとおり 3.1 の型の変更を見逃す。不採用。
@@ -62,9 +69,17 @@ INTEGRATION_STANDARDS §5 のカタログに次の項目を追加し、`contract
 - **AsyncAPI を @asyncapi/parser(Node.js)で検証する**: 公式のパーサだが、JVM のビルドに Node.js の実行環境が加わる。JSON Schema で構造は十分に検証できる。不採用。
 - **購読関係を AsyncAPI の `operations`(receive)で表す**: 契約は提供側が持つため、消費者の追加のたびに提供側の契約を変更することになる。カタログは連携ごとの台帳で、消費者の登録の置き場所として適切。不採用。
 
+- **例外を置かず、`/v2` を新設してスコープ名を直す**: 実装も利用者もない v1 を廃止するためだけに版が増え、ADR-0005 のパスと catalog の更新が伴う。不採用。
+- **例外を置かず、Keycloak を契約のスコープ名(`orders.read`)に合わせる**: 契約が Framework 12.3 から外れたままになり、以後の連携の命名の手本として不適切。不採用。
+- **例外を oasdiff の `--err-ignore` で書く**: oasdiff に固有の形式で、Avro(`CC-COMPAT-001`)には使えない。理由・期限を必須にできない。不採用。
+
 ## Consequences(トレードオフ)
 - 初回のビルドで oasdiff を GitHub Releases から取得するため、ネットワークが必要になる(2 回目以降は `build/` のものを使う)。版を上げるときは、チェックサムの表も更新する。
 - 比較は同じ相対パスのファイルどうしで行う。ファイルの削除・改名は互換性検査の対象外になる。参照が切れた場合は `CC-EVENT-002` / `CC-CATALOG-002` で検出されるが、参照されていない契約を削除した場合は検出しない(ライフサイクルに沿った削除の検査は #22 で追加する)。
 - Avro の `SchemaCompatibility` は論理型の変更(`timestamp-micros` → `timestamp-millis`)を非互換としない。Canonical Model に対応づけた型は `CC-CANON-001` で検出できるが、それ以外の型では検出できない。
 - JSON Schema の検証メッセージは、実行環境のロケールに依存しないよう日本語に固定する。
 - **解決済み**: Framework 6.3 の「BACKWARD 互換必須(消費者を先に更新せず発行者を進化可能)」は、括弧内が FORWARD 互換の性質を指していた。ADR-0014 で FULL 互換を要件とし、`CC-COMPAT-001` を FULL の検査にした。Framework 6.3・15.3 と INTEGRATION_STANDARDS §4 も ADR-0014 に合わせて直した。
+- 例外は期限つきで、期限を過ぎると無関係な PR の検査も失敗する。例外は main へのマージ後すぐに削除する(使われていない例外として出力される)。
+
+## 改訂履歴
+- 2026-09-26: §6「互換性検査の例外」を追加した(#25)。

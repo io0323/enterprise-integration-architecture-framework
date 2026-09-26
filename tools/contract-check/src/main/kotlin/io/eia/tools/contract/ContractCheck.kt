@@ -10,12 +10,19 @@ import io.eia.tools.contract.rules.FileRules
 import io.eia.tools.contract.rules.OpenApiCompatibility
 import io.eia.tools.contract.rules.OpenApiRules
 import java.nio.file.Path
+import java.time.LocalDate
+import java.time.ZoneOffset
 import kotlin.io.path.isDirectory
 
-/** 検査結果。[baselineUsed] が false なら互換性検査(CC-COMPAT-*)は比較元なしで省略している。 */
+/**
+ * 検査結果。[baselineUsed] が false なら互換性検査(CC-COMPAT-*)は比較元なしで省略している。
+ * [waived] は例外(contracts/compat-waivers.yaml)で許可した違反、[unusedWaivers] はどの違反にも当たらなかった例外。
+ */
 class CheckResult(
     val violations: List<Violation>,
     val baselineUsed: Boolean,
+    val waived: List<WaivedViolation> = emptyList(),
+    val unusedWaivers: List<Waiver> = emptyList(),
 )
 
 /**
@@ -24,12 +31,14 @@ class CheckResult(
  * @param root 検査するリポジトリのルート(contracts/ を含むディレクトリ)
  * @param baselineRoot 互換性検査の比較元(main の contracts/ を含むディレクトリ)。null か存在しなければ互換性検査を省略する
  * @param oasdiff oasdiff の実行ファイル
+ * @param today 例外の期限の判定に使う日付(UTC)
  */
 class ContractCheck(
     private val root: Path,
     private val baselineRoot: Path?,
     private val oasdiff: Path?,
     private val bindings: List<CanonicalBinding> = CanonicalBindings.ALL,
+    private val today: LocalDate = LocalDate.now(ZoneOffset.UTC),
 ) {
     fun run(): CheckResult {
         val contracts = Contracts.load(root)
@@ -41,16 +50,24 @@ class ContractCheck(
                 ?.let {
                     AvroRules.checkFullCompatibility(contracts, it) + OpenApiCompatibility(oasdiff).check(contracts, it)
                 }.orEmpty()
+        val (waivers, waiverViolations) = Waivers.load(root)
+        val waived = Waivers.apply(compatibility, waivers, today)
         val violations =
             contracts.loadViolations +
+                waiverViolations +
                 openApi.violations +
                 asyncApi.violations +
                 AvroRules.checkNaming(contracts) +
                 CatalogRules(contracts, asyncApi.addressesByFile, openApi.domainsByFile).check() +
                 FileRules.check(contracts) +
                 checkCanonical(contracts) +
-                compatibility
-        return CheckResult(violations.distinct().sortedWith(compareBy({ it.file }, { it.rule.id })), baseline != null)
+                waived.violations
+        return CheckResult(
+            violations = violations.distinct().sortedWith(compareBy({ it.file }, { it.rule.id })),
+            baselineUsed = baseline != null,
+            waived = waived.waived,
+            unusedWaivers = waived.unused,
+        )
     }
 
     private fun checkCanonical(contracts: Contracts): List<Violation> {

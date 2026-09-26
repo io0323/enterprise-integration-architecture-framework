@@ -1,6 +1,8 @@
 package io.eia.tools.contract
 
 import java.nio.file.Path
+import java.time.LocalDate
+import java.time.ZoneOffset
 import kotlin.io.path.Path
 import kotlin.io.path.copyTo
 import kotlin.io.path.createDirectories
@@ -53,7 +55,17 @@ class Workspace private constructor(
     fun check(
         baseline: Workspace? = null,
         oasdiff: Path? = OASDIFF,
-    ): CheckResult = ContractCheck(root, baseline?.root, oasdiff).run()
+        today: LocalDate = LocalDate.now(ZoneOffset.UTC),
+    ): CheckResult = ContractCheck(root, baseline?.root, oasdiff, today = today).run()
+
+    /** [path] に [text] を書く(親ディレクトリがなければ作る)。 */
+    fun write(
+        path: String,
+        text: String,
+    ): Workspace {
+        root.resolve(path).also { it.parent.createDirectories() }.writeText(text)
+        return this
+    }
 
     companion object {
         val REPOSITORY_ROOT: Path = Path(checkNotNull(System.getProperty("eia.rootDir")) { "eia.rootDir が未設定です" })
