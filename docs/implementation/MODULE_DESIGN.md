@@ -43,6 +43,7 @@ flowchart BT
   e2e[tests:e2e<br/>JVM] --> sdk
 ```
 - `platform:*` は `services:*` に依存しない。
+- `platform:test-support` はテストのソースセット(`test` / `integrationTest` など)からだけ参照する。
 - `services` 間のコード依存は禁止(連携は契約経由のみ)。契約モデルは contracts から生成するか `adapters` 内で定義する。
 - `tests:e2e` は `services:*` にコード依存しない(契約・SDK・公開エンドポイント経由のみで検証する)。
 - `tools:device-simulator` は `shared:integration-sdk` にのみ依存する。
@@ -90,6 +91,7 @@ services/order/
 | observability | OTel・Correlation ID 伝搬・構造化ログ | P04a |
 | security | JWT 検証・認可・トークン取得・`SecretProvider` | P04a |
 | audit | 追記専用 + ハッシュチェーンの監査記録 | P04a |
+| test-support | テスト専用。`infra/local/images.env` のイメージを Testcontainers で使う `InfraImages`(ADR-0016 §5)。test / integrationTest からだけ参照する(Konsist) | P04a |
 | reliability | `shared/resilience` の Ktor / OTel への結線 | P04b |
 | outbox | Outbox 挿入・削除・保持期間ジョブ | P06 |
 | messaging-kafka | Producer(P06)/ Consumer・DLQ・Replay(P07) | P06, P07 |

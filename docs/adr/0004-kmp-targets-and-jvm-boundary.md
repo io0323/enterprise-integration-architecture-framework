@@ -61,3 +61,4 @@ ADR-0001 で domain / application / shared を KMP(commonMain)とした。一方
 
 ## 改訂履歴
 - 2026-09-25: パッケージ名を ADR-0010 / MODULE_DESIGN の規約に合わせて修正(決定内容の変更なし)
+- 2026-09-26: §5 の「traceparent と Correlation ID の生成・解析」のうち、Correlation ID は P01 で `shared/kernel`(`CorrelationId`)に実装済みのため、kernel に置いたままとする。`shared/resilience` には traceparent(`io.eia.shared.resilience.trace`)を置く(P04a)。resilience は kernel に依存するため、SDK からも両方を使える。
