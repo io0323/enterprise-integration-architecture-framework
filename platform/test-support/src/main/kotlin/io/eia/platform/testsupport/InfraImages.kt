@@ -31,16 +31,30 @@ public object InfraImages {
         return toDockerImageName(reference)
     }
 
-    /** `KEY=VALUE` の行を読む。空行と `#` で始まる行は無視する。 */
-    internal fun parse(lines: List<String>): Map<String, String> =
+    /**
+     * `KEY=VALUE` の行を読む。空行と `#` で始まる行は無視する。
+     * compose の env-file と解釈がずれる書き方(値の後ろのコメント・引用符・空白)と、重複したキーは拒否する。
+     * 黙って別の値を使うと、compose と統合テストで異なるイメージを使うことになるため。
+     */
+    internal fun parse(lines: List<String>): Map<String, String> {
+        val entries = linkedMapOf<String, String>()
         lines
             .map(String::trim)
             .filter { it.isNotEmpty() && !it.startsWith("#") }
-            .associate { line ->
+            .forEach { line ->
                 val separator = line.indexOf('=')
                 require(separator > 0) { "images.env の行の形式が不正です: $line" }
-                line.substring(0, separator).trim() to line.substring(separator + 1).trim()
+                val key = line.substring(0, separator).trim()
+                val value = line.substring(separator + 1).trim()
+                require(value.isNotEmpty() && value.none { it.isWhitespace() || it in UNSUPPORTED_VALUE_CHARS }) {
+                    "images.env の $key の値に空白・#・引用符は使えません(compose と解釈がずれるため)"
+                }
+                require(entries.put(key, value) == null) { "images.env で $key が重複しています" }
             }
+        return entries
+    }
+
+    private val UNSUPPORTED_VALUE_CHARS = setOf('#', '"', '\'')
 
     /**
      * `<repository>:<tag>@sha256:<digest>` を Testcontainers のイメージ名にする。

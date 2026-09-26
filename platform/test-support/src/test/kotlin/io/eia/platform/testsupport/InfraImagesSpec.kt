@@ -44,6 +44,20 @@ class InfraImagesSpec :
                 "quay.io/keycloak/keycloak@$DIGEST"
         }
 
+        test("重複したキーと、compose と解釈がずれる値を拒否する") {
+            shouldThrow<IllegalArgumentException> {
+                InfraImages.parse(listOf("KAFKA_IMAGE=a@$DIGEST", "KAFKA_IMAGE=b@$DIGEST"))
+            }.message shouldContain "重複"
+            listOf(
+                "KAFKA_IMAGE=apache/kafka:4.3.1@$DIGEST # 後置コメント",
+                "KAFKA_IMAGE=\"apache/kafka:4.3.1@$DIGEST\"",
+                "KAFKA_IMAGE='apache/kafka:4.3.1@$DIGEST'",
+                "KAFKA_IMAGE=",
+            ).forEach { line ->
+                shouldThrow<IllegalArgumentException> { InfraImages.parse(listOf(line)) }.message shouldContain "KAFKA_IMAGE"
+            }
+        }
+
         test("Testcontainers のモジュールが要求するイメージ名との互換を保つ") {
             InfraImages
                 .toDockerImageName("postgres:18.6-alpine@$DIGEST")
