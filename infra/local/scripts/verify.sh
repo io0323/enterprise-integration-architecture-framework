@@ -36,7 +36,7 @@ json() { python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
 
 # ------------------------------------------------------------------ 共通: healthy
 verify_health() {
-  current=health
+  current="health"
   local services
   services="$("${compose[@]}" config --services)"
   for svc in $services; do
@@ -48,7 +48,7 @@ verify_health() {
 
 # ------------------------------------------------------------------ core
 verify_core() {
-  current=core
+  current="core"
   local registry=http://localhost:19081/apis/registry/v3
 
   # Apicurio: 既定のグローバル互換性ルール(ADR-0014)
@@ -154,7 +154,7 @@ print(d.get("iss"), ",".join(aud), " ".join(sorted(d.get("scope","").split())))'
 
 # ------------------------------------------------------------------ cdc
 verify_cdc() {
-  current=cdc
+  current="cdc"
   # 実行ごとに名前を変える(同じ名前だと Connect に残ったオフセットから再開し、スナップショットが走らない)
   local run_id connect=http://localhost:19083
   run_id="$(date +%s)"
@@ -218,7 +218,7 @@ verify_cdc() {
 
 # ------------------------------------------------------------------ iot
 verify_iot() {
-  current=iot
+  current="iot"
   local topic="eiaf/verify/$$" message="verify-$$" received
   # 購読を先に始め、QoS 1 で 1 件 publish して受け取れること(ホストのポート 19883 経由はコンテナ内の 1883 と同じリスナー)
   received="$(
@@ -290,13 +290,13 @@ EOF
 }
 
 verify_file() {
-  current=file
+  current="file"
   verify_s3
   verify_sftp sftp 19222 eiaf-file sftp-file
 }
 
 verify_b2b() {
-  current=b2b
+  current="b2b"
   verify_s3
   verify_sftp sftp-b2b 19223 partner01 sftp-b2b
   # 取引先の SFTP に社内向けの鍵では入れない(利用者と鍵を分けている)
@@ -310,7 +310,7 @@ verify_b2b() {
 
 # ------------------------------------------------------------------ chaos
 verify_chaos() {
-  current=chaos
+  current="chaos"
   local api=http://localhost:19474 kbin=/opt/kafka/bin topic="eiaf.verify.toxic.v1"
   # Toxiproxy のネットワーク名前空間で Kafka のクライアントを動かす。localhost:19094 がホストから見た場合と同じく Toxiproxy に当たる
   kafka_via_proxy() { docker run --rm -i --network container:eiaf-toxiproxy-1 --entrypoint "$1" "$KAFKA_IMAGE" "${@:2}"; }
