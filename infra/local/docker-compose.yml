@@ -143,6 +143,58 @@ services:
         - CMD-SHELL
         - mosquitto_sub -h 127.0.0.1 -u "$$MQTT_USERNAME" -P "$$MQTT_PASSWORD" -t '$$SYS/broker/uptime' -C 1 -W 5 >/dev/null
 
+  # ---------------------------------------------------------------- file / b2b
+  # S3 互換オブジェクトストレージ(ADR-0015)。master・volume・filer・S3 ゲートウェイを 1 プロセスで動かす
+  seaweedfs:
+    image: ${SEAWEEDFS_IMAGE:?}
+    profiles: [file, b2b]
+    # S3 の認証情報(.env)から設定ファイルを生成してから起動する
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        mkdir -p /etc/seaweedfs &&
+        printf '{"identities":[{"name":"eiaf","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","Write","List","Tagging"]}]}'
+        "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY" > /etc/seaweedfs/s3.json &&
+        exec weed server -dir=/data -ip=seaweedfs -ip.bind=0.0.0.0
+        -master.volumeSizeLimitMB=256 -volume.max=32
+        -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3.json
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?make env を実行してください}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?}
+    ports:
+      - 127.0.0.1:19333:8333
+    volumes:
+      - seaweedfs-data:/data
+    mem_limit: 512m
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8333/healthz"]
+
+  # SFTP(file profile。社内システムとのファイル授受)。公開鍵認証のみ
+  sftp:
+    image: ${SFTP_IMAGE:?}
+    profiles: [file]
+    environment:
+      PUID: 1000
+      PGID: 1000
+      TZ: Etc/UTC
+      USER_NAME: eiaf-file
+      PUBLIC_KEY_FILE: /keys/sftp-file.pub
+      PASSWORD_ACCESS: "false"
+      SUDO_ACCESS: "false"
+      LOG_STDOUT: "true"
+    ports:
+      - 127.0.0.1:19222:2222
+    volumes:
+      - ./secrets/sftp-file.pub:/keys/sftp-file.pub:ro
+      - ./sftp/10-directories.sh:/custom-cont-init.d/10-directories.sh:ro
+      - sftp-data:/config
+    mem_limit: 64m
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "nc", "-z", "127.0.0.1", "2222"]
+
   # ---------------------------------------------------------------- core: data / security / gateway
   postgres:
     image: ${POSTGRES_IMAGE:?}
@@ -347,6 +399,8 @@ services:
 volumes:
   kafka-data:
   mosquitto-data:
+  seaweedfs-data:
+  sftp-data:
   postgres-data:
   prometheus-data:
   tempo-data:
