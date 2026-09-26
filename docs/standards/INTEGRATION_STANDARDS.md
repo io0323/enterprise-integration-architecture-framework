@@ -32,21 +32,42 @@
 - Retry-After が上限(cap)を超える場合は待たずに打ち切る(ADR-0011)。
 
 ## 4. イベント互換性
-- Schema Registry 互換モード: BACKWARD(トピック単位)。
-- 追加フィールドは default 必須。削除・型変更・リネームは新バージョントピック。
+- 互換性モード: **FULL**(BACKWARD かつ FORWARD。イベント・コマンドのトピック単位)(ADR-0014)。CI(contract-check)は origin/main の版と FULL で比較し、Schema Registry(P03〜)は FULL_TRANSITIVE で全バージョンと比較する。
+- 追加・削除できるのは default 付きの項目だけ。default のない項目の追加・削除、型変更(拡張を含む)、リネーム、nullable の変更、enum の値の増減は新バージョントピック(許される変更の一覧は ADR-0014 §3)。
+- Canonical Model を運ぶ Avro の物理表現(Money は `minorUnits: long` + `currency`、時刻は `timestamp-micros` でマイクロ秒未満は切り捨て)は ADR-0012 に従う。
+- 互換性・命名・カタログは `./gradlew :tools:contract-check:run` で検査する(ルール一覧は tools/contract-check/README.md)。
 
 ## 5. Integration Catalog YAML
+1 ファイル 1 連携で `contracts/catalog/{id}.yaml` に置く。形式は `contracts/catalog/catalog.schema.json` で定義し、contract-check が検査する(ADR-0013)。
 ```yaml
-id: INT-SALES-001
-name: Order Created Event
+id: INT-SALES-002
+name: Order Events
 style: event            # rest | graphql | grpc | webhook | mqtt | event | batch | etl | cdc | file | edi | ipaas
-pattern: pub-sub
+pattern: pub-sub        # request-reply | pub-sub | queue | scheduled | file-transfer | cdc
 provider: { owner: team-order, system: order-service }
 consumers:
-  - { owner: team-inventory, system: inventory-service }
+  - { owner: team-inventory, system: inventory-service, group: inventory.reservation }
 contract: contracts/asyncapi/order-events.v1.yaml
+channels:               # event / cdc では必須。AsyncAPI の channels[*].address と過不足なく一致させる
+  - sales.order.created.v1
 tier: 1                 # 1 | 2 | 3
 dataClassification: internal   # public | internal | confidential | restricted
 slo: { availability: "99.99", latencyP99: "5s" }
 lifecycle: active       # proposed | design | active | deprecated | retired
 ```
+- `owner` はチーム単位(`team-{name}`)。個人名は使わない(Framework 16.2)。
+- `consumers[*].group` は Kafka の Consumer Group(`{service}.{purpose}`)。event / cdc の consumer では必須。
+- コマンド(`pattern: queue`、ADR-0006)では、`provider` をコマンドを受信して処理するサービスとし、`consumers` はその受信サービスの 1 件(`group: {service}.command`)だけにする。送信側は `senders` に書く。
+  ```yaml
+  id: INT-INVENTORY-001
+  style: event
+  pattern: queue
+  provider: { owner: team-inventory, system: inventory-service }
+  senders:
+    - { owner: team-order, system: order-service }
+  consumers:
+    - { owner: team-inventory, system: inventory-service, group: inventory.command }
+  channels:
+    - inventory.stock.cmd-reserve.v1
+  ```
+- `contracts/` の OpenAPI / AsyncAPI は、どれかのカタログの `contract` に登録されていなければならない(カタログ未登録の連携の禁止。Framework 16.1)。
