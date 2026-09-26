@@ -36,12 +36,12 @@ class NamingSpec :
         }
 
         mapOf(
-            "http://localhost:9080/sales" to "sales",
+            "http://localhost:19080/sales" to "sales",
             "https://api.example.com/sales/" to "sales",
             "/logistics" to "logistics",
-            "http://localhost:9080/sales/v1" to null,
-            "http://localhost:9080/Sales" to null,
-            "http://localhost:9080" to null,
+            "http://localhost:19080/sales/v1" to null,
+            "http://localhost:19080/Sales" to null,
+            "http://localhost:19080" to null,
         ).forEach { (url, domain) ->
             test("servers '$url' の domain → ${domain ?: "違反"}") {
                 val (actual, violation) = Naming.checkServerUrl(url)

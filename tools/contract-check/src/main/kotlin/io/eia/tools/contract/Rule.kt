@@ -61,7 +61,7 @@ enum class Rule(
         "CC-NAMING-003",
         "OpenAPI の servers[*].url は /{domain} で終わる",
         "5.2, ADR-0005",
-        "servers には Gateway 公開 URL を /{domain} まで書く(例 http://localhost:9080/sales)",
+        "servers には Gateway 公開 URL を /{domain} まで書く(例 http://localhost:19080/sales)",
     ),
     NAMING_API_PATH(
         "CC-NAMING-004",

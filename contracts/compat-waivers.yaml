@@ -1,0 +1,13 @@
+# 互換性検査(CC-COMPAT-*)の例外(ADR-0013 §6)。
+# - rule / file が一致し、違反の内容に contains を含むものだけを許可する。
+# - 例外にできるのは CC-COMPAT-* だけ。expires の翌日から CC-WAIVER-002 で CI が失敗する。
+# - main にマージされて比較元と一致すると、例外は「使われていない」と表示される。そうなったら削除する。
+waivers:
+  - rule: CC-COMPAT-002
+    file: contracts/openapi/order-api.v1.yaml
+    contains: "the security scope `sales.order:"
+    reason: >-
+      スコープ名を Framework 12.3 の {domain}.{entity}:{action} に直す(orders.read → sales.order:read)。
+      v1 の実装は P05 からで、影響を受ける利用者がいない。
+    issue: "#25"
+    expires: 2026-10-31
