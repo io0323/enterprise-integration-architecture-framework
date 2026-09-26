@@ -21,7 +21,9 @@ rootProject.name = "enterprise-integration-architecture-framework"
 
 include(
     ":shared:kernel",
+    ":shared:resilience",
     ":shared:canonical-model",
+    ":platform:test-support",
     ":services:order:domain",
     ":services:order:application",
     ":services:order:adapters",
