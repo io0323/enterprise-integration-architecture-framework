@@ -125,6 +125,7 @@ curl -s -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token
 | 症状 | 対処 |
 |---|---|
 | `make up` が `required variable ... is missing` で止まる | `make env` を実行する(新しいフェーズで変数が増えると、不足分だけ追記される) |
+| tempo / loki が permission denied で起動しない | 以前の版(root で実行していた)で作ったボリュームが残っている。`make clean` でボリュームを削除してから `make up` |
 | `postgres/init/` を変えたのに反映されない | 初期化スクリプトは初回だけ実行される。`make clean` でボリュームを削除してから `make up` |
 | otel-collector / loki が healthy にならない | Docker が image マウントに対応していない。Docker Desktop / Engine を更新する |
 | コンテナが再起動を繰り返す(OOM) | `make stats` で使用量を確認し、Docker に割り当てるメモリを増やすか、不要な profile を止める(`make down` して必要な profile だけ `make up`) |
