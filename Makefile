@@ -1,7 +1,7 @@
 # EIAF ローカル開発用コマンド(CLAUDE.md §7)
 GRADLE := ./gradlew
 
-.PHONY: help setup build check arch-test integration-test format up down e2e
+.PHONY: help setup build check arch-test contract-check integration-test format up down e2e
 
 help: ## コマンド一覧
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -19,6 +19,10 @@ check: ## ビルド成果物を作らずに検査のみ実行
 
 arch-test: ## Konsist アーキテクチャテストのみ実行
 	$(GRADLE) :tools:architecture-test:test
+
+contract-check: ## 契約の検査(命名・カタログ・構造・main との互換性。ADR-0013)
+	git fetch --quiet origin main
+	$(GRADLE) :tools:contract-check:run
 
 integration-test: ## Testcontainers 統合テスト
 	$(GRADLE) integrationTest
