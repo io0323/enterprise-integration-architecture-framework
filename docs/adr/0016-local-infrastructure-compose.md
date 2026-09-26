@@ -57,7 +57,9 @@ Docker のヘルスチェックはコンテナの中で実行されるため、�
   - Testcontainers のモジュールが特定のイメージ名を要求する場合(例 `KafkaContainer`)は `asCompatibleSubstituteFor` で互換を宣言する。
 - ヘルパーは **テスト専用の JVM モジュール `platform/test-support`**(`io.eia.platform.testsupport.InfraImages`)に置く(P04a で決定)。
   - `build-logic` に置かない理由: convention plugin のクラスはテストの実行時クラスパスに載らない。テストから使うには、別途ライブラリとして公開する必要がある。
-  - 各モジュールは `testImplementation` / `integrationTestImplementation` からだけ参照する。本番コードに Testcontainers が入らないよう、Konsist(`testSupportOnlyFromTests`)で、テスト以外のソースセットからの import を禁止する。
+  - 各モジュールは `testImplementation` / `integrationTestImplementation` からだけ参照する。本番コードに Testcontainers が入らないよう、次の 2 つで検査する。
+    - ソースの参照: Konsist の `testSupportOnlyFromTests` で、テスト以外のソースセットからの import と完全修飾名での参照を禁止する。
+    - Gradle の依存宣言: `eia.jvm-library` の `verifyNoTestSupportInMain`(`check` に含まれる)で、`main` の `compileClasspath` / `runtimeClasspath` に `:platform:test-support` が推移的にも含まれないことを検査する。
   - パスは、相対パスで入力に宣言した `CommandLineArgumentProvider` で渡す(`io.eia.buildlogic.InfraImagesArgument`)。`systemProperty` で絶対パスを渡すと、パスがビルドキャッシュのキーに入り、マシン間でキャッシュが効かなくなるため。
   - Testcontainers の `DockerImageName` はタグとダイジェストの併記を解釈できない。そのため、タグを落としてダイジェストだけで固定する(`apache/kafka@sha256:...`)。
 - CI: `ci.yml` の `integration` ジョブで `./gradlew integrationTest` を実行する。対象の変更は `platform/**`、`shared/resilience/**`、`infra/local/images.env`、`build-logic/**`、`gradle/libs.versions.toml`、`ci.yml` で、テストの件数は Step Summary に出す。

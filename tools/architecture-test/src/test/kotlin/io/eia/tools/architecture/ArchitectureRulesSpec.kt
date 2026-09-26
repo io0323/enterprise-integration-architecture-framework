@@ -80,7 +80,8 @@ class ArchitectureRulesSpec :
             }
 
             test("テスト以外のソースセットから platform/test-support を参照する") {
-                ArchitectureRules.testSupportOnlyFromTests(violations).fileNames() shouldBe listOf("UsesTestSupportInMain.kt")
+                ArchitectureRules.testSupportOnlyFromTests(violations).fileNames() shouldContainExactlyInAnyOrder
+                    listOf("UsesTestSupportInMain.kt", "UsesTestSupportQualified.kt")
             }
 
             test("Retryable と NonRetryable の両方を直接・間接に実装する型") {
