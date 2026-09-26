@@ -30,8 +30,9 @@
       "Bash(git push origin main:*)",
       "Bash(git push origin HEAD:main:*)",
       "Bash(rm -rf /:*)",
-      "Read(./.env)",
-      "Read(./.env.*)",
+      "Read(**/.env)",
+      "Read(**/.env.local)",
+      "Read(**/.env.*.local)",
       "Read(./**/secrets/**)"
     ]
   }
