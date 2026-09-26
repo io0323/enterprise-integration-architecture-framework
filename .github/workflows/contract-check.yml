@@ -1,0 +1,65 @@
+name: contract-check
+on:
+  pull_request:
+    paths:
+      - "contracts/**"
+      - "tools/contract-check/**"
+      - "shared/canonical-model/**"
+      - "shared/kernel/**"
+      - "gradle/libs.versions.toml"
+      - ".github/workflows/contract-check.yml"
+  push:
+    branches: [main]
+    paths:
+      - "contracts/**"
+      - "tools/contract-check/**"
+      - "shared/canonical-model/**"
+      - "shared/kernel/**"
+      - "gradle/libs.versions.toml"
+      - ".github/workflows/contract-check.yml"
+permissions:
+  contents: read
+concurrency:
+  group: contract-check-${{ github.ref }}
+  cancel-in-progress: true
+
+# ADR-0013: 契約の命名・構造・カタログ・Canonical ⇔ Avro と、比較元(PR はマージ先、main への push は push 前)との互換性を検査する。
+# アクションは ci.yml と同じくコミット SHA で固定する。
+jobs:
+  contract-check:
+    name: contract-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # 比較元のコミットを git archive で取り出すため、履歴を取得する
+          fetch-depth: 0
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          cache-provider: basic
+      - name: Resolve baseline ref
+        id: baseline
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            echo "ref=origin/$BASE_REF" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=$BEFORE" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Contract check
+        env:
+          BASELINE_REF: ${{ steps.baseline.outputs.ref }}
+        run: ./gradlew :tools:contract-check:run "-Peia.contracts.baseRef=$BASELINE_REF"
+      - name: Summary
+        if: ${{ !cancelled() }}
+        run: |
+          report=tools/contract-check/build/reports/contract-check/summary.md
+          if [ -f "$report" ]; then cat "$report" >> "$GITHUB_STEP_SUMMARY"; fi
