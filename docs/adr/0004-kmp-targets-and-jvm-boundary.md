@@ -53,6 +53,7 @@ ADR-0001 で domain / application / shared を KMP(commonMain)とした。一方
     - 根拠 2: §3.2.2.5.2 は、受信した random フラグを同じ trace-id の送信で立てたままにすることを MUST としている。
     - §3.2.4 Versioning of traceparent の上位版の解析手順(SHOULD)は「sampled bit」だけを挙げる。しかしこれは Level 1 の文言が残ったもので、根拠 2 の MUST と両立しない。§3.2.4 は将来の版を追加的(additive)とするため、上位版でも 0x02 の意味は変わらないとみなす。
   - 送信時(`format()`)も、定義済みのビット以外を 0 にする。直接組み立てた値にも効かせるため。
+  - 生成(`TraceParent.generate()`)では random フラグを立てる。§3.2.2.5.2 は、trace-id の右 7 バイトをランダムに生成したときにこのフラグを立てるべき(SHOULD)としており、`TraceId.generate()` は 16 バイトすべてを乱数で作るため。
   - 勧告(Recommendation)は Level 1(2021-11-23)だが、random フラグは Level 2 で定義されたものである。Level 1 しか知らない受信側にとって 0x02 は未定義のビットになり、0 にされるだけなので、Level 2 に合わせても互換性は損なわない。
 
 ## Alternatives Considered
@@ -70,3 +71,4 @@ ADR-0001 で domain / application / shared を KMP(commonMain)とした。一方
 ## 改訂履歴
 - 2026-09-25: パッケージ名を ADR-0010 / MODULE_DESIGN の規約に合わせて修正(決定内容の変更なし)
 - 2026-09-26: §5 の「traceparent と Correlation ID の生成・解析」のうち、Correlation ID は P01 で `shared/kernel`(`CorrelationId`)に実装済みのため、kernel に置いたままとする。`shared/resilience` には traceparent(`io.eia.shared.resilience.trace`)を置く(P04a)。resilience は kernel に依存するため、SDK からも両方を使える。
+- 2026-09-27: §5 に、`TraceParent.generate()` が random フラグを立てることを追記した(P04a ②。PR #30 のレビューの積み残し)。

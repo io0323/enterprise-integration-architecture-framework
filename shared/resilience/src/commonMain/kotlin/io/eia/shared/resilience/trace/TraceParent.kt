@@ -73,7 +73,12 @@ public data class TraceParent(
             }
         }
 
-        /** 新しいトレースの起点を作る(入口で受信した `traceparent` がないとき)。 */
+        /**
+         * 新しいトレースの起点を作る(入口で受信した `traceparent` がないとき)。
+         *
+         * random フラグを立てる。W3C Trace Context Level 2 §3.2.2.5.2 Random Trace ID Flag は、trace-id の右 7 バイトを
+         * ランダムに生成した場合にこのフラグを立てるべき(SHOULD)としている。[TraceId.generate] は 16 バイトすべてを [random] から作るため、条件を満たす。
+         */
         public fun generate(
             random: Random = Random.Default,
             sampled: Boolean = true,
@@ -81,7 +86,7 @@ public data class TraceParent(
             TraceParent(
                 traceId = TraceId.generate(random),
                 parentId = SpanId.generate(random),
-                flags = TraceFlags.NONE.withSampled(sampled),
+                flags = TraceFlags.RANDOM.withSampled(sampled),
             )
 
         private fun parseFields(value: String): Result<TraceParent, ValidationError> {
