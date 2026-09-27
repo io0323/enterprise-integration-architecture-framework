@@ -36,6 +36,7 @@ public object Masking {
     private val SECRET_WORDS =
         listOf(
             "passw(?:or)?d",
+            "pass(?:phrase)?",
             "pwd",
             "secret",
             "token",
@@ -51,16 +52,26 @@ public object Masking {
     private const val KEY_AFFIX = "[A-Za-z0-9_-]{0,32}"
 
     /**
-     * 値: 引用符で囲んだ文字列、1 段の配列・オブジェクト(中身ごと伏せる)、引用符のない値(`Bearer xxx` を含む)。
-     * 入れ子の深い配列・オブジェクトは先頭の括弧だけが対象になるが、中の秘密情報のキーは別に伏せられる。
+     * 値(先に書いたものから試す):
+     * - 引用符で囲んだ文字列。閉じていなければ入力の末尾まで(切り詰めで閉じ引用符が落ちた場合も伏せる)。
+     * - 2 段までの配列・オブジェクト(中身ごと伏せる)。括弧が対応しなければ行末まで。
+     * - 引用符のない値(`Bearer xxx` を含む)。
+     *
+     * java.util.regex は、選択肢を含むグループを `*` で繰り返すと 1 文字ごとに再帰し、長い値でスタックがあふれる。
+     * そのため引用符の値は「展開したループ」と強欲な量指定子(`*+`)で書き、繰り返すグループには回数の上限を付ける。
      */
     private const val SECRET_VALUE =
-        """"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\[[^\[\]]{0,4096}]|\{[^{}]{0,4096}}|(?:(?:bearer|basic)\s+)?[^\s,;&})\]"'\[{]+"""
+        """"[^"\\]*+(?:\\.[^"\\]*+)*+(?:"|$)""" +
+            """|'[^'\\]*+(?:\\.[^'\\]*+)*+(?:'|$)""" +
+            """|\[[^\[\]]{0,4096}+(?:\[[^\[\]]{0,4096}+][^\[\]]{0,4096}+){0,64}+]""" +
+            """|\{[^{}]{0,4096}+(?:\{[^{}]{0,4096}+}[^{}]{0,4096}+){0,64}+}""" +
+            """|[\[{][^\r\n]{0,4096}+""" +
+            """|(?:(?:bearer|basic)\s+)?[^\s,;&})\]"'\[{]+"""
 
     private val SECRET_PAIR =
         Regex("""(?i)(["']?(?<![A-Za-z0-9_-])$KEY_AFFIX(?:$SECRET_WORDS)$KEY_AFFIX["']?\s*[=:]\s*)($SECRET_VALUE)""")
 
-    private val JWT = Regex("""\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*""")
+    private val JWT = Regex("""(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]*+\.[A-Za-z0-9_-]++\.[A-Za-z0-9_-]*+""")
     private val AUTH_SCHEME = Regex("""(?i)\b(bearer|basic)(\s+)([A-Za-z0-9._~+/=-]+)""")
 
     private val EMAIL_ADDRESS =
@@ -74,14 +85,38 @@ public object Masking {
     private const val MIN_CREDENTIAL_LENGTH = 8
     private val CREDENTIAL_SYMBOL = Regex("[0-9._~+/=-]")
 
-    /** これより長い文字列は切り詰めてから伏せる(ログの 1 件の大きさと、マスキングの処理時間の上限)。 */
+    /**
+     * これより長い文字列は、先頭と末尾の半分ずつを残して切り詰めてから伏せる(ログの 1 件の大きさと、マスキングの処理時間の上限)。
+     * 末尾を残すのは、例外のスタックトレースの根本原因(`Caused by:`)が末尾に書かれるため。
+     */
     public const val MAX_LENGTH: Int = 16 * 1024
 
-    /** [text] の中のトークン・秘密情報・個人情報を伏せた文字列を返す。[MAX_LENGTH] を超えた分は切り詰める。 */
+    /**
+     * [text] の中のトークン・秘密情報・個人情報を伏せた文字列を返す。[MAX_LENGTH] を超えた分は切り詰める。
+     * 例外は投げない(ログの記録が業務の処理を失敗させないように)。伏せられなかった場合は、元の文字列ではなく [FAILED] を返す。
+     */
     public fun mask(text: String): String {
         if (text.isEmpty()) return text
-        val bounded = if (text.length > MAX_LENGTH) "${text.take(MAX_LENGTH)}…[truncated ${text.length - MAX_LENGTH} chars]" else text
-        var masked = USERINFO.replace(bounded) { "${it.groupValues[1]}$SECRET:$SECRET@" }
+        return try {
+            maskBounded(truncate(text))
+        } catch (
+            @Suppress("SwallowedException") e: StackOverflowError, // 元の文字列を出さないことを優先する
+        ) {
+            "$FAILED(${text.length} chars)"
+        }
+    }
+
+    /** 伏せられなかったときに返す値。 */
+    public const val FAILED: String = "[masking failed]"
+
+    private fun truncate(text: String): String {
+        if (text.length <= MAX_LENGTH) return text
+        val half = MAX_LENGTH / 2
+        return "${text.take(half)}…[truncated ${text.length - MAX_LENGTH} chars]…${text.takeLast(half)}"
+    }
+
+    private fun maskBounded(text: String): String {
+        var masked = USERINFO.replace(text) { "${it.groupValues[1]}$SECRET:$SECRET@" }
         masked = SECRET_PAIR.replace(masked) { "${it.groupValues[1]}${quoted(it.groupValues[2])}" }
         masked = JWT.replace(masked, TOKEN)
         masked =

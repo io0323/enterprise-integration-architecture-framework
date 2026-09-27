@@ -1,6 +1,8 @@
 package io.eia.platform.observability.metrics
 
 import io.eia.platform.observability.context.LogKeys
+import io.ktor.client.network.sockets.ConnectTimeoutException
+import io.ktor.client.plugins.HttpRequestTimeoutException
 import io.opentelemetry.api.common.AttributeKey
 import io.opentelemetry.api.common.Attributes
 import io.opentelemetry.api.common.AttributesBuilder
@@ -12,6 +14,7 @@ import io.opentelemetry.semconv.HttpAttributes
 import io.opentelemetry.semconv.ServerAttributes
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
+import java.net.SocketTimeoutException
 import kotlin.time.Duration
 import kotlin.time.DurationUnit
 
@@ -97,13 +100,20 @@ public class HttpMetrics(
         public fun errorTypeOf(exception: Throwable): String = exception::class.qualifiedName ?: exception::class.java.name
 
         /**
-         * 失敗の `error.type`(ADR-0018 §5)。タイムアウトは [TIMEOUT] でエラーに数え、それ以外のキャンセル
+         * 失敗の `error.type`(ADR-0018 §5)。タイムアウト(`withTimeout`、Ktor の HttpTimeout、接続・読み取りのタイムアウト)は
+         * [TIMEOUT] でエラーに数え、それ以外のキャンセル
          * (クライアントの切断・呼び出し側の中止)は、応答していないのでエラーに数えない(`null`)。
          */
         public fun failureErrorType(exception: Throwable): String? =
             when (exception) {
-                is TimeoutCancellationException -> TIMEOUT
+                is TimeoutCancellationException,
+                is HttpRequestTimeoutException,
+                is ConnectTimeoutException,
+                is SocketTimeoutException,
+                -> TIMEOUT
+
                 is CancellationException -> null
+
                 else -> errorTypeOf(exception)
             }
 
