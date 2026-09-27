@@ -8,14 +8,16 @@ package io.eia.platform.observability.logging
  * 迷う場合は伏せる側に倒す(秘密情報のキーは広めに照合する)。誤検知と見逃しの方針は ADR-0018 §3。
  *
  * 伏せる対象(適用順):
- * 1. URL の userinfo(`scheme://user:password@host`)
- * 2. 秘密情報のキーの値。キーは大文字小文字と区切り(`_` / `-` / camelCase)を問わず、前後に語が付いてもよい
+ * 1. PEM の塊(`-----BEGIN ...-----` から `-----END ...-----` まで。閉じなければ入力の末尾まで)。
+ *    引用符の有無や改行の種類(`\n` / `\r\n` / JSON の `\n` エスケープ / 改行なし)によらず丸ごと `***` にする([PemBlocks])
+ * 2. URL の userinfo(`scheme://user:password@host`)
+ * 3. 秘密情報のキーの値。キーは大文字小文字と区切り(`_` / `-` / camelCase)を問わず、前後に語が付いてもよい
  *    (`password`、`newPassword`、`clientSecret`、`x-api-key`、`access_token` など)。
  *    値は引用符なし・`"..."`・`'...'` のどれでもよく、JSON・クエリ文字列・`key=value`・`Authorization: Bearer ...` を扱う。
- * 3. JWT(`eyJ` で始まる 3 区画)と、キーのない `Bearer` / `Basic` の資格情報(資格情報らしい値だけ。[looksLikeCredential])
- * 4. メールアドレス
- * 5. カード番号(13〜19 桁。Luhn の検査に通るものだけ)
- * 6. 電話番号(E.164 の `+` 始まり、携帯の 11 桁(区切りは `-`・空白・なし)、`-` で区切った固定電話)
+ * 4. JWT(`eyJ` で始まる 3 区画)と、キーのない `Bearer` / `Basic` の資格情報(資格情報らしい値だけ。[looksLikeCredential])
+ * 5. メールアドレス
+ * 6. カード番号(13〜19 桁。Luhn の検査に通るものだけ)
+ * 7. 電話番号(E.164 の `+` 始まり、携帯の 11 桁(区切りは `-`・空白・なし)、`-` で区切った固定電話)
  */
 public object Masking {
     public const val TOKEN: String = "[token]"
@@ -132,7 +134,9 @@ public object Masking {
     }
 
     private fun maskBounded(text: String): String {
-        var masked = USERINFO.replace(text) { "${it.groupValues[1]}$SECRET:$SECRET@" }
+        // PEM は秘密情報のキーの規則より先に伏せる(先にキーの規則が `-----BEGIN` だけを伏せると、塊の先頭が分からなくなる)
+        var masked = PemBlocks.mask(text, SECRET)
+        masked = USERINFO.replace(masked) { "${it.groupValues[1]}$SECRET:$SECRET@" }
         masked = SECRET_PAIR.replace(masked) { "${it.groupValues[1]}${quoted(it.groupValues[2])}" }
         masked = JWT.replace(masked, TOKEN)
         masked =

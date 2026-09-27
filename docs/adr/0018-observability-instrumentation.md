@@ -65,7 +65,9 @@ P04a ② で `platform/observability` を作る。Framework 14 章は、全チ�
 - OTLP に送るアペンダ(`OtlpLogAppender`)は、OTel の安定版の Logs API で自前に実装する(計装ライブラリの `opentelemetry-logback-appender-1.0` は alpha のみ。§4)。
 - **OTel の初期化より前のログ**: `OtlpLogAppender` は初期化(`Observability.init()`)まで最大 `bufferSize`(既定 1,000)件をメモリに溜め、初期化時に元の時刻のまま送る。溢れた分は捨て、捨てた件数を初期化時に WARN で送る。起動時のログ(設定の読み込み・マイグレーション)は障害の調査に要るが、無制限に溜めると初期化に失敗したときにメモリを使い続けるため、上限を設ける。標準出力には、初期化の前後によらず常に出る(`LoggingSpec` で検査)。
 - 各サービスは `logback.xml` で `io/eia/platform/observability/logback-base.xml` を読み込む。
-- **マスキング**: `Masking` が、URL の userinfo、秘密情報のキーの値、トークン(JWT・Bearer / Basic)、メールアドレス、カード番号(Luhn で確認)、電話番号を伏せる。`EiaLogEncoder` と `OtlpLogAppender` が、メッセージ・例外・MDC の値に必ず適用する。
+- **マスキングの位置づけ**: 主な対策は、本文をログに出さないことと、出す項目を許可リストで固定すること(プラグインは本文を読まず、ログに出す項目を method・route・status・duration などに固定している。書き手は受け取った値ではなく参照キーを書く)。正規表現による伏せ字は多層防御の 1 つであり、すべての漏れを防ぐことは目的としない。
+- **マスキング**: `Masking` が、PEM の塊、URL の userinfo、秘密情報のキーの値、トークン(JWT・Bearer / Basic)、メールアドレス、カード番号(Luhn で確認)、電話番号を伏せる。`EiaLogEncoder` と `OtlpLogAppender` が、メッセージ・例外・MDC の値に必ず適用する。
+  - PEM の塊(`-----BEGIN ...-----` から `-----END ...-----` まで)は、引用符の有無や改行の種類(`\n` / `\r\n` / JSON の `\n` エスケープ / 改行なし)によらず丸ごと `***` にする。閉じなければ入力の末尾まで伏せる。秘密情報のキーの規則より先に適用し、正規表現ではなく `indexOf` で走査する(入力長に比例する時間。`MaskingSpec` で、入力を 4 倍にしたときの時間の比を検査する)。
   - 秘密情報のキーは広めに照合する。大文字小文字と区切り(`_` / `-` / camelCase / `api key` のような空白)を問わず、`password` / `secret` / `token` / `api key` / `credential` / `authorization` / `cookie` などの語を含むキー(`pass` / `passphrase` は語全体のときだけ。`passed` や `bypass` は対象外)(`newPassword`、`clientSecret`、`x-api-key` など)の値を、引用符の有無によらず伏せる。値が配列やオブジェクト(2 段の入れ子まで)なら中身ごと `"***"` にする。
   - 語を含むだけで伏せるため、`tokenExpiresIn` や `passwordPolicy` のような運用上の値も伏せる。許可リストは設けない(許可リストの漏れは秘密情報の漏洩になり、伏せすぎは調査の手間で済むため)。必要な値は、秘密情報の語を含まないキーで書く。
   - **例外を投げない。** java.util.regex は選択肢を含むグループの繰り返しで 1 文字ごとに再帰するため、書き方によっては長い値でスタックがあふれる(`StackOverflowError`)。logback は `Error` を捕まえないので、ログの記録が業務の処理を失敗させる。引用符の値は展開したループと強欲な量指定子で書き、繰り返すグループには回数の上限を付ける。それでも失敗した場合は、元の文字列ではなく `[masking failed](N chars)` を返す。`MaskingSpec` で、スタックが 1MB のスレッド(Linux x64 の既定)で 16KB の値を伏せられることを検査する。
