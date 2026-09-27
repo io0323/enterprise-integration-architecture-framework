@@ -20,15 +20,16 @@ processors:
   batch: {}
 
 exporters:
-  otlp/tempo:
+  # 名前は Collector v0.144.0 で改名された otlp_grpc / otlp_http を使う(旧名 otlp / otlphttp は非推奨の別名)。
+  otlp_grpc/tempo:
     endpoint: tempo:4317
     tls:
       insecure: true
-  otlphttp/prometheus:
+  otlp_http/prometheus:
     endpoint: http://prometheus:9090/api/v1/otlp
     tls:
       insecure: true
-  otlphttp/loki:
+  otlp_http/loki:
     endpoint: http://loki:3100/otlp
     tls:
       insecure: true
@@ -39,15 +40,15 @@ service:
     traces:
       receivers: [otlp]
       processors: [memory_limiter, batch]
-      exporters: [otlp/tempo]
+      exporters: [otlp_grpc/tempo]
     metrics:
       receivers: [otlp]
       processors: [memory_limiter, batch]
-      exporters: [otlphttp/prometheus]
+      exporters: [otlp_http/prometheus]
     logs:
       receivers: [otlp]
       processors: [memory_limiter, batch]
-      exporters: [otlphttp/loki]
+      exporters: [otlp_http/loki]
   telemetry:
     metrics:
       readers:
