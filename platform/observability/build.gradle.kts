@@ -23,6 +23,7 @@ dependencies {
 
     testImplementation(libs.opentelemetry.sdk.testing)
     testImplementation(libs.ktor.server.test.host)
+    testImplementation(libs.ktor.client.mock)
     testImplementation(libs.kotest.property)
 
     integrationTestImplementation(project(":platform:test-support"))

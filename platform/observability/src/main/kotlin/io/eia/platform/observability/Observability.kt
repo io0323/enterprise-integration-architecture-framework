@@ -66,7 +66,8 @@ public class TelemetrySinks(
  */
 public class ObservabilityRuntime internal constructor(
     public val config: ObservabilityConfig,
-    public val sdk: OpenTelemetrySdk,
+    // SDK の型は公開しない。ほかのモジュールは OTel API の型([openTelemetry] / [tracer] / [meter])だけを使う(ADR-0004 §4)
+    internal val sdk: OpenTelemetrySdk,
 ) : AutoCloseable {
     public val openTelemetry: OpenTelemetry get() = sdk
     public val tracer: Tracer = sdk.getTracer(INSTRUMENTATION_SCOPE)

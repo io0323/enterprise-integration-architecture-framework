@@ -85,7 +85,8 @@ class ArchitectureRulesSpec :
             }
 
             test("OTel SDK を platform/observability と services/*/app 以外の本番コードで使う") {
-                ArchitectureRules.otelSdkOnlyInAllowedModules(violations).fileNames() shouldBe listOf("UsesOtelSdk.kt")
+                ArchitectureRules.otelSdkOnlyInAllowedModules(violations).fileNames() shouldContainExactlyInAnyOrder
+                    listOf("UsesOtelSdk.kt", "UsesOtelSdkQualified.kt")
             }
 
             test("Retryable と NonRetryable の両方を直接・間接に実装する型") {

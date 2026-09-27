@@ -32,7 +32,7 @@ public class OtlpLogAppender : UnsynchronizedAppenderBase<ILoggingEvent>() {
     public var bufferSize: Int = DEFAULT_BUFFER_SIZE
 
     private val lock = Any()
-    private val pending = ArrayDeque<ILoggingEvent>()
+    private val pending = ArrayDeque<Pair<ILoggingEvent, SpanContext?>>()
     private var dropped = 0
 
     @Volatile
@@ -40,21 +40,23 @@ public class OtlpLogAppender : UnsynchronizedAppenderBase<ILoggingEvent>() {
 
     override fun append(event: ILoggingEvent) {
         if (event.loggerName.startsWith(OTEL_LOGGER_PREFIX)) return // 送信部自身のログを送り返さない
+        // span は記録した時点のスレッドで決める(溜めたイベントを後で送るときも、記録時の span を使う)
+        val spanContext = spanContextOf(event.mdcPropertyMap.orEmpty())
         val current = provider
         if (current != null) {
-            emit(current, event, Context.current())
+            emit(current, event, spanContext)
             return
         }
         synchronized(lock) {
             val installed = provider
             when {
                 installed != null -> {
-                    emit(installed, event, Context.current())
+                    emit(installed, event, spanContext)
                 }
 
                 pending.size < bufferSize -> {
                     event.prepareForDeferredProcessing()
-                    pending.addLast(event)
+                    pending.addLast(event to spanContext)
                 }
 
                 else -> {
@@ -67,7 +69,7 @@ public class OtlpLogAppender : UnsynchronizedAppenderBase<ILoggingEvent>() {
     /** OTel を設定し、溜めていたイベントを送る。2 回目以降は送り先を差し替える。 */
     internal fun install(loggerProvider: LoggerProvider) {
         synchronized(lock) {
-            while (pending.isNotEmpty()) emit(loggerProvider, pending.removeFirst(), Context.root())
+            while (pending.isNotEmpty()) pending.removeFirst().let { (event, spanContext) -> emit(loggerProvider, event, spanContext) }
             if (dropped > 0) {
                 loggerProvider
                     .get(OtlpLogAppender::class.java.name)
@@ -88,7 +90,7 @@ public class OtlpLogAppender : UnsynchronizedAppenderBase<ILoggingEvent>() {
     private fun emit(
         loggerProvider: LoggerProvider,
         event: ILoggingEvent,
-        current: Context,
+        spanContext: SpanContext?,
     ) {
         val mdc = event.mdcPropertyMap.orEmpty()
         val builder =
@@ -100,7 +102,7 @@ public class OtlpLogAppender : UnsynchronizedAppenderBase<ILoggingEvent>() {
                 .setSeverityText(event.level.toString())
                 .setBody(Masking.mask(event.formattedMessage.orEmpty()))
                 .setAllAttributes(attributes(event, mdc))
-        spanContextOf(mdc, current)?.let { builder.setContext(Context.root().with(Span.wrap(it))) }
+        spanContext?.let { builder.setContext(Context.root().with(Span.wrap(it))) }
         builder.emit()
     }
 
@@ -115,7 +117,7 @@ public class OtlpLogAppender : UnsynchronizedAppenderBase<ILoggingEvent>() {
         mdc[LogKeys.INTEGRATION_ID]?.let { attributes.put(INTEGRATION_ID, it) }
         mdc
             .filterKeys { it !in LogKeys.ALL }
-            .forEach { (key, value) -> attributes.put(AttributeKey.stringKey(key), Masking.mask(value.orEmpty())) }
+            .forEach { (key, value) -> attributes.put(AttributeKey.stringKey(mdcAttributeName(key)), Masking.mask(value.orEmpty())) }
         event.throwableProxy?.let { proxy ->
             attributes.put(ExceptionAttributes.EXCEPTION_TYPE, proxy.className)
             proxy.message?.let { attributes.put(ExceptionAttributes.EXCEPTION_MESSAGE, Masking.mask(it)) }
@@ -124,22 +126,36 @@ public class OtlpLogAppender : UnsynchronizedAppenderBase<ILoggingEvent>() {
         return attributes.build()
     }
 
-    /** MDC の trace_id / span_id(溜めていたイベントを含む)を優先し、なければ記録時の現在の span を使う。 */
-    private fun spanContextOf(
-        mdc: Map<String, String>,
-        current: Context,
-    ): SpanContext? {
+    /**
+     * 記録時の現在の span(フラグを含む)を優先する。`withSpan` や `makeCurrent()` で作った子の span にログを付けるため。
+     * 現在の span がなければ MDC の trace_id / span_id を使う(フラグは分からないので既定値)。
+     */
+    private fun spanContextOf(mdc: Map<String, String>): SpanContext? =
+        Span.current().spanContext.takeIf { it.isValid } ?: spanContextFromMdc(mdc)
+
+    private fun spanContextFromMdc(mdc: Map<String, String>): SpanContext? {
         val traceId = mdc[LogKeys.TRACE_ID]
         val spanId = mdc[LogKeys.SPAN_ID]
-        if (traceId != null && spanId != null) {
-            return SpanContext.create(traceId, spanId, TraceFlags.getDefault(), TraceState.getDefault()).takeIf { it.isValid }
+        return if (traceId != null && spanId != null) {
+            SpanContext.create(traceId, spanId, TraceFlags.getDefault(), TraceState.getDefault()).takeIf { it.isValid }
+        } else {
+            null
         }
-        return Span.fromContext(current).spanContext.takeIf { it.isValid }
     }
 
     public companion object {
         public const val DEFAULT_BUFFER_SIZE: Int = 1_000
         private const val OTEL_LOGGER_PREFIX = "io.opentelemetry"
+
+        private const val MDC_PREFIX = "mdc."
+
+        /** アペンダが設定する属性の名前。同じ名前の MDC のキーは [MDC_PREFIX] を付けて出す(上書きさせない)。 */
+        private val RESERVED_ATTRIBUTES =
+            setOf("logger", "thread.name", LogKeys.CORRELATION_ID, LogKeys.INTEGRATION_ID) +
+                setOf(ExceptionAttributes.EXCEPTION_TYPE, ExceptionAttributes.EXCEPTION_MESSAGE, ExceptionAttributes.EXCEPTION_STACKTRACE)
+                    .map { it.key }
+
+        private fun mdcAttributeName(key: String): String = if (key in RESERVED_ATTRIBUTES) "$MDC_PREFIX$key" else key
 
         private val LOGGER = AttributeKey.stringKey("logger")
         private val THREAD = AttributeKey.stringKey("thread.name")

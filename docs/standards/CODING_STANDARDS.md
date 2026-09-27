@@ -30,6 +30,7 @@
 - 環境変数: `OTEL_SERVICE_NAME`(`service`)、`EIA_LOG_FORMAT`(`json` / `console`。既定 `json`。ローカルで読みやすくするときだけ `console`)、`EIA_LOG_LEVEL`(root のレベル。既定 `INFO`)。
 - メッセージ・例外・MDC の値は `Masking` が必ず通る。ただしマスキングは最後の防御なので、外部から受け取った値(本文・ヘッダ・ID 以外の項目)はメッセージに含めず、参照キー(注文 ID など)だけを書く。
 - MDC(`trace_id` / `span_id` / `correlation_id` / `integration_id`)は直接書かない。`ObservabilityContext` をコルーチンのコンテキストに入れる(`withContext(...)`)と、スレッドが変わっても保たれる。
+- 子の span は `runtime.withSpan("name") { ... }` で作る。OTel の `span.makeCurrent()` を中断(suspend)をまたいで使わない(Scope がスレッドに結び付き、親がずれる。ADR-0018 §2)。
 
 ## テスト
 - テスト名は日本語可(`"同一Idempotency-Keyの再送は同一結果を返す"`)。

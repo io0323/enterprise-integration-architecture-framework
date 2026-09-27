@@ -5,6 +5,7 @@ import io.opentelemetry.api.common.AttributeKey
 import io.opentelemetry.api.common.Attributes
 import io.opentelemetry.api.common.AttributesBuilder
 import io.opentelemetry.api.metrics.DoubleHistogram
+import io.opentelemetry.api.metrics.LongCounter
 import io.opentelemetry.api.metrics.Meter
 import io.opentelemetry.semconv.ErrorAttributes
 import io.opentelemetry.semconv.HttpAttributes
@@ -30,6 +31,17 @@ public class HttpMetrics(
 ) {
     private val server: DoubleHistogram = meter.durationHistogram("http.server.request.duration", "受信した HTTP リクエストの処理時間")
     private val client: DoubleHistogram = meter.durationHistogram("http.client.request.duration", "送信した HTTP リクエストの時間")
+    private val invalidCorrelationIds: LongCounter =
+        meter
+            .counterBuilder("eia.http.server.correlation_id.invalid")
+            .setUnit("{request}")
+            .setDescription("不正な X-Correlation-Id を受信し、採番し直した件数")
+            .build()
+
+    /** 不正な `X-Correlation-Id` を受信した(採番し直した)件数を数える。 */
+    public fun recordInvalidCorrelationId(integrationId: String?) {
+        invalidCorrelationIds.add(1, integrationId?.let { Attributes.of(INTEGRATION_ID, it) } ?: Attributes.empty())
+    }
 
     public fun recordServer(
         duration: Duration,

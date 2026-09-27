@@ -40,6 +40,7 @@ import kotlin.time.TimeSource
  * - 以降の処理は [ObservabilityContext] の中で動くため、スレッドが変わっても MDC と span の親が保たれる。
  * - RED メトリクス([HttpMetrics])を記録する。リクエストとレスポンスの本文は読まず、ログにも出さない。
  * - 未処理の例外は、Correlation ID と trace_id の付いたログに 1 回だけ記録する(Ktor 自身のログはそれらの外で出るため)。
+ * - 処理のキャンセル(クライアントの切断など)は、応答していないのでステータスを記録せず、エラーにも数えない(ADR-0018 §5)。
  */
 public val ServerObservability: ApplicationPlugin<ServerObservabilityConfig> =
     createApplicationPlugin("EiaServerObservability", ::ServerObservabilityConfig) {
@@ -78,7 +79,11 @@ public val ServerObservability: ApplicationPlugin<ServerObservabilityConfig> =
             call.response.headers.append(CorrelationHeaders.X_CORRELATION_ID, correlationId.value)
 
             withContext(ObservabilityContext(correlationId, integrationId, parent.with(span))) {
-                if (received is Received.Invalid) logger.warn("受信した {} が不正なため、新しく採番しました", CorrelationHeaders.X_CORRELATION_ID)
+                if (received is Received.Invalid) {
+                    // 外部から大量に送られてもログが増えないよう DEBUG にし、件数はメトリクスで見る
+                    logger.debug("受信した {} が不正なため、新しく採番しました", CorrelationHeaders.X_CORRELATION_ID)
+                    metrics.recordInvalidCorrelationId(integrationId)
+                }
                 observe(call, inFlight, metrics) { proceed() }
             }
         }
@@ -128,9 +133,10 @@ private fun complete(
     metrics: HttpMetrics,
     failure: Throwable?,
 ) {
-    // 例外が外まで伝わった場合、Ktor はこの後 500 を返す
-    val status = call.response.status()?.value ?: if (failure != null) SERVER_ERROR else null
-    val exchange = HttpExchange(inFlight.method, status, HttpMetrics.serverErrorType(status, failure))
+    val cancelled = failure is CancellationException
+    // 例外が外まで伝わった場合、Ktor はこの後 500 を返す。キャンセルは応答しないのでステータスもエラーもない
+    val status = call.response.status()?.value ?: if (failure != null && !cancelled) SERVER_ERROR else null
+    val exchange = HttpExchange(inFlight.method, status, if (cancelled) null else HttpMetrics.serverErrorType(status, failure))
     val span = inFlight.span
     status?.let { span.setAttribute(HttpAttributes.HTTP_RESPONSE_STATUS_CODE, it.toLong()) }
     exchange.errorType?.let {
@@ -174,8 +180,12 @@ private val REPEATED_SLASH = Regex("/{2,}")
 private object HeadersGetter : TextMapGetter<Headers> {
     override fun keys(carrier: Headers): Iterable<String> = carrier.names()
 
+    /**
+     * W3C Trace Context §3.3: tracestate は複数行で送られることがあり、`,` で連結して 1 つの値として扱う。
+     * traceparent が複数行ある場合も連結され、不正な値として捨てられる。
+     */
     override fun get(
         carrier: Headers?,
         key: String,
-    ): String? = carrier?.get(key)
+    ): String? = carrier?.getAll(key)?.joinToString(",")
 }
