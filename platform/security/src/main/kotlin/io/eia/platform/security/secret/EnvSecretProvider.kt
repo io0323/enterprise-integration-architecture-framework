@@ -21,7 +21,7 @@ import java.nio.file.Path
  *
  * 両方あるとき・どちらもないとき・値が空のときはエラーにする(どちらが使われるかを曖昧にしないため)。
  * ファイルは呼ばれるたびに読み直す(ファイルの差し替えによるローテーションに追従するため)。
- * ファイルの末尾の改行は 1 つだけ取り除く(`echo` で書いたファイルを想定。値の中の改行は残す)。
+ * ファイルの末尾の改行は 1 つ(`\r\n` か `\n`)だけ取り除く(`echo` で書いたファイルを想定。値の中の改行と、末尾の `\r` だけは残す)。
  *
  * @param environment 環境変数(テストでは Map を渡す)
  */
@@ -86,7 +86,7 @@ public class EnvSecretProvider(
             } catch (_: CharacterCodingException) {
                 return err(SecretMisconfigured(name, "ファイルが UTF-8 ではありません"))
             }
-        val value = text.removeSuffix("\n").removeSuffix("\r")
+        val value = if (text.endsWith("\r\n")) text.dropLast(2) else text.removeSuffix("\n")
         return if (value.isEmpty()) err(SecretMisconfigured(name, "ファイルが空です")) else ok(Secret(value))
     }
 

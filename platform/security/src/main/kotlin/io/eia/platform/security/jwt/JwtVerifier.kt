@@ -21,13 +21,9 @@ import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.err
 import io.eia.shared.kernel.flatMap
 import io.eia.shared.kernel.ok
-import io.opentelemetry.api.common.AttributeKey
-import io.opentelemetry.api.common.Attributes
-import io.opentelemetry.api.metrics.LongCounter
 import io.opentelemetry.api.metrics.Meter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.slf4j.LoggerFactory
 import java.io.Closeable
 import java.security.Key
 import java.text.ParseException
@@ -39,7 +35,7 @@ import kotlin.time.Duration
  *
  * 次の順に検証し、最初に失敗した段の理由([JwtRejectionReason])で拒否する。
  * 1. 形式: JWS であること(`alg=none` の JWT と JWE は拒否する)。大きさの上限([MAX_TOKEN_LENGTH])。
- * 2. ヘッダ: `alg` が [JwtVerifierConfig.algorithms] に含まれること。`typ` が `JWT` / `at+jwt` / なし であること。
+ * 2. ヘッダ: `alg` が [JwtVerifierConfig.algorithms] に含まれること。`typ` が `JWT` / `at+jwt` / `application/at+jwt` / なし であること。
  * 3. 鍵: JWKS から `kid`・アルゴリズム・用途(`use=sig`)に合う公開鍵を選ぶ。未知の `kid` なら JWKS を取り直す(鍵のローテーション)。
  * 4. 署名: 選んだ鍵で検証する。
  * 5. クレーム: `iss`(完全一致)・`aud`(含む)・`exp`・`iat` は必須。`nbf` はあれば検証する。`exp - iat` の上限。
@@ -77,12 +73,15 @@ public class JwtVerifier internal constructor(
     private val algorithms: Set<JWSAlgorithm> = config.algorithms.map(JWSAlgorithm::parse).toSet()
     private val keySelector = JWSVerificationKeySelector(algorithms, jwkSource)
     private val verifierFactory = DefaultJWSVerifierFactory()
-    private val rejections: LongCounter? =
-        meter
-            ?.counterBuilder(REJECTIONS_METRIC)
-            ?.setDescription("拒否したアクセストークンの件数(理由別)")
-            ?.setUnit("{token}")
-            ?.build()
+
+    /**
+     * 直前の鍵の取得が失敗したか(JWKS を取得できず、使える JWKS もなかったか)。
+     * Nimbus の取り直しの頻度の制限は、失敗した取得も 1 回と数える。IdP が止まっている間に制限にかかったリクエストを、
+     * 鍵が見つからない(401)ではなく検証できない(503)にするために使う。
+     */
+    @Volatile
+    private var keysUnavailable: Boolean = false
+    private val recorder = JwtRejectionRecorder(meter)
 
     /** [token](`Authorization: Bearer` の値)を検証する。 */
     public suspend fun verify(token: String): Result<VerifiedToken, JwtVerificationError> =
@@ -90,7 +89,7 @@ public class JwtVerifier internal constructor(
 
     internal fun verifyBlocking(token: String): Result<VerifiedToken, JwtVerificationError> {
         val result = check(token)
-        if (result is Result.Err) record(result.error)
+        if (result is Result.Err) recorder.record(result.error)
         return result
     }
 
@@ -131,16 +130,7 @@ public class JwtVerifier internal constructor(
 
     /** 3・4. 鍵を選び、署名を検証する。通ったらクレームを取り出す。 */
     private fun checkSignature(jwt: SignedJWT): Result<JWTClaimsSet, JwtVerificationError> {
-        val keys: List<Key> =
-            try {
-                keySelector.selectJWSKeys(jwt.header, null)
-            } catch (_: RateLimitReachedException) {
-                // 未知の kid で取り直そうとしたが、最小の間隔の中だった。手元の JWKS に鍵がないので、鍵が見つからないとする
-                // (KeySourceException の子なので先に捕まえる。503 にすると、未知の kid を送るだけで 503 を返させられる)
-                emptyList()
-            } catch (_: KeySourceException) {
-                return err(JwtVerificationError.KeysUnavailable)
-            }
+        val keys = selectKeys(jwt) ?: return err(JwtVerificationError.KeysUnavailable)
         return when {
             keys.isEmpty() -> {
                 reject(JwtRejectionReason.UNKNOWN_KEY)
@@ -159,6 +149,20 @@ public class JwtVerifier internal constructor(
             }
         }
     }
+
+    /** JWKS から鍵を選ぶ。JWKS を取得できず検証できないときは null。 */
+    private fun selectKeys(jwt: SignedJWT): List<Key>? =
+        try {
+            keySelector.selectJWSKeys(jwt.header, null).also { keysUnavailable = false }
+        } catch (_: RateLimitReachedException) {
+            // 取り直そうとしたが、最小の間隔の中だった(KeySourceException の子なので先に捕まえる)。
+            // - 直前の取得が失敗していた(IdP が止まり、使える JWKS がない): 検証できないので null(503)
+            // - そうでなければ、手元の JWKS に鍵がない: 空(401。未知の kid を送るだけで 503 を返させないため)
+            if (keysUnavailable) null else emptyList()
+        } catch (_: KeySourceException) {
+            keysUnavailable = true
+            null
+        }
 
     private fun verifies(
         jwt: SignedJWT,
@@ -198,16 +202,6 @@ public class JwtVerifier internal constructor(
         return if (reason != null) reject(reason) else ok(claims.toVerifiedToken())
     }
 
-    private fun record(error: JwtVerificationError) {
-        val reason = (error as? JwtVerificationError.InvalidToken)?.reason?.code ?: error.code
-        rejections?.add(1, Attributes.of(REASON, reason))
-        if (error is JwtVerificationError.KeysUnavailable) {
-            logger.warn("JWKS を取得できないため、アクセストークンを検証できません")
-        } else {
-            logger.debug("アクセストークンを拒否しました reason={}", reason)
-        }
-    }
-
     override fun close() {
         (jwkSource as? Closeable)?.close()
     }
@@ -216,14 +210,10 @@ public class JwtVerifier internal constructor(
         /** トークンの文字列の長さの上限。解析の前に弾き、巨大な入力の解析に時間とメモリを使わせない。 */
         public const val MAX_TOKEN_LENGTH: Int = 8 * 1024
 
-        public const val REJECTIONS_METRIC: String = "eia.security.jwt.rejections"
+        public const val REJECTIONS_METRIC: String = JwtRejectionRecorder.METRIC
 
-        private val REASON: AttributeKey<String> = AttributeKey.stringKey("reason")
-
-        /** RFC 9068 の `at+jwt` と、Keycloak などが付ける `JWT`。 */
-        private val ACCEPTED_TYPES = setOf(JOSEObjectType.JWT, JOSEObjectType("at+jwt"))
-
-        private val logger = LoggerFactory.getLogger(JwtVerifier::class.java)
+        /** RFC 9068 §2.1 の `at+jwt`(`application/at+jwt` も可)と、Keycloak などが付ける `JWT`。 */
+        private val ACCEPTED_TYPES = setOf(JOSEObjectType.JWT, JOSEObjectType("at+jwt"), JOSEObjectType("application/at+jwt"))
 
         private fun retriever(jwks: JwksConfig): ResourceRetriever =
             DefaultResourceRetriever(

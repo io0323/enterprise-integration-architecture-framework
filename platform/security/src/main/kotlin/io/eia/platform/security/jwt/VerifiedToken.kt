@@ -67,7 +67,7 @@ public enum class JwtRejectionReason(
     /** 受け付けない署名アルゴリズム(HS 系・設定にないアルゴリズム)。 */
     DISALLOWED_ALGORITHM("disallowed_alg"),
 
-    /** ヘッダの `typ` が `JWT` / `at+jwt` / なし のどれでもない。 */
+    /** ヘッダの `typ` が `JWT` / `at+jwt` / `application/at+jwt` / なし のどれでもない。 */
     BAD_TYPE("bad_type"),
 
     /** `kid` とアルゴリズムに合う公開鍵が JWKS にない(取り直しても見つからない)。 */

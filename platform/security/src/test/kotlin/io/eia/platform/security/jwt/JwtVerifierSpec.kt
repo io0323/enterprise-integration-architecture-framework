@@ -14,6 +14,7 @@ import io.eia.shared.kernel.Result
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactly
+import io.kotest.matchers.equals.shouldBeEqual
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
@@ -90,6 +91,7 @@ class JwtVerifierSpec :
 
             test("typ が at+jwt(RFC 9068)でも、typ がなくても通す") {
                 verifier.rejection(signRsa(claims(), type = JOSEObjectType("at+jwt"))) shouldBe null
+                verifier.rejection(signRsa(claims(), type = JOSEObjectType("application/at+jwt"))) shouldBe null
                 verifier.rejection(signRsa(claims(), type = null)) shouldBe null
             }
 
@@ -212,7 +214,7 @@ class JwtVerifierSpec :
             test("鍵を取得できなければ KeysUnavailable(トークンの正否は判断しない)") {
                 val failing = JWKSource<SecurityContext> { _, _ -> throw KeySourceException("down") }
 
-                verifier(source = failing).verifyBlocking(signRsa(claims())) shouldBe Result.Err(JwtVerificationError.KeysUnavailable)
+                verifier(source = failing).verifyBlocking(signRsa(claims())) shouldBeEqual Result.Err(JwtVerificationError.KeysUnavailable)
             }
         }
 

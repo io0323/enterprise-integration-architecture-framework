@@ -5,6 +5,7 @@ import com.nimbusds.jose.util.Resource
 import com.nimbusds.jose.util.ResourceRetriever
 import io.eia.shared.kernel.Result
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.equals.shouldBeEqual
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import java.io.IOException
@@ -92,7 +93,7 @@ class JwksRotationSpec :
 
                 val results = (1..50).map { verifier.verifyBlocking(token(TestKeys.rsaUnknown)) }
 
-                results.forEach { it shouldBe Result.Err(JwtVerificationError.InvalidToken(JwtRejectionReason.UNKNOWN_KEY)) }
+                results.forEach { it shouldBeEqual Result.Err(JwtVerificationError.InvalidToken(JwtRejectionReason.UNKNOWN_KEY)) }
                 // 最初の取得 + 未知の kid による取り直し(最小の間隔の中では 1 回だけ)
                 (idp.fetches.get() <= 2) shouldBe true
             }
@@ -118,11 +119,51 @@ class JwksRotationSpec :
 
                 // outageTolerance も過ぎた
                 Thread.sleep(900)
-                verifier.verifyBlocking(token(TestKeys.rsa)) shouldBe Result.Err(JwtVerificationError.KeysUnavailable)
+                verifier.verifyBlocking(token(TestKeys.rsa)) shouldBeEqual Result.Err(JwtVerificationError.KeysUnavailable)
 
                 // IdP が戻れば、また検証できる
                 idp.down = false
                 verifier.verifyBlocking(token(TestKeys.rsa)).shouldBeInstanceOf<Result.Ok<VerifiedToken>>()
+            }
+        }
+
+        test("IdP が止まって使える JWKS がないとき、取り直しの頻度の制限の中でも、すべて 503(KeysUnavailable)にする") {
+            // 起動直後から IdP が止まっている
+            val idp = FakeIdp(TestKeys.jwks(TestKeys.rsa)).apply { down = true }
+            rotatingVerifier(idp, jwksConfig(rateLimit = 30.seconds)).use { verifier ->
+                repeat(5) {
+                    verifier.verifyBlocking(token(TestKeys.rsa)) shouldBeEqual Result.Err(JwtVerificationError.KeysUnavailable)
+                }
+            }
+        }
+
+        test("outageTolerance を過ぎた後も、取り直しの頻度の制限の中のリクエストは 503 のまま。IdP が戻れば検証できる") {
+            val idp = FakeIdp(TestKeys.jwks(TestKeys.rsa))
+            val config =
+                jwksConfig(
+                    cacheTtl = 400.milliseconds,
+                    refreshAhead = 50.milliseconds,
+                    refreshTimeout = 100.milliseconds,
+                    rateLimit = 300.milliseconds,
+                    outage = 600.milliseconds,
+                )
+            rotatingVerifier(idp, config).use { verifier ->
+                verifier.verifyBlocking(token(TestKeys.rsa)).shouldBeInstanceOf<Result.Ok<VerifiedToken>>()
+                idp.down = true
+                Thread.sleep(800)
+
+                repeat(5) {
+                    verifier.verifyBlocking(token(TestKeys.rsa)) shouldBeEqual Result.Err(JwtVerificationError.KeysUnavailable)
+                }
+
+                idp.down = false
+                Thread.sleep(350)
+                verifier.verifyBlocking(token(TestKeys.rsa)).shouldBeInstanceOf<Result.Ok<VerifiedToken>>()
+                // IdP が戻った後は、未知の kid は頻度の制限の中でも 401 に戻る
+                repeat(3) {
+                    verifier.verifyBlocking(token(TestKeys.rsaUnknown)) shouldBeEqual
+                        Result.Err(JwtVerificationError.InvalidToken(JwtRejectionReason.UNKNOWN_KEY))
+                }
             }
         }
     })

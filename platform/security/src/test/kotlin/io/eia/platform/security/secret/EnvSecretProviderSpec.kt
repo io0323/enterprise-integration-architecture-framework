@@ -38,6 +38,8 @@ class EnvSecretProviderSpec :
             }
             val multiline = file("multi", "line1\nline2\n\n".toByteArray())
             EnvSecretProvider(mapOf("ORDER_DB_PASSWORD_FILE" to multiline)).get(NAME).value() shouldBe "line1\nline2\n"
+            val carriageReturn = file("cr", "value\r".toByteArray())
+            EnvSecretProvider(mapOf("ORDER_DB_PASSWORD_FILE" to carriageReturn)).get(NAME).value() shouldBe "value\r"
         }
 
         test("ファイルは呼ばれるたびに読み直す(ファイルの差し替えによるローテーション)") {

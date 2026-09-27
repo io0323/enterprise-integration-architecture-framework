@@ -65,15 +65,8 @@ internal object BearerChallenge {
     private const val SCHEME = "Bearer"
     private val PROBLEM_JSON = ContentType("application", "problem+json")
 
-    /** RFC 6749 §3.3 の scope-token(`%x21 / %x23-5B / %x5D-7E`)。`"` と `\` と空白を含まない。 */
-    private val SCOPE_TOKEN = Regex("[\\x21\\x23-\\x5B\\x5D-\\x7E]+")
-
     /** realm は quoted-string に入れるため、`"` と `\` と制御文字を含まない印字可能な ASCII に限る。 */
     private val REALM = Regex("[\\x20\\x21\\x23-\\x5B\\x5D-\\x7E]+")
-
-    fun requireValidScope(scope: String) {
-        require(SCOPE_TOKEN.matches(scope)) { "スコープの形式が不正です(RFC 6749 §3.3 の scope-token): $scope" }
-    }
 
     fun requireValidRealm(realm: String) {
         require(REALM.matches(realm)) { "realm に使えない文字が含まれています" }
