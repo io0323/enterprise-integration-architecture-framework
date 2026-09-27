@@ -162,6 +162,25 @@ class ClientCredentialsTokenProviderSpec :
                 provider.token().token() shouldBe "at-2"
             }
 
+            test("maxCacheLifetime を過ぎたら、取り直しに失敗しても長い expires_in のトークンを使い続けない") {
+                val endpoint =
+                    FakeTokenEndpoint(
+                        FakeTokenEndpoint.ok(tokenJson("at-1", expiresIn = 86_400)),
+                        FakeTokenEndpoint.status(HttpStatusCode.ServiceUnavailable),
+                    )
+                val clock = MutableClock()
+                val provider = provider(endpoint, clock)
+                provider.token()
+
+                // 打ち切った期限(1 時間)の前なら、取り直しに失敗しても期限内のトークンを使い続ける
+                clock.now = NOW + 59.minutes + 40.seconds
+                provider.token().token() shouldBe "at-1"
+
+                // 打ち切った期限を過ぎたら、IdP の expires_in(24 時間)の中でも失敗を返す
+                clock.now = NOW + 60.minutes
+                provider.token().error() shouldBe TokenEndpointUnavailable("server_error", 503)
+            }
+
             test("expires_in のない応答はキャッシュしない(期限が分からないため)") {
                 val endpoint = FakeTokenEndpoint(FakeTokenEndpoint.ok(tokenJson(expiresIn = null)))
                 val provider = provider(endpoint)

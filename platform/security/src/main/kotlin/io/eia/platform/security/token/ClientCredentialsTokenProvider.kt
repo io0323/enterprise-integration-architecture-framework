@@ -120,7 +120,7 @@ public class ClientCredentialsTokenProvider(
         return when (fetched) {
             is Result.Ok -> {
                 val token = fetched.value
-                cached = token.expiresAt?.let { Cached(token, refreshAt(requestedAt = now, expiresAt = it)) }
+                cached = token.expiresAt?.let { cache(token, requestedAt = now, expiresAt = it) }
                 retryNotBefore = null
                 ok(token)
             }
@@ -147,16 +147,18 @@ public class ClientCredentialsTokenProvider(
     private fun isRetryDeferred(now: Instant): Boolean = retryNotBefore?.let { now < it } ?: false
 
     /**
-     * 期限の手前で取り直す時刻。寿命の 10% と [ClientCredentialsConfig.refreshBefore] の小さい方だけ前にする。
-     * 寿命は [ClientCredentialsConfig.maxCacheLifetime] で打ち切る。
+     * 使い続けてよい期限を [ClientCredentialsConfig.maxCacheLifetime] で打ち切り、その手前で取り直す。
+     * 取り直す時刻は、寿命の 10% と [ClientCredentialsConfig.refreshBefore] の小さい方だけ前にする。
+     * 打ち切った期限は、取り直しに失敗したときに期限内のトークンを使い続ける判定にも使う(IdP の `expires_in` まで延ばさない)。
      */
-    private fun refreshAt(
+    private fun cache(
+        token: AccessToken,
         requestedAt: Instant,
         expiresAt: Instant,
-    ): Instant {
+    ): Cached {
         val until = minOf(expiresAt, requestedAt + config.maxCacheLifetime)
         val margin = minOf(config.refreshBefore, (until - requestedAt) / REFRESH_LIFETIME_DIVISOR)
-        return until - margin
+        return Cached(token, refreshAt = until - margin, validUntil = until)
     }
 
     @Suppress("ReturnCount") // Secret の取得・送信・タイムアウトのそれぞれの失敗で返す
@@ -233,8 +235,9 @@ public class ClientCredentialsTokenProvider(
     private class Cached(
         val token: AccessToken,
         val refreshAt: Instant,
+        val validUntil: Instant,
     ) {
-        fun isValidAt(now: Instant): Boolean = token.expiresAt?.let { now < it } ?: false
+        fun isValidAt(now: Instant): Boolean = now < validUntil
     }
 
     private class Exchange(
