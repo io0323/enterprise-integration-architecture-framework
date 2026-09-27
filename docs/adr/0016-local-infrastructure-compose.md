@@ -105,3 +105,4 @@ Docker のヘルスチェックはコンテナの中で実行されるため、�
 ## 改訂履歴
 - 2026-09-26: §5 のヘルパーの置き場所を `platform/test-support` に決め、CI の `integration` ジョブを追加した(P04a ①)。
 - 2026-09-26: 変数名の例のファイルを `infra/local/.env.example` から `infra/local/env.example` に改名した。`.claude/settings.json` の deny は allow より優先され、`Read(**/.env.*)` から例のファイルだけを除外できないため、秘密情報の `.env.*` をすべて deny にしたうえで例のファイルを読めるようにするには、名前を変えるしかない(P04a ① のレビュー Major 1)。
+- 2026-09-27: Debezium Connect(`quay.io/debezium/connect:3.6.3.Final`)のダイジェストを `sha256:a41a03c0…` に更新した。上流でタグが付け直され、固定していた `sha256:c51aab05…` が quay.io から削除されて `manifest unknown` になり、`verify (cdc)` が失敗したため。新しいダイジェストが linux/amd64 と linux/arm64 を含むことは `docker buildx imagetools inspect` で確認した(§2)。ダイジェストで固定していても、上流が削除すると取得できなくなる点は §2 の運用(更新手順)で扱う。
