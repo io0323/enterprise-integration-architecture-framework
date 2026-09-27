@@ -2,6 +2,7 @@ package io.eia.platform.observability.logging
 
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
 import kotlin.time.Duration.Companion.seconds
 
@@ -98,6 +99,37 @@ class MaskingSpec :
                 }
             }
 
+            listOf(
+                "閉じない見出しの連続" to "-----BEGIN A-----".repeat(3_800),
+                "見出しの形でない BEGIN の連続" to "-----BEGIN a".repeat(5_000),
+                "形の崩れた END の連続" to ("-----BEGIN A-----" + "-----END a".repeat(6_000)),
+                "ラベルの長すぎる見出しの連続" to ("-----BEGIN " + "A".repeat(70)).repeat(800),
+            ).forEach { (name, input) ->
+                test("PEM: $name(${input.length} 文字)") {
+                    val elapsed = kotlin.time.measureTime { Masking.mask(input) }
+
+                    (elapsed < budget) shouldBe true
+                }
+            }
+
+            test("PEM: 入力を 4 倍にしても時間は 4 倍程度(入力長の 2 乗なら 16 倍)") {
+                fun minTime(input: String) =
+                    (1..10).minOf {
+                        kotlin.time
+                            .measureTime { Masking.mask(input) }
+                            .inWholeMicroseconds
+                            .coerceAtLeast(1)
+                    }
+                listOf("-----BEGIN a", "-----BEGIN A-----x-----END a").forEach { unit ->
+                    val small = unit.repeat(Masking.MAX_INPUT_LENGTH / 4 / unit.length)
+                    val large = unit.repeat(Masking.MAX_INPUT_LENGTH / unit.length)
+                    repeat(3) { Masking.mask(large) } // JIT のウォームアップ
+                    val ratio = minTime(large).toDouble() / minTime(small)
+
+                    (ratio < 10.0) shouldBe true
+                }
+            }
+
             test("JWT らしい語の連続(eyJ-)") {
                 val elapsed = kotlin.time.measureTime { Masking.mask("eyJ-".repeat(16 * 1024)) }
 
@@ -110,6 +142,41 @@ class MaskingSpec :
 
                 masked.startsWith("x".repeat(half) + "…[truncated ") shouldBe true
                 masked.endsWith("Caused by: java.io.IOException: root") shouldBe true
+            }
+        }
+
+        context("PEM の塊") {
+            val body = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7"
+
+            test("引用符のない toString() の値でも、見出しから終わりまで丸ごと伏せる(レビューで見つかった見逃し)") {
+                val input = "Creds(privateKey=-----BEGIN PRIVATE KEY-----\n$body\n$body\n-----END PRIVATE KEY-----, user=a)"
+
+                Masking.mask(input) shouldBe "Creds(privateKey=***, user=a)"
+            }
+
+            test("改行の種類・JSON のエスケープ・改行なしのどれでも伏せる") {
+                val crlf = "key:\r\n-----BEGIN RSA PRIVATE KEY-----\r\n$body\r\n-----END RSA PRIVATE KEY-----\r\nnext"
+                val json = """{"pem":"-----BEGIN EC PRIVATE KEY-----\\n$body\\n-----END EC PRIVATE KEY-----\\n","n":1}"""
+                val oneLine = "-----BEGIN PRIVATE KEY-----$body-----END PRIVATE KEY----- tail"
+
+                Masking.mask(crlf) shouldBe "key:\r\n***\r\nnext"
+                Masking.mask(json) shouldNotContain body
+                Masking.mask(json) shouldContain "\"n\":1"
+                Masking.mask(oneLine) shouldBe "*** tail"
+            }
+
+            test("キーのない塊・複数の塊・閉じない塊(入力の末尾まで)") {
+                Masking.mask(
+                    "a -----BEGIN CERTIFICATE-----$body-----END CERTIFICATE----- b -----BEGIN X-----$body-----END X----- c",
+                ) shouldBe
+                    "a *** b *** c"
+                Masking.mask("head -----BEGIN OPENSSH PRIVATE KEY-----\n$body\n(truncated") shouldBe "head ***"
+            }
+
+            test("見出しの形でないものは伏せない(ラベルは英大文字・数字・空白の 1〜64 文字)") {
+                Masking.mask("-----BEGIN lower-----x") shouldBe "-----BEGIN lower-----x"
+                Masking.mask("-----BEGIN -----x") shouldBe "-----BEGIN -----x"
+                Masking.mask("----- separator -----") shouldBe "----- separator -----"
             }
         }
 
@@ -157,6 +224,8 @@ class MaskingSpec :
                 "引用符で囲んだ 16KB のアクセストークン" to ("""{"access_token":"""" + "a".repeat(16_000) + """"}"""),
                 "閉じない一重引用符の PEM" to "private_key='$pem",
                 "エスケープの多い値" to ("""password="""" + "\\a".repeat(3_000) + "\""),
+                "16KB の本文の PEM" to
+                    ("-----BEGIN PRIVATE KEY-----\n" + "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n".repeat(500) + "-----END PRIVATE KEY-----"),
             ).forEach { (name, input) ->
                 test(name) {
                     var masked: String? = null
