@@ -84,6 +84,10 @@ class ArchitectureRulesSpec :
                     listOf("UsesTestSupportInMain.kt", "UsesTestSupportQualified.kt")
             }
 
+            test("OTel SDK を platform/observability と services/*/app 以外の本番コードで使う") {
+                ArchitectureRules.otelSdkOnlyInAllowedModules(violations).fileNames() shouldBe listOf("UsesOtelSdk.kt")
+            }
+
             test("Retryable と NonRetryable の両方を直接・間接に実装する型") {
                 ArchitectureRules
                     .domainErrorKindIsExclusive(
@@ -107,10 +111,11 @@ class ArchitectureRulesSpec :
                 ArchitectureRules.noKotlinResult(compliant).shouldBeEmpty()
             }
 
-            test("shared の許可リスト・DomainError 分類の排他・test-support の参照元") {
+            test("shared の許可リスト・DomainError 分類の排他・test-support の参照元・OTel SDK の配置") {
                 ArchitectureRules.sharedImportAllowList(compliant).shouldBeEmpty()
                 ArchitectureRules.testSupportOnlyFromTests(compliant).shouldBeEmpty()
                 ArchitectureRules.domainErrorKindIsExclusive(compliant).shouldBeEmpty()
+                ArchitectureRules.otelSdkOnlyInAllowedModules(compliant).shouldBeEmpty()
             }
         }
 
