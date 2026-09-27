@@ -15,7 +15,7 @@ package io.eia.platform.observability.logging
  * 3. JWT(`eyJ` で始まる 3 区画)と、キーのない `Bearer` / `Basic` の資格情報(資格情報らしい値だけ。[looksLikeCredential])
  * 4. メールアドレス
  * 5. カード番号(13〜19 桁。Luhn の検査に通るものだけ)
- * 6. 電話番号(E.164 の `+` 始まり、`-` か空白で区切った国内の番号、区切りのない携帯の 11 桁)
+ * 6. 電話番号(E.164 の `+` 始まり、携帯の 11 桁(区切りは `-`・空白・なし)、`-` で区切った固定電話)
  */
 public object Masking {
     public const val TOKEN: String = "[token]"
@@ -28,7 +28,9 @@ public object Masking {
     public val SENSITIVE_HEADERS: Set<String> =
         setOf("authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key", "x-amz-security-token")
 
-    private val USERINFO = Regex("""(?i)\b([a-z][a-z0-9+.-]*://)[^\s/@:]+:[^\s/@]+@""")
+    // 正規表現は、どの開始位置でも読む長さに上限があるようにする(長い入力で入力長の 2 乗の時間がかからないように)。
+    // 開始位置は後読みで語の先頭に限り、繰り返しには上限を付ける。回帰テストは MaskingSpec の「処理時間」。
+    private val USERINFO = Regex("""(?i)(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,31}://)[^\s/@:?#]{1,256}:[^\s/@?#]{1,256}@""")
 
     /** 秘密情報を表す語。キーの一部に含まれていれば秘密情報のキーとみなす。 */
     private val SECRET_WORDS =
@@ -37,40 +39,49 @@ public object Masking {
             "pwd",
             "secret",
             "token",
-            "api[_-]?key",
-            "access[_-]?key",
-            "private[_-]?key",
+            "api[_\\s-]?key",
+            "access[_\\s-]?key",
+            "private[_\\s-]?key",
             "credentials?",
             "authorization",
             "cookie",
         ).joinToString("|")
 
-    /** キー(前後に英数字と `_` `-` を許す)。引用符で囲まれていてもよい。 */
-    private const val KEY_AFFIX = "[A-Za-z0-9_-]*"
+    /** キーの前後に付く語(英数字と `_` `-`。32 文字まで)。 */
+    private const val KEY_AFFIX = "[A-Za-z0-9_-]{0,32}"
+
+    /**
+     * 値: 引用符で囲んだ文字列、1 段の配列・オブジェクト(中身ごと伏せる)、引用符のない値(`Bearer xxx` を含む)。
+     * 入れ子の深い配列・オブジェクトは先頭の括弧だけが対象になるが、中の秘密情報のキーは別に伏せられる。
+     */
+    private const val SECRET_VALUE =
+        """"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\[[^\[\]]{0,4096}]|\{[^{}]{0,4096}}|(?:(?:bearer|basic)\s+)?[^\s,;&})\]"'\[{]+"""
 
     private val SECRET_PAIR =
-        Regex(
-            """(?i)(["']?\b$KEY_AFFIX(?:$SECRET_WORDS)$KEY_AFFIX["']?\s*[=:]\s*)""" +
-                """("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|(?:(?:bearer|basic)\s+)?[^\s,;&})\]"']+)""",
-        )
+        Regex("""(?i)(["']?(?<![A-Za-z0-9_-])$KEY_AFFIX(?:$SECRET_WORDS)$KEY_AFFIX["']?\s*[=:]\s*)($SECRET_VALUE)""")
 
     private val JWT = Regex("""\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*""")
     private val AUTH_SCHEME = Regex("""(?i)\b(bearer|basic)(\s+)([A-Za-z0-9._~+/=-]+)""")
 
-    private val EMAIL_ADDRESS = Regex("""[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}""")
+    private val EMAIL_ADDRESS =
+        Regex("""(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}\.[A-Za-z]{2,24}""")
     private val CARD_CANDIDATE = Regex("""(?<![\w-])\d(?:[ -]?\d){12,18}(?![\w-])""")
     private val PHONE_NUMBER =
-        Regex("""(?<![\w-])(?:\+\d{1,3}[ -]?\d{1,4}(?:[ -]?\d{2,4}){1,3}|0\d{1,4}[ -]\d{1,4}[ -]\d{3,4}|0[789]0\d{8})(?![\w-])""")
+        Regex("""(?<![\w-])(?:\+\d{1,3}[ -]?\d{1,4}(?:[ -]?\d{2,4}){1,3}|0[789]0[ -]?\d{4}[ -]?\d{4}|0\d{1,4}-\d{1,4}-\d{4})(?![\w-])""")
 
     private const val MIN_CARD_DIGITS = 13
     private const val MAX_CARD_DIGITS = 19
     private const val MIN_CREDENTIAL_LENGTH = 8
     private val CREDENTIAL_SYMBOL = Regex("[0-9._~+/=-]")
 
-    /** [text] の中のトークン・秘密情報・個人情報を伏せた文字列を返す。 */
+    /** これより長い文字列は切り詰めてから伏せる(ログの 1 件の大きさと、マスキングの処理時間の上限)。 */
+    public const val MAX_LENGTH: Int = 16 * 1024
+
+    /** [text] の中のトークン・秘密情報・個人情報を伏せた文字列を返す。[MAX_LENGTH] を超えた分は切り詰める。 */
     public fun mask(text: String): String {
         if (text.isEmpty()) return text
-        var masked = USERINFO.replace(text) { "${it.groupValues[1]}$SECRET:$SECRET@" }
+        val bounded = if (text.length > MAX_LENGTH) "${text.take(MAX_LENGTH)}…[truncated ${text.length - MAX_LENGTH} chars]" else text
+        var masked = USERINFO.replace(bounded) { "${it.groupValues[1]}$SECRET:$SECRET@" }
         masked = SECRET_PAIR.replace(masked) { "${it.groupValues[1]}${quoted(it.groupValues[2])}" }
         masked = JWT.replace(masked, TOKEN)
         masked =
@@ -94,7 +105,12 @@ public object Masking {
     private fun quoted(value: String): String =
         when (value.firstOrNull()) {
             '"' -> "\"$SECRET\""
+
             '\'' -> "'$SECRET'"
+
+            '[', '{' -> "\"$SECRET\""
+
+            // 配列・オブジェクトは中身ごと 1 つの文字列にして、JSON の形を保つ
             else -> SECRET
         }
 

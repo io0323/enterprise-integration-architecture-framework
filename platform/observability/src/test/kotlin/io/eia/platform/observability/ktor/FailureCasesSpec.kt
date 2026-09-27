@@ -100,6 +100,24 @@ class FailureCasesSpec :
                 }
             }
 
+            test("タイムアウト(withTimeout の期限切れ)は error.type=timeout でエラーに数える") {
+                TestTelemetry().use { telemetry ->
+                    val client =
+                        mockClient(telemetry) {
+                            kotlinx.coroutines.delay(10_000)
+                            HttpStatusCode.OK
+                        }
+
+                    shouldThrow<kotlinx.coroutines.TimeoutCancellationException> {
+                        kotlinx.coroutines.withTimeout(50) { client.get("http://inventory:8080/v1/stock") }
+                    }
+                    val span = telemetry.spans.single()
+
+                    span.status.statusCode shouldBe StatusCode.ERROR
+                    span.attributes.get(ERROR_TYPE) shouldBe "timeout"
+                }
+            }
+
             test("明示的な X-Correlation-Id は、正しければ送って span にも入れ、不正ならコンテキストの値に置き換える") {
                 TestTelemetry().use { telemetry ->
                     val sent = mutableListOf<Headers>()
@@ -224,6 +242,7 @@ class FailureCasesSpec :
                     val log = telemetry.logs.single { it.bodyValue?.asString() == "在庫を引き当てます" }
 
                     child.parentSpanId shouldBe server.spanId
+                    child.attributes.get(CORRELATION) shouldBe "with-span-1"
                     outgoing.parentSpanId shouldBe child.spanId
                     outgoing.attributes.get(CORRELATION) shouldBe "with-span-1"
                     log.spanContext.spanId shouldBe child.spanId
@@ -243,7 +262,12 @@ class FailureCasesSpec :
                     failed.status.statusCode shouldBe StatusCode.ERROR
                     failed.attributes.get(ERROR_TYPE) shouldBe "java.lang.IllegalStateException"
                     failed.events.shouldBeEmpty()
-                    CorrelationId.parse(seen?.correlationId?.value.orEmpty()).ok()
+                    val generated = CorrelationId.parse(seen?.correlationId?.value.orEmpty()).ok()
+                    // 採番した Correlation ID を span の属性にも残す
+                    telemetry.spans
+                        .single { it.name == "job2" }
+                        .attributes
+                        .get(CORRELATION) shouldBe generated.value
                 }
             }
         }

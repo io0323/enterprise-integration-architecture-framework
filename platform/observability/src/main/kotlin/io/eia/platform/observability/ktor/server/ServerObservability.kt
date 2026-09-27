@@ -40,7 +40,8 @@ import kotlin.time.TimeSource
  * - 以降の処理は [ObservabilityContext] の中で動くため、スレッドが変わっても MDC と span の親が保たれる。
  * - RED メトリクス([HttpMetrics])を記録する。リクエストとレスポンスの本文は読まず、ログにも出さない。
  * - 未処理の例外は、Correlation ID と trace_id の付いたログに 1 回だけ記録する(Ktor 自身のログはそれらの外で出るため)。
- * - 処理のキャンセル(クライアントの切断など)は、応答していないのでステータスを記録せず、エラーにも数えない(ADR-0018 §5)。
+ * - 処理のキャンセル(クライアントの切断など)は、応答していないのでステータスを記録せず、エラーにも数えない。
+ *   タイムアウトは `error.type=timeout` でエラーに数える(ADR-0018 §5)。
  */
 public val ServerObservability: ApplicationPlugin<ServerObservabilityConfig> =
     createApplicationPlugin("EiaServerObservability", ::ServerObservabilityConfig) {
@@ -133,10 +134,10 @@ private fun complete(
     metrics: HttpMetrics,
     failure: Throwable?,
 ) {
-    val cancelled = failure is CancellationException
-    // 例外が外まで伝わった場合、Ktor はこの後 500 を返す。キャンセルは応答しないのでステータスもエラーもない
-    val status = call.response.status()?.value ?: if (failure != null && !cancelled) SERVER_ERROR else null
-    val exchange = HttpExchange(inFlight.method, status, if (cancelled) null else HttpMetrics.serverErrorType(status, failure))
+    // 例外が外まで伝わった場合、Ktor はこの後 500 を返す。キャンセルは応答しないのでステータスはない
+    // (タイムアウトは error.type=timeout、それ以外のキャンセルはエラーにしない。HttpMetrics.failureErrorType)
+    val status = call.response.status()?.value ?: if (failure != null && failure !is CancellationException) SERVER_ERROR else null
+    val exchange = HttpExchange(inFlight.method, status, HttpMetrics.serverErrorType(status, failure))
     val span = inFlight.span
     status?.let { span.setAttribute(HttpAttributes.HTTP_RESPONSE_STATUS_CODE, it.toLong()) }
     exchange.errorType?.let {
