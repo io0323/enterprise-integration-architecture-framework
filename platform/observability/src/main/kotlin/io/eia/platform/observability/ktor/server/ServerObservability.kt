@@ -25,6 +25,7 @@ import io.opentelemetry.context.propagation.TextMapGetter
 import io.opentelemetry.semconv.ErrorAttributes
 import io.opentelemetry.semconv.HttpAttributes
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import kotlin.time.TimeMark
@@ -41,7 +42,7 @@ import kotlin.time.TimeSource
  * - RED メトリクス([HttpMetrics])を記録する。リクエストとレスポンスの本文は読まず、ログにも出さない。
  * - 未処理の例外は、Correlation ID と trace_id の付いたログに 1 回だけ記録する(Ktor 自身のログはそれらの外で出るため)。
  * - 処理のキャンセル(クライアントの切断など)は、応答していないのでステータスを記録せず、エラーにも数えない。
- *   タイムアウトは `error.type=timeout` でエラーに数える(ADR-0018 §5)。
+ *   タイムアウトは `error.type=timeout` でエラーに数え、Ktor が返す 504 を記録し、WARN を 1 回残す(ADR-0018 §5)。
  */
 public val ServerObservability: ApplicationPlugin<ServerObservabilityConfig> =
     createApplicationPlugin("EiaServerObservability", ::ServerObservabilityConfig) {
@@ -95,6 +96,7 @@ private val IN_FLIGHT = AttributeKey<InFlight>("eia.observability.in-flight")
 private val ROUTE = AttributeKey<String>("eia.observability.route")
 private val CORRELATION_ID = stringKey(LogKeys.CORRELATION_ID)
 private const val SERVER_ERROR = 500
+private const val GATEWAY_TIMEOUT = 504
 
 /** 処理中のリクエスト(終了時にメトリクスと span を閉じるための情報)。 */
 private class InFlight(
@@ -115,13 +117,18 @@ private suspend fun observe(
     var failure: Throwable? = null
     try {
         proceed()
-    } catch (e: CancellationException) {
-        failure = e
-        throw e
     } catch (e: Throwable) {
         failure = e
-        // Ktor もこの後に記録するが、それは Correlation ID と trace_id の外になる。追跡できるようにここで 1 回記録する
-        logger.error("未処理の例外で 500 を返します(error.type={})", HttpMetrics.errorTypeOf(e), e)
+        // Ktor もこの後に応答・記録するが、それは Correlation ID と trace_id の外になる。追跡できるようにここで 1 回記録する
+        when (e) {
+            // Ktor は 504 を返す。どの処理が期限切れになったかを追えるようにする
+            is TimeoutCancellationException -> logger.warn("処理がタイムアウトしました(error.type={})", HttpMetrics.TIMEOUT)
+
+            // クライアントの切断など。応答しないので記録しない
+            is CancellationException -> Unit
+
+            else -> logger.error("未処理の例外で 500 を返します(error.type={})", HttpMetrics.errorTypeOf(e), e)
+        }
         throw e
     } finally {
         complete(call, inFlight, metrics, failure)
@@ -134,9 +141,15 @@ private fun complete(
     metrics: HttpMetrics,
     failure: Throwable?,
 ) {
-    // 例外が外まで伝わった場合、Ktor はこの後 500 を返す。キャンセルは応答しないのでステータスはない
-    // (タイムアウトは error.type=timeout、それ以外のキャンセルはエラーにしない。HttpMetrics.failureErrorType)
-    val status = call.response.status()?.value ?: if (failure != null && failure !is CancellationException) SERVER_ERROR else null
+    // 例外が外まで伝わった場合、Ktor はこの後に応答する: タイムアウトは 504、それ以外の例外は 500。
+    // キャンセル(クライアントの切断など)は応答しないのでステータスはない(エラーにもしない。HttpMetrics.failureErrorType)
+    val status =
+        call.response.status()?.value ?: when (failure) {
+            null -> null
+            is TimeoutCancellationException -> GATEWAY_TIMEOUT
+            is CancellationException -> null
+            else -> SERVER_ERROR
+        }
     val exchange = HttpExchange(inFlight.method, status, HttpMetrics.serverErrorType(status, failure))
     val span = inFlight.span
     status?.let { span.setAttribute(HttpAttributes.HTTP_RESPONSE_STATUS_CODE, it.toLong()) }

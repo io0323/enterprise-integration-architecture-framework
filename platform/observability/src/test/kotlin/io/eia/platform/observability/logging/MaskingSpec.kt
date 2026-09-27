@@ -67,6 +67,13 @@ class MaskingSpec :
                 Masking.mask("""{"credentials": {"user":"a","password":"x"}}""") shouldBe """{"credentials": "***"}"""
             }
 
+            test("2 段の入れ子・括弧が対応しない値・閉じない引用符") {
+                Masking.mask("""{"credentials": {"basic": {"user":"u","pass":"p"}}}""") shouldBe """{"credentials": "***"}"""
+                Masking.mask("""{"tokens": [["a"],["b"]]}""") shouldBe """{"tokens": "***"}"""
+                Masking.mask("secret={broken, token=[x\nnext line") shouldBe "secret=\"***\"\nnext line"
+                Masking.mask("password='abc-unterminated") shouldBe "password='***'"
+            }
+
             test("空白で区切ったキー(api key / access key)") {
                 Masking.mask("api key: xyz access key: AKIA123") shouldBe "api key: *** access key: ***"
             }
@@ -91,10 +98,51 @@ class MaskingSpec :
                 }
             }
 
-            test("${Masking.MAX_LENGTH} 文字を超えた分は切り詰める") {
-                val masked = Masking.mask("x".repeat(Masking.MAX_LENGTH + 10))
+            test("JWT らしい語の連続(eyJ-)") {
+                val elapsed = kotlin.time.measureTime { Masking.mask("eyJ-".repeat(16 * 1024)) }
 
-                masked shouldBe "x".repeat(Masking.MAX_LENGTH) + "…[truncated 10 chars]"
+                (elapsed < budget) shouldBe true
+            }
+
+            test("${Masking.MAX_LENGTH} 文字を超えた分は、先頭と末尾を残して切り詰める(末尾の Caused by: を残す)") {
+                val half = Masking.MAX_LENGTH / 2
+                val masked = Masking.mask("x".repeat(Masking.MAX_LENGTH + 10) + "Caused by: java.io.IOException: root")
+
+                masked.startsWith("x".repeat(half) + "…[truncated ") shouldBe true
+                masked.endsWith("Caused by: java.io.IOException: root") shouldBe true
+            }
+        }
+
+        context("長い値でもスタックがあふれない(スタック 1MB のスレッド。Linux x64 の既定)") {
+            val pem = "-----BEGIN PRIVATE KEY-----" + "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC".repeat(60)
+            listOf(
+                "引用符で囲んだ 16KB のアクセストークン" to ("""{"access_token":"""" + "a".repeat(16_000) + """"}"""),
+                "閉じない一重引用符の PEM" to "private_key='$pem",
+                "エスケープの多い値" to ("""password="""" + "\\a".repeat(3_000) + "\""),
+            ).forEach { (name, input) ->
+                test(name) {
+                    var masked: String? = null
+                    var thrown: Throwable? = null
+                    val thread =
+                        Thread(null, {
+                            try {
+                                masked = Masking.mask(input)
+                            } catch (
+                                @Suppress("TooGenericExceptionCaught") e: Throwable,
+                            ) {
+                                thrown = e
+                            }
+                        }, "small-stack", 1L shl 20)
+                    thread.start()
+                    thread.join()
+
+                    thrown shouldBe null
+                    val result = checkNotNull(masked)
+
+                    result shouldNotContain "aaaaaaaaaa"
+                    result shouldNotContain "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC"
+                    result shouldNotContain Masking.FAILED
+                }
             }
         }
 

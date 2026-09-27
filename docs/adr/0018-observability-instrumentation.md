@@ -68,7 +68,9 @@ P04a ② で `platform/observability` を作る。Framework 14 章は、全チ�
 - **マスキング**: `Masking` が、URL の userinfo、秘密情報のキーの値、トークン(JWT・Bearer / Basic)、メールアドレス、カード番号(Luhn で確認)、電話番号を伏せる。`EiaLogEncoder` と `OtlpLogAppender` が、メッセージ・例外・MDC の値に必ず適用する。
   - 秘密情報のキーは広めに照合する。大文字小文字と区切り(`_` / `-` / camelCase / `api key` のような空白)を問わず、`password` / `secret` / `token` / `api key` / `credential` / `authorization` / `cookie` などの語を含むキー(`newPassword`、`clientSecret`、`x-api-key` など)の値を、引用符の有無によらず伏せる。値が配列や 1 段のオブジェクトなら中身ごと `"***"` にする。
   - 語を含むだけで伏せるため、`tokenExpiresIn` や `passwordPolicy` のような運用上の値も伏せる。許可リストは設けない(許可リストの漏れは秘密情報の漏洩になり、伏せすぎは調査の手間で済むため)。必要な値は、秘密情報の語を含まないキーで書く。
-  - **処理時間に上限を設ける。** マスキングはログを記録したスレッドで同期して走るため、長い入力で入力長の 2 乗の時間がかかると、外部から来た長い値だけでワーカーが止まる(DoS)。どの正規表現も、開始位置を後読みで語の先頭に限り、繰り返しに上限を付ける。さらに 16KB を超えた分は切り詰めてから伏せる(`…[truncated N chars]`)。`MaskingSpec` で 16KB の病的な入力が 2 秒以内に終わることを検査する。
+  - **例外を投げない。** java.util.regex は選択肢を含むグループの繰り返しで 1 文字ごとに再帰するため、書き方によっては長い値でスタックがあふれる(`StackOverflowError`)。logback は `Error` を捕まえないので、ログの記録が業務の処理を失敗させる。引用符の値は展開したループと強欲な量指定子で書き、繰り返すグループには回数の上限を付ける。それでも失敗した場合は、元の文字列ではなく `[masking failed](N chars)` を返す。`MaskingSpec` で、スタックが 1MB のスレッド(Linux x64 の既定)で 16KB の値を伏せられることを検査する。
+  - 値が閉じない引用符なら入力の末尾まで、括弧が対応しない配列・オブジェクトなら行末まで伏せる。配列・オブジェクトは 2 段の入れ子まで中身ごと伏せる。
+  - **処理時間に上限を設ける。** マスキングはログを記録したスレッドで同期して走るため、長い入力で入力長の 2 乗の時間がかかると、外部から来た長い値だけでワーカーが止まる(DoS)。どの正規表現も、開始位置を後読みで語の先頭に限り、繰り返しに上限を付ける。さらに 16KB を超えた分は、先頭と末尾の 8KB ずつを残して切り詰めてから伏せる(`…[truncated N chars]…`)。末尾を残すのは、スタックトレースの根本原因(`Caused by:`)が末尾に書かれるため。`MaskingSpec` で 16KB の病的な入力が 2 秒以内に終わることを検査する。
   - 誤検知と見逃しは、秘密情報は伏せる側(誤検知を許す)に、個人情報の数字は見逃す側(誤検知を減らす)に倒す。キーのない `Bearer` / `Basic` は資格情報らしい値(8 文字以上で、数字・記号を含むか大文字と小文字が混ざる)だけを伏せる。電話番号は、携帯の 11 桁(`0[789]0`。区切りは `-`・空白・なし)と `-` で区切った固定電話だけを伏せる。0 始まりの 10 桁の ID と、空白区切りの日付(`09 27 2026`)は伏せない。
   - 必須キー(JSON)や、アペンダが設定する属性(OTLP)と同じ名前の MDC のキーは、`mdc.` を付けて出す。必須キーを上書きさせないため。
   - console 形式でも、メッセージの改行はエスケープして 1 イベント 1 行を保つ。
@@ -102,7 +104,8 @@ P06・P07 で自前で実装する範囲(`platform/messaging-kafka` / `platform/
 - エラーの定義は semconv に従う。サーバは 5xx と例外、クライアントは 4xx 以上と例外。
 - **キャンセルはエラーに数えない。ただしタイムアウトは数える。**
   - クライアントの切断や呼び出し側の中止で処理がキャンセルされた場合は、応答していないので `http.response.status_code` を記録せず、`error.type` も付けない。500 として数えると、実際には返していない 5xx が Error 率と SLO のアラートを押し上げるため。
-  - `withTimeout` の期限切れ(`TimeoutCancellationException`)は `error.type=timeout`(semconv が許す低カーディナリティの独自の値)を付けてエラーに数える。同期呼び出しの 4 点セット(Framework 13)の Timeout の失敗を、Error 率に出すため。
+  - タイムアウトは `error.type=timeout`(semconv が許す低カーディナリティの独自の値)を付けてエラーに数える。同期呼び出しの 4 点セット(Framework 13)の Timeout の失敗を、Error 率に出すため。対象は `withTimeout` の期限切れ(`TimeoutCancellationException`)、Ktor の `HttpRequestTimeoutException` / `ConnectTimeoutException`、読み取りのタイムアウト(`java.net.SocketTimeoutException`)。
+  - サーバのハンドラの中でタイムアウトした場合、Ktor は 504 を返す(テストで確認)。ステータスに 504 を記録し、Correlation ID の付いた WARN を 1 回残す。
   - 判定は `HttpMetrics.failureErrorType` に集め、Server / Client のプラグインと `withSpan` が同じ規則を使う。
 
 ## Alternatives Considered

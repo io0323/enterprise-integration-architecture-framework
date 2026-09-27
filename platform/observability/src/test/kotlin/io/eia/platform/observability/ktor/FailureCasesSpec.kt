@@ -118,6 +118,19 @@ class FailureCasesSpec :
                 }
             }
 
+            test("Ktor と JDK のタイムアウトの例外も error.type=timeout にそろえる") {
+                listOf(
+                    io.ktor.client.plugins
+                        .HttpRequestTimeoutException("http://a", 1),
+                    io.ktor.client.network.sockets
+                        .ConnectTimeoutException("connect"),
+                    java.net.SocketTimeoutException("read"),
+                ).forEach {
+                    io.eia.platform.observability.metrics.HttpMetrics
+                        .failureErrorType(it) shouldBe "timeout"
+                }
+            }
+
             test("明示的な X-Correlation-Id は、正しければ送って span にも入れ、不正ならコンテキストの値に置き換える") {
                 TestTelemetry().use { telemetry ->
                     val sent = mutableListOf<Headers>()
@@ -163,6 +176,38 @@ class FailureCasesSpec :
                             .orEmpty()
                             .startsWith("未処理の例外")
                     } shouldBe true
+                }
+            }
+
+            test("ハンドラの中のタイムアウトは error.type=timeout で数え、Ktor が返す 504 を記録して WARN を 1 回残す") {
+                TestTelemetry().use { telemetry ->
+                    var status: HttpStatusCode? = null
+                    testApplication {
+                        application {
+                            install(ServerObservability) { runtime = telemetry.runtime }
+                            routing {
+                                get("/v1/slow") {
+                                    kotlinx.coroutines.withTimeout(20) { kotlinx.coroutines.delay(5_000) }
+                                    call.respondText("late")
+                                }
+                            }
+                        }
+                        runCatchingCancellation { status = client.get("/v1/slow").status }
+                    }
+                    val span = telemetry.spans.single { it.kind == SpanKind.SERVER }
+                    val warning =
+                        telemetry.logs.single {
+                            it.bodyValue
+                                ?.asString()
+                                .orEmpty()
+                                .startsWith("処理がタイムアウトしました")
+                        }
+
+                    status shouldBe HttpStatusCode.GatewayTimeout
+                    span.attributes.get(HttpAttributes.HTTP_RESPONSE_STATUS_CODE) shouldBe 504L
+                    span.attributes.get(ERROR_TYPE) shouldBe "timeout"
+                    span.status.statusCode shouldBe StatusCode.ERROR
+                    warning.spanContext.spanId shouldBe span.spanId
                 }
             }
 
