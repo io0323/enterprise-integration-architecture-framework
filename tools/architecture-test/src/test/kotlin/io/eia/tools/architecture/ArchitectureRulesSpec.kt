@@ -89,6 +89,11 @@ class ArchitectureRulesSpec :
                     listOf("UsesOtelSdk.kt", "UsesOtelSdkQualified.kt")
             }
 
+            test("Nimbus JOSE+JWT を platform/security 以外の本番コードで使う") {
+                ArchitectureRules.nimbusOnlyInSecurity(violations).fileNames() shouldContainExactlyInAnyOrder
+                    listOf("UsesNimbus.kt", "UsesNimbusQualified.kt")
+            }
+
             test("Retryable と NonRetryable の両方を直接・間接に実装する型") {
                 ArchitectureRules
                     .domainErrorKindIsExclusive(
@@ -112,11 +117,12 @@ class ArchitectureRulesSpec :
                 ArchitectureRules.noKotlinResult(compliant).shouldBeEmpty()
             }
 
-            test("shared の許可リスト・DomainError 分類の排他・test-support の参照元・OTel SDK の配置") {
+            test("shared の許可リスト・DomainError 分類の排他・test-support の参照元・OTel SDK と Nimbus の配置") {
                 ArchitectureRules.sharedImportAllowList(compliant).shouldBeEmpty()
                 ArchitectureRules.testSupportOnlyFromTests(compliant).shouldBeEmpty()
                 ArchitectureRules.domainErrorKindIsExclusive(compliant).shouldBeEmpty()
                 ArchitectureRules.otelSdkOnlyInAllowedModules(compliant).shouldBeEmpty()
+                ArchitectureRules.nimbusOnlyInSecurity(compliant).shouldBeEmpty()
             }
         }
 

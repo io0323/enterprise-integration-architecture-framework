@@ -53,6 +53,10 @@ class ArchitectureSpec :
             ArchitectureRules.otelSdkOnlyInAllowedModules(codeBase).assertNone()
         }
 
+        test("Nimbus JOSE+JWT は platform/security だけで使う(ADR-0019 §1)") {
+            ArchitectureRules.nimbusOnlyInSecurity(codeBase).assertNone()
+        }
+
         test("Retryable と NonRetryable の両方を実装する型がない") {
             ArchitectureRules.domainErrorKindIsExclusive(codeBase).assertNone()
         }
