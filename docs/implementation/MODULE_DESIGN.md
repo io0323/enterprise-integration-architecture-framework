@@ -89,7 +89,7 @@ services/order/
 | platform | 役割 | フェーズ |
 |---|---|---|
 | observability | OTel の初期化・Ktor の Server / Client プラグイン(traceparent・Correlation ID の伝搬、RED メトリクス)・構造化 JSON ログ・マスキング(ADR-0018)。OTel SDK を使ってよいのはこのモジュールと `services/*/app` だけ(ADR-0004 §4。Konsist) | P04a |
-| security | JWT 検証・認可・トークン取得・`SecretProvider` | P04a |
+| security | JWT の検証(JWKS)・スコープの認可(`eiaJwt` / `requireScopes`)・Client Credentials のトークン取得・`SecretProvider`(ADR-0008・ADR-0019)。Nimbus JOSE+JWT を使ってよいのはこのモジュールだけ(Konsist) | P04a |
 | audit | 追記専用 + ハッシュチェーンの監査記録 | P04a |
 | test-support | テスト専用。`infra/local/images.env` のイメージを Testcontainers で使う `InfraImages`(ADR-0016 §5)。test / integrationTest からだけ参照する(Konsist) | P04a |
 | reliability | `shared/resilience` の Ktor / OTel への結線 | P04b |
