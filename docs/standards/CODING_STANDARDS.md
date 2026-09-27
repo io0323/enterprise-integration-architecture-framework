@@ -32,6 +32,12 @@
 - MDC(`trace_id` / `span_id` / `correlation_id` / `integration_id`)は直接書かない。`ObservabilityContext` をコルーチンのコンテキストに入れる(`withContext(...)`)と、スレッドが変わっても保たれる。
 - 子の span は `runtime.withSpan("name") { ... }` で作る。OTel の `span.makeCurrent()` を中断(suspend)をまたいで使わない(Scope がスレッドに結び付き、親がずれる。ADR-0018 §2)。
 
+## セキュリティ
+- API の認証は `platform/security` の `eiaJwt` で、認可は `requireScopes("sales.order:write") { ... }` で行う(`authenticate { }` の中に置く)。JWT の検証を各サービスで書かない(Nimbus は `platform/security` だけ。Konsist。ADR-0019)。
+- 秘密情報は `SecretProvider` から取得し、`Secret.reveal()` は値を渡す直前にだけ呼ぶ。値を変数やフィールドに残さない。ローカルは環境変数か `NAME_FILE`(Docker secrets)で渡す(ADR-0008・ADR-0019 §6)。
+- 下流の API のトークンは `ClientCredentialsTokenProvider` で取得する(キャッシュと同時の取得のまとめを含む)。下流が 401 を返したら `invalidate(token)` を呼ぶ。
+- トークン・Secret・鍵をログ・例外のメッセージ・`toString` に入れない。秘密情報を持つ型は data class にせず、`toString` で値を伏せる。
+
 ## テスト
 - テスト名は日本語可(`"同一Idempotency-Keyの再送は同一結果を返す"`)。
 - Given/When/Then 構造。Port はフェイク実装を優先し、MockK は adapters 層に限定。
