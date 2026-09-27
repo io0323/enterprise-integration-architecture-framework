@@ -40,6 +40,7 @@ import java.util.Base64
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.toJavaInstant
 
@@ -145,6 +146,19 @@ class ClientCredentialsTokenProviderSpec :
                 clock.now = NOW + 53.seconds
                 provider.token().token() shouldBe "at-1"
                 clock.now = NOW + 54.seconds
+                provider.token().token() shouldBe "at-2"
+            }
+
+            test("expires_in が長くても、maxCacheLifetime(既定 1 時間)で取り直す") {
+                val endpoint =
+                    FakeTokenEndpoint(FakeTokenEndpoint.ok(tokenJson("at-1", expiresIn = 86_400)), FakeTokenEndpoint.ok(tokenJson("at-2")))
+                val clock = MutableClock()
+                val provider = provider(endpoint, clock)
+
+                provider.token().token() shouldBe "at-1"
+                clock.now = NOW + 59.minutes + 29.seconds
+                provider.token().token() shouldBe "at-1"
+                clock.now = NOW + 59.minutes + 30.seconds
                 provider.token().token() shouldBe "at-2"
             }
 

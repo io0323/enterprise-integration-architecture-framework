@@ -1,5 +1,6 @@
 package io.eia.platform.security.ktor
 
+import io.eia.platform.security.ScopeToken
 import io.ktor.server.application.createRouteScopedPlugin
 import io.ktor.server.application.isHandled
 import io.ktor.server.auth.AuthenticationChecked
@@ -26,7 +27,7 @@ public fun Route.requireScopes(
     build: Route.() -> Unit,
 ): Route {
     require(scopes.isNotEmpty()) { "requireScopes にスコープを 1 つ以上指定してください" }
-    scopes.forEach(BearerChallenge::requireValidScope)
+    scopes.forEach(ScopeToken::require)
     val required = scopes.toSet()
     val route = createChild(RequireScopesSelector(required))
     route.install(RequireScopesPlugin) { this.scopes = required }

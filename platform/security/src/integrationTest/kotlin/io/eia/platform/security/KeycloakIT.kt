@@ -17,6 +17,7 @@ import io.eia.platform.testsupport.InfraImages
 import io.eia.shared.kernel.DomainError
 import io.eia.shared.kernel.Result
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.equals.shouldBeEqual
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import io.ktor.client.HttpClient
@@ -149,7 +150,7 @@ class KeycloakIT :
             val token = token()
 
             verifier(audience = "inventory-api").use { verifier ->
-                verifier.verify(token.reveal()) shouldBe
+                verifier.verify(token.reveal()) shouldBeEqual
                     Result.Err(JwtVerificationError.InvalidToken(JwtRejectionReason.BAD_AUDIENCE))
             }
             verifier(audience = "inventory-api").use { verifier ->

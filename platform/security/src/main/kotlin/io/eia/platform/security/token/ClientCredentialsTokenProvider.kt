@@ -32,7 +32,7 @@ import kotlin.time.Instant
  * Client Credentials Grant でアクセストークンを取得し、期限の少し前まで再利用する(Framework 12.1。ADR-0019 §4)。
  *
  * - **再利用**: 期限の [ClientCredentialsConfig.refreshBefore](既定 30 秒)前まで同じトークンを返す。
- *   寿命が短いトークンでは寿命の 10% との小さい方を使う。
+ *   寿命が短いトークンでは寿命の 10% との小さい方を使う。寿命は [ClientCredentialsConfig.maxCacheLifetime](既定 1 時間)で打ち切る。
  * - **同時の取得を 1 本にまとめる**: 取得は [Mutex] の中で 1 つだけ走らせる。待っていた呼び出しは、ロックを取った後に
  *   待っている間に終わった取得の結果を使う(成功ならキャッシュ、失敗ならその失敗)。同時に 100 回呼ばれても要求は 1 回になり、
  *   IdP の障害中に待ち行列の全員が順に取り直して待たされることもない。期限内のトークンがあれば、取得中の呼び出しを待たずに返す。
@@ -146,14 +146,17 @@ public class ClientCredentialsTokenProvider(
 
     private fun isRetryDeferred(now: Instant): Boolean = retryNotBefore?.let { now < it } ?: false
 
-    /** 期限の手前で取り直す時刻。寿命の 10% と [ClientCredentialsConfig.refreshBefore] の小さい方だけ前にする。 */
+    /**
+     * 期限の手前で取り直す時刻。寿命の 10% と [ClientCredentialsConfig.refreshBefore] の小さい方だけ前にする。
+     * 寿命は [ClientCredentialsConfig.maxCacheLifetime] で打ち切る。
+     */
     private fun refreshAt(
         requestedAt: Instant,
         expiresAt: Instant,
     ): Instant {
-        val lifetime = expiresAt - requestedAt
-        val margin = minOf(config.refreshBefore, lifetime / REFRESH_LIFETIME_DIVISOR)
-        return expiresAt - margin
+        val until = minOf(expiresAt, requestedAt + config.maxCacheLifetime)
+        val margin = minOf(config.refreshBefore, (until - requestedAt) / REFRESH_LIFETIME_DIVISOR)
+        return until - margin
     }
 
     @Suppress("ReturnCount") // Secret の取得・送信・タイムアウトのそれぞれの失敗で返す
