@@ -3,6 +3,7 @@ package io.eia.platform.observability.logging
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldNotContain
+import kotlin.time.Duration.Companion.seconds
 
 private const val JWT =
     "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJvcmRlci1zZXJ2aWNlIiwiYXVkIjoib3JkZXItYXBpIn0.c2lnbmF0dXJlLXZhbHVl"
@@ -60,7 +61,49 @@ class MaskingSpec :
             }
         }
 
+        context("入れ子の値・空白区切りのキー") {
+            test("配列と 1 段のオブジェクトの値は中身ごと伏せ、JSON の形を保つ") {
+                Masking.mask("""{"tokens": ["t1","t2"], "n": 1}""") shouldBe """{"tokens": "***", "n": 1}"""
+                Masking.mask("""{"credentials": {"user":"a","password":"x"}}""") shouldBe """{"credentials": "***"}"""
+            }
+
+            test("空白で区切ったキー(api key / access key)") {
+                Masking.mask("api key: xyz access key: AKIA123") shouldBe "api key: *** access key: ***"
+            }
+        }
+
+        context("処理時間(長い入力で入力長の 2 乗の時間がかからない)") {
+            // 入力は MAX_LENGTH(16KB)に切り詰められるため、正規表現そのものを 16KB で測ることになる。
+            // 入力長の 2 乗の時間がかかる正規表現(レビューで見つかった版)は 16KB で約 4 秒かかり、この上限を超える
+            val budget = 2.seconds
+            val random = kotlin.random.Random(42)
+            val base64url = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+            listOf(
+                "a- の繰り返し" to "a-".repeat(32 * 1024),
+                "ランダムな base64url" to (1..64 * 1024).map { base64url[random.nextInt(base64url.length)] }.joinToString(""),
+                "@ のない英数字の連続" to "a.".repeat(32 * 1024),
+                "スキームらしい語の連続" to "http+".repeat(12 * 1024),
+            ).forEach { (name, input) ->
+                test("$name(${input.length} 文字)") {
+                    val elapsed = kotlin.time.measureTime { Masking.mask(input) }
+
+                    (elapsed < budget) shouldBe true
+                }
+            }
+
+            test("${Masking.MAX_LENGTH} 文字を超えた分は切り詰める") {
+                val masked = Masking.mask("x".repeat(Masking.MAX_LENGTH + 10))
+
+                masked shouldBe "x".repeat(Masking.MAX_LENGTH) + "…[truncated 10 chars]"
+            }
+        }
+
         context("誤検知しない") {
+            test("空白区切りの日付と、URL のクエリの @ はそのまま") {
+                Masking.mask("on 09 27 2026") shouldBe "on 09 27 2026"
+                Masking.mask("GET http://host:8080?x=a@b") shouldBe "GET http://host:8080?x=a@b"
+            }
+
             test("キーのない bearer / basic は、資格情報らしい値だけを伏せる") {
                 Masking.mask("Using basic authentication") shouldBe "Using basic authentication"
                 Masking.mask("Bearer tokens are rotated") shouldBe "Bearer tokens are rotated"

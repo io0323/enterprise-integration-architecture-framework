@@ -10,6 +10,8 @@ import io.opentelemetry.api.metrics.Meter
 import io.opentelemetry.semconv.ErrorAttributes
 import io.opentelemetry.semconv.HttpAttributes
 import io.opentelemetry.semconv.ServerAttributes
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlin.time.Duration
 import kotlin.time.DurationUnit
 
@@ -88,20 +90,34 @@ public class HttpMetrics(
         /** semconv: 既知でないメソッドは `_OTHER` にまとめる(任意の文字列でカーディナリティが増えないように)。 */
         public fun normalizeMethod(method: String): String = method.uppercase().takeIf { it in KNOWN_METHODS } ?: OTHER_METHOD
 
+        /** タイムアウト(`withTimeout` の期限切れ)の `error.type`。semconv は低カーディナリティの独自の値を許す。 */
+        public const val TIMEOUT: String = "timeout"
+
         /** 例外の `error.type`(semconv: 例外の完全修飾クラス名)。 */
         public fun errorTypeOf(exception: Throwable): String = exception::class.qualifiedName ?: exception::class.java.name
+
+        /**
+         * 失敗の `error.type`(ADR-0018 §5)。タイムアウトは [TIMEOUT] でエラーに数え、それ以外のキャンセル
+         * (クライアントの切断・呼び出し側の中止)は、応答していないのでエラーに数えない(`null`)。
+         */
+        public fun failureErrorType(exception: Throwable): String? =
+            when (exception) {
+                is TimeoutCancellationException -> TIMEOUT
+                is CancellationException -> null
+                else -> errorTypeOf(exception)
+            }
 
         /** 5xx と例外をエラーとする(semconv: サーバの 4xx は呼び出し側の誤りなのでエラーにしない)。 */
         public fun serverErrorType(
             status: Int?,
             exception: Throwable?,
-        ): String? = exception?.let(::errorTypeOf) ?: status?.takeIf { it >= SERVER_ERROR }?.toString()
+        ): String? = exception?.let(::failureErrorType) ?: status?.takeIf { it >= SERVER_ERROR }?.toString()
 
         /** クライアントは 4xx もエラーとする(semconv)。 */
         public fun clientErrorType(
             status: Int?,
             exception: Throwable?,
-        ): String? = exception?.let(::errorTypeOf) ?: status?.takeIf { it >= CLIENT_ERROR }?.toString()
+        ): String? = exception?.let(::failureErrorType) ?: status?.takeIf { it >= CLIENT_ERROR }?.toString()
 
         private const val SERVER_ERROR = 500
         private const val CLIENT_ERROR = 400

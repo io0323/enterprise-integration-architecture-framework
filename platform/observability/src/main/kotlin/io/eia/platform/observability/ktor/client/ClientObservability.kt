@@ -22,7 +22,6 @@ import io.opentelemetry.context.propagation.TextMapSetter
 import io.opentelemetry.semconv.ErrorAttributes
 import io.opentelemetry.semconv.HttpAttributes
 import io.opentelemetry.semconv.ServerAttributes
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlin.time.TimeSource
 
@@ -33,7 +32,8 @@ import kotlin.time.TimeSource
  *   `traceparent` / `tracestate` を注入する。
  * - `X-Correlation-Id` を付ける。呼び出し側が明示的に付けた正しい値はそのまま使い、span の属性にも同じ値を入れる。
  *   明示的な値が不正なら、コンテキストの値に置き換える(コンテキストもなければ送らない)。
- * - 呼び出し側のキャンセルは、応答がないのでステータスを記録せず、エラーにも数えない(ADR-0018 §5)。
+ * - 呼び出し側のキャンセルは、応答がないのでステータスを記録せず、エラーにも数えない。
+ *   タイムアウト(`withTimeout` の期限切れ)は `error.type=timeout` でエラーに数える(ADR-0018 §5)。
  * - RED メトリクス([HttpMetrics])を記録する。URL のパスとクエリは属性に入れない(個人情報やトークンを含みうるため)。
  */
 public val ClientObservability: ClientPlugin<ClientObservabilityConfig> =
@@ -85,8 +85,7 @@ private suspend fun <T : HttpClientCall> observe(
         failure = e
         throw e
     } finally {
-        val errorType = if (failure is CancellationException) null else HttpMetrics.clientErrorType(status, failure)
-        val exchange = HttpExchange(method, status, errorType)
+        val exchange = HttpExchange(method, status, HttpMetrics.clientErrorType(status, failure))
         status?.let { span.setAttribute(HttpAttributes.HTTP_RESPONSE_STATUS_CODE, it.toLong()) }
         exchange.errorType?.let {
             span.setAttribute(ErrorAttributes.ERROR_TYPE, it)

@@ -40,7 +40,7 @@ P04a ② で `platform/observability` を作る。Framework 14 章は、全チ�
 - span には、例外のイベント(`recordException`)を入れない。例外のメッセージは個人情報を含みうるため、型だけを `error.type` に残す。URL のパスとクエリも属性に入れない(`http.route` のテンプレートだけを使う)。
 
 ### 2. Correlation ID は `X-Correlation-Id` で運び、W3C Baggage は使わない
-- 入口(`ServerObservability`)では、受信した `X-Correlation-Id` を `CorrelationId.parse` で検証して使う。ない・不正・複数あるときは `CorrelationId.generate()` で採番する(Framework 14.1)。不正な値は、値を出さずに警告ログだけを残す。
+- 入口(`ServerObservability`)では、受信した `X-Correlation-Id` を `CorrelationId.parse` で検証して使う。ない・不正・複数あるときは `CorrelationId.generate()` で採番する(Framework 14.1)。不正な値は、値を出さずに DEBUG ログに残し、件数をメトリクスで数える(下記)。
 - 決まった ID は、ログの MDC(`correlation_id`)と span の属性(`correlation_id`)の両方に入れ、レスポンスのヘッダにも返す。送信側(`ClientObservability`)は、呼び出し元のコルーチンの `ObservabilityContext` から付ける。
 - MDC と OTel の Context は、`ObservabilityContext`(`ThreadContextElement`)がコルーチンの再開のたびに設定し、中断したら元に戻す。`kotlinx-coroutines-slf4j` の `MDCContext` を使わないのは、MDC と OTel の Context を 1 つの要素でまとめて切り替えたいため(別々の要素にすると、片方だけが入った状態を作れてしまう)。
 - 子の span を現在にするときは `ObservabilityRuntime.withSpan(name) { ... }` を使い、OTel の `span.makeCurrent()` を中断(suspend)をまたいで使わない。`makeCurrent()` の Scope はスレッドに結び付くため、コルーチンが別のスレッドで再開すると、以降のログと送信の親がずれる。`withSpan` は `ObservabilityContext` の OTel の Context を差し替える。
@@ -66,8 +66,10 @@ P04a ② で `platform/observability` を作る。Framework 14 章は、全チ�
 - **OTel の初期化より前のログ**: `OtlpLogAppender` は初期化(`Observability.init()`)まで最大 `bufferSize`(既定 1,000)件をメモリに溜め、初期化時に元の時刻のまま送る。溢れた分は捨て、捨てた件数を初期化時に WARN で送る。起動時のログ(設定の読み込み・マイグレーション)は障害の調査に要るが、無制限に溜めると初期化に失敗したときにメモリを使い続けるため、上限を設ける。標準出力には、初期化の前後によらず常に出る(`LoggingSpec` で検査)。
 - 各サービスは `logback.xml` で `io/eia/platform/observability/logback-base.xml` を読み込む。
 - **マスキング**: `Masking` が、URL の userinfo、秘密情報のキーの値、トークン(JWT・Bearer / Basic)、メールアドレス、カード番号(Luhn で確認)、電話番号を伏せる。`EiaLogEncoder` と `OtlpLogAppender` が、メッセージ・例外・MDC の値に必ず適用する。
-  - 秘密情報のキーは広めに照合する。大文字小文字と区切り(`_` / `-` / camelCase)を問わず、`password` / `secret` / `token` / `api key` / `credential` / `authorization` / `cookie` などの語を含むキー(`newPassword`、`clientSecret`、`x-api-key` など)の値を、引用符の有無によらず伏せる。
-  - 誤検知と見逃しは、秘密情報は伏せる側(誤検知を許す)に、個人情報の数字は見逃す側(誤検知を減らす)に倒す。キーのない `Bearer` / `Basic` は資格情報らしい値(8 文字以上で、数字・記号を含むか大文字と小文字が混ざる)だけを伏せる。電話番号は、区切りのある番号と区切りのない携帯の 11 桁(`0[789]0`)だけを伏せ、0 始まりの 10 桁の ID は伏せない。
+  - 秘密情報のキーは広めに照合する。大文字小文字と区切り(`_` / `-` / camelCase / `api key` のような空白)を問わず、`password` / `secret` / `token` / `api key` / `credential` / `authorization` / `cookie` などの語を含むキー(`newPassword`、`clientSecret`、`x-api-key` など)の値を、引用符の有無によらず伏せる。値が配列や 1 段のオブジェクトなら中身ごと `"***"` にする。
+  - 語を含むだけで伏せるため、`tokenExpiresIn` や `passwordPolicy` のような運用上の値も伏せる。許可リストは設けない(許可リストの漏れは秘密情報の漏洩になり、伏せすぎは調査の手間で済むため)。必要な値は、秘密情報の語を含まないキーで書く。
+  - **処理時間に上限を設ける。** マスキングはログを記録したスレッドで同期して走るため、長い入力で入力長の 2 乗の時間がかかると、外部から来た長い値だけでワーカーが止まる(DoS)。どの正規表現も、開始位置を後読みで語の先頭に限り、繰り返しに上限を付ける。さらに 16KB を超えた分は切り詰めてから伏せる(`…[truncated N chars]`)。`MaskingSpec` で 16KB の病的な入力が 2 秒以内に終わることを検査する。
+  - 誤検知と見逃しは、秘密情報は伏せる側(誤検知を許す)に、個人情報の数字は見逃す側(誤検知を減らす)に倒す。キーのない `Bearer` / `Basic` は資格情報らしい値(8 文字以上で、数字・記号を含むか大文字と小文字が混ざる)だけを伏せる。電話番号は、携帯の 11 桁(`0[789]0`。区切りは `-`・空白・なし)と `-` で区切った固定電話だけを伏せる。0 始まりの 10 桁の ID と、空白区切りの日付(`09 27 2026`)は伏せない。
   - 必須キー(JSON)や、アペンダが設定する属性(OTLP)と同じ名前の MDC のキーは、`mdc.` を付けて出す。必須キーを上書きさせないため。
   - console 形式でも、メッセージの改行はエスケープして 1 イベント 1 行を保つ。
   - ID のキー(`trace_id` など)は形式を検証済みなので伏せない。数字だけの span_id がカード番号と誤判定されるのを避けるため。
@@ -98,7 +100,10 @@ P06・P07 で自前で実装する範囲(`platform/messaging-kafka` / `platform/
 - OTel semconv の `http.server.request.duration` / `http.client.request.duration`(単位は秒のヒストグラム)で、件数(Rate)・`error.type` 付きの件数(Error)・分布(Duration)を表す(Framework 14.1)。
 - 属性は、`http.request.method`(既知でないメソッドは `_OTHER`)、`http.route`(テンプレートのみ)、`http.response.status_code`、`error.type`、`integration_id`(サーバ)、`server.address`(クライアント)。生のパスや ID は入れない(カーディナリティと機密のため)。
 - エラーの定義は semconv に従う。サーバは 5xx と例外、クライアントは 4xx 以上と例外。
-- **キャンセルはエラーに数えない。** クライアントの切断や呼び出し側のタイムアウトで処理がキャンセルされた場合は、応答していないので `http.response.status_code` を記録せず、`error.type` も付けない。500 として数えると、実際には返していない 5xx が Error 率と SLO のアラートを押し上げるため。キャンセルの件数は、ステータスのない件数として見える。
+- **キャンセルはエラーに数えない。ただしタイムアウトは数える。**
+  - クライアントの切断や呼び出し側の中止で処理がキャンセルされた場合は、応答していないので `http.response.status_code` を記録せず、`error.type` も付けない。500 として数えると、実際には返していない 5xx が Error 率と SLO のアラートを押し上げるため。
+  - `withTimeout` の期限切れ(`TimeoutCancellationException`)は `error.type=timeout`(semconv が許す低カーディナリティの独自の値)を付けてエラーに数える。同期呼び出しの 4 点セット(Framework 13)の Timeout の失敗を、Error 率に出すため。
+  - 判定は `HttpMetrics.failureErrorType` に集め、Server / Client のプラグインと `withSpan` が同じ規則を使う。
 
 ## Alternatives Considered
 - **OTel の Java エージェント**: §1 の表のとおり。KMP SDK と伝搬の規則が二重になるため不採用。

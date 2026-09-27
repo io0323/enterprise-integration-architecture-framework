@@ -3,12 +3,12 @@ package io.eia.platform.observability.context
 import io.eia.platform.observability.ObservabilityRuntime
 import io.eia.platform.observability.metrics.HttpMetrics
 import io.eia.shared.kernel.CorrelationId
+import io.opentelemetry.api.common.AttributeKey
 import io.opentelemetry.api.trace.Span
 import io.opentelemetry.api.trace.SpanKind
 import io.opentelemetry.api.trace.StatusCode
 import io.opentelemetry.context.Context
 import io.opentelemetry.semconv.ErrorAttributes
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.withContext
 
@@ -19,8 +19,11 @@ import kotlinx.coroutines.withContext
  * 以降のログ・送信の親がずれるため。代わりにこの関数で [ObservabilityContext] を差し替える。
  * [ObservabilityContext] がない(入口の外で呼ばれた)場合は、Correlation ID を採番して始める。
  *
- * 例外は `error.type` と ERROR の状態を付けて再送出する。例外のメッセージは span に入れない。キャンセルはエラーにしない。
+ * span には `correlation_id` 属性を付ける。例外は `error.type` と ERROR の状態を付けて再送出する。例外のメッセージは span に入れない。
+ * タイムアウトは `error.type=timeout`、それ以外のキャンセルはエラーにしない([HttpMetrics.failureErrorType])。
  */
+private val CORRELATION_ID = AttributeKey.stringKey(LogKeys.CORRELATION_ID)
+
 @Suppress("TooGenericExceptionCaught") // 例外は握りつぶさず、記録してから再送出する
 public suspend fun <T> ObservabilityRuntime.withSpan(
     name: String,
@@ -36,13 +39,15 @@ public suspend fun <T> ObservabilityRuntime.withSpan(
             .setParent(parent)
             .startSpan()
     val context = (current ?: ObservabilityContext(CorrelationId.generate())).copy(otelContext = parent.with(span))
+    // Server / Client の span と同じく、Tempo で Correlation ID から検索できるようにする
+    span.setAttribute(CORRELATION_ID, context.correlationId.value)
     try {
         return withContext(context) { block(span) }
-    } catch (e: CancellationException) {
-        throw e
     } catch (e: Throwable) {
-        span.setAttribute(ErrorAttributes.ERROR_TYPE, HttpMetrics.errorTypeOf(e))
-        span.setStatus(StatusCode.ERROR)
+        HttpMetrics.failureErrorType(e)?.let {
+            span.setAttribute(ErrorAttributes.ERROR_TYPE, it)
+            span.setStatus(StatusCode.ERROR)
+        }
         throw e
     } finally {
         span.end()
