@@ -80,8 +80,8 @@ class MaskingSpec :
         }
 
         context("処理時間(長い入力で入力長の 2 乗の時間がかからない)") {
-            // 入力は MAX_LENGTH(16KB)に切り詰められるため、正規表現そのものを 16KB で測ることになる。
-            // 入力長の 2 乗の時間がかかる正規表現(レビューで見つかった版)は 16KB で約 4 秒かかり、この上限を超える
+            // 入力は MAX_INPUT_LENGTH(64KB)まで伏せるため、正規表現を 64KB 近い入力で測る。
+            // 入力長の 2 乗の時間がかかる正規表現(レビューで見つかった版)は 16KB で約 4 秒、64KB では 1 分以上かかり、この上限を超える
             val budget = 2.seconds
             val random = kotlin.random.Random(42)
             val base64url = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
@@ -110,6 +110,44 @@ class MaskingSpec :
 
                 masked.startsWith("x".repeat(half) + "…[truncated ") shouldBe true
                 masked.endsWith("Caused by: java.io.IOException: root") shouldBe true
+            }
+        }
+
+        context("切り詰めの境目で秘密情報が漏れない") {
+            test("伏せてから切り詰めるので、境目でキーと値が分かれても値は残らない") {
+                // 伏せた後の長さの中央付近に password= が来るように置く
+                val secret = "Sup3rS3cretV4lue"
+                listOf(Masking.MAX_LENGTH / 2 - 9, Masking.MAX_LENGTH / 2 - 5, Masking.MAX_LENGTH / 2).forEach { offset ->
+                    val input = "x".repeat(offset) + "password=$secret " + "y".repeat(Masking.MAX_LENGTH * 2)
+
+                    Masking.mask(input) shouldNotContain "cretV4lue"
+                }
+            }
+
+            test("入力の上限を超えた分の末尾は、改行の次から始める(キーのない値を残さない)") {
+                val secret = "Sup3rS3cretV4lue"
+                val half = Masking.MAX_INPUT_LENGTH / 2
+                val trailer = "Caused by: java.io.IOException: root"
+                // 末尾に残す half 文字がちょうど値から始まるように置く(入力の上限の境目が password= と値の間に来る)
+                val rest = secret + "\n" + "r".repeat(half - secret.length - 2 - trailer.length) + "\n" + trailer
+                val input = "z".repeat(half + 100) + "password=" + rest
+                val masked = Masking.mask(input)
+
+                rest.length shouldBe half
+                masked shouldNotContain "cretV4lue"
+                masked.endsWith(trailer) shouldBe true
+            }
+
+            test("大きな配列(4,096 文字超)の値も末尾まで伏せる") {
+                val masked = Masking.mask("""{"tokens": [""" + """"t",""".repeat(1_500) + """"LAST-SECRET"]}""")
+
+                masked shouldNotContain "LAST-SECRET"
+            }
+
+            test("pass は語全体のときだけ秘密情報のキーにする") {
+                Masking.mask("tests passed: 12 of 12, bypass=true, passengerCount: 3") shouldBe
+                    "tests passed: 12 of 12, bypass=true, passengerCount: 3"
+                Masking.mask("db_pass=p1 passphrase: p2") shouldBe "db_pass=*** passphrase: ***"
             }
         }
 

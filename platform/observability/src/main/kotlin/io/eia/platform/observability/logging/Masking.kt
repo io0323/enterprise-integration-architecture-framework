@@ -36,7 +36,8 @@ public object Masking {
     private val SECRET_WORDS =
         listOf(
             "passw(?:or)?d",
-            "pass(?:phrase)?",
+            // pass は語全体のときだけ(passed / bypass / passenger を秘密情報のキーにしない)
+            "(?<![A-Za-z])pass(?:phrase)?(?![a-z])",
             "pwd",
             "secret",
             "token",
@@ -65,7 +66,7 @@ public object Masking {
             """|'[^'\\]*+(?:\\.[^'\\]*+)*+(?:'|$)""" +
             """|\[[^\[\]]{0,4096}+(?:\[[^\[\]]{0,4096}+][^\[\]]{0,4096}+){0,64}+]""" +
             """|\{[^{}]{0,4096}+(?:\{[^{}]{0,4096}+}[^{}]{0,4096}+){0,64}+}""" +
-            """|[\[{][^\r\n]{0,4096}+""" +
+            """|[\[{][^\r\n]*+""" +
             """|(?:(?:bearer|basic)\s+)?[^\s,;&})\]"'\[{]+"""
 
     private val SECRET_PAIR =
@@ -86,10 +87,17 @@ public object Masking {
     private val CREDENTIAL_SYMBOL = Regex("[0-9._~+/=-]")
 
     /**
-     * これより長い文字列は、先頭と末尾の半分ずつを残して切り詰めてから伏せる(ログの 1 件の大きさと、マスキングの処理時間の上限)。
+     * 伏せた後の文字列がこれより長ければ、先頭と末尾の半分ずつを残して切り詰める(ログの 1 件の大きさの上限)。
      * 末尾を残すのは、例外のスタックトレースの根本原因(`Caused by:`)が末尾に書かれるため。
+     * 伏せてから切り詰めるので、切れ目でキーと値が分かれても値が伏せられずに残ることはない。
      */
     public const val MAX_LENGTH: Int = 16 * 1024
+
+    /**
+     * 伏せる前の入力の上限(マスキングの処理時間の上限)。超えた分は先頭と末尾を残して捨てる。
+     * 末尾は切れ目の後の最初の改行の次から始める(値の途中から始めて、キーのない値が残らないように)。改行がなければ末尾は捨てる。
+     */
+    public const val MAX_INPUT_LENGTH: Int = 64 * 1024
 
     /**
      * [text] の中のトークン・秘密情報・個人情報を伏せた文字列を返す。[MAX_LENGTH] を超えた分は切り詰める。
@@ -98,7 +106,7 @@ public object Masking {
     public fun mask(text: String): String {
         if (text.isEmpty()) return text
         return try {
-            maskBounded(truncate(text))
+            truncate(maskBounded(limitInput(text)))
         } catch (
             @Suppress("SwallowedException") e: StackOverflowError, // 元の文字列を出さないことを優先する
         ) {
@@ -109,10 +117,18 @@ public object Masking {
     /** 伏せられなかったときに返す値。 */
     public const val FAILED: String = "[masking failed]"
 
-    private fun truncate(text: String): String {
-        if (text.length <= MAX_LENGTH) return text
+    private fun limitInput(text: String): String {
+        if (text.length <= MAX_INPUT_LENGTH) return text
+        val half = MAX_INPUT_LENGTH / 2
+        val tailStart = text.indexOf('\n', text.length - half).let { if (it < 0) text.length else it + 1 }
+        return "${text.take(half)}…[truncated ${tailStart - half} chars]…\n${text.substring(tailStart)}"
+    }
+
+    /** 伏せた後の文字列を切り詰める。値はすでに伏せてあるので、どこで切っても秘密情報は出ない。 */
+    private fun truncate(masked: String): String {
+        if (masked.length <= MAX_LENGTH) return masked
         val half = MAX_LENGTH / 2
-        return "${text.take(half)}…[truncated ${text.length - MAX_LENGTH} chars]…${text.takeLast(half)}"
+        return "${masked.take(half)}…[truncated ${masked.length - MAX_LENGTH} chars]…${masked.takeLast(half)}"
     }
 
     private fun maskBounded(text: String): String {
