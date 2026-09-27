@@ -24,6 +24,7 @@ include(
     ":shared:resilience",
     ":shared:canonical-model",
     ":platform:observability",
+    ":platform:security",
     ":platform:test-support",
     ":services:order:domain",
     ":services:order:application",
