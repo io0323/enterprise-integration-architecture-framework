@@ -46,7 +46,8 @@ class TraceParentSpec :
 
             test("OWS(SP と HTAB)だけを取り除き、改行や全角空白は拒否する") {
                 TraceParent.parse("\t$VALID \t").ok().format() shouldBe VALID
-                listOf("$VALID\n", "\r$VALID", "　$VALID", "$VALID ").forEach { TraceParent.parse(it).shouldBeRejected() }
+                // 全角スペース(U+3000)とノーブレークスペース(U+00A0)は、見分けられるようエスケープで書く
+                listOf("$VALID\n", "\r$VALID", "\u3000$VALID", "$VALID\u00a0").forEach { TraceParent.parse(it).shouldBeRejected() }
             }
 
             test("未知の上位版は先頭 55 文字を読み、送信時は版 00 に戻す") {
@@ -130,6 +131,21 @@ class TraceParentSpec :
                     generated.sampled shouldBe sampled
                     TraceParent.parse(generated.format()).ok() shouldBe generated
                 }
+            }
+
+            test("生成した値は random フラグを立て、child と送信でも保つ(Level 2 §3.2.2.5.2)") {
+                checkAll(Arb.long(), Arb.boolean()) { seed, sampled ->
+                    val generated = TraceParent.generate(Random(seed), sampled)
+
+                    generated.flags.random shouldBe true
+                    generated.child(Random(seed)).flags.random shouldBe true
+                    TraceParent
+                        .parse(generated.format())
+                        .ok()
+                        .flags.random shouldBe true
+                }
+                TraceParent.generate(Random(1), sampled = true).flags.value shouldBe 0x03
+                TraceParent.generate(Random(1), sampled = false).flags.value shouldBe 0x02
             }
 
             test("乱数を固定すると同じ値になる") {

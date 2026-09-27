@@ -83,6 +83,7 @@ public value class TraceFlags internal constructor(
         internal const val KNOWN_BITS: Int = SAMPLED_BIT or RANDOM_BIT
 
         public val SAMPLED: TraceFlags = TraceFlags(SAMPLED_BIT)
+        public val RANDOM: TraceFlags = TraceFlags(RANDOM_BIT)
         public val NONE: TraceFlags = TraceFlags(0)
 
         /** 1 バイト(0〜255)の値から作る。範囲外は検証エラー。 */
