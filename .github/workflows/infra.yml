@@ -44,6 +44,20 @@ jobs:
           if grep -n -E '^\s+image:' infra/local/docker-compose.yml | grep -v -E 'image: \$\{[A-Z0-9_]+_IMAGE:\?[^}]*\}$'; then
             echo "docker-compose.yml の image は images.env の変数で指定してください"; exit 1
           fi
+      # 自前で組み立てるイメージ(ADR-0016 §9)も、ベースは images.env の変数だけにし、取得する成果物は SHA-256 で固定する
+      - name: Self-built images use images.env bases and checksummed downloads
+        run: |
+          status=0
+          for dockerfile in infra/local/images/*/Dockerfile; do
+            if grep -n -E '^FROM ' "$dockerfile" | grep -v -E 'FROM \$\{[A-Z0-9_]+_IMAGE\}( AS [a-z0-9-]+)?$'; then
+              echo "$dockerfile: FROM は images.env の変数(ARG で受け取る \${..._IMAGE})だけにしてください"; status=1
+            fi
+            # 行末の \ で続く行を 1 行にしてから見る(URL は ADD の次の行に書くことが多い)
+            if sed -e ':a' -e '/\\$/N; s/\\\n//; ta' "$dockerfile" | grep -E '^ADD ' | grep -E 'https?://' | grep -v -E -- '--checksum=sha256:'; then
+              echo "$dockerfile: URL から取得する ADD には --checksum=sha256:... を付けてください"; status=1
+            fi
+          done
+          exit $status
 
   verify:
     name: verify (${{ matrix.profile }})

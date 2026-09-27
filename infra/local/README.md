@@ -122,6 +122,28 @@ curl -s -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token
 3. `images.env` の行を `<repository>:<tag>@<digest>` に書き換える。
 4. `make clean && make up PROFILE=<該当する profile> && make verify PROFILE=<同じ>` を実行し、PR にその結果を載せる。CI(`.github/workflows/infra.yml`)も全 profile で同じ検査を行う。
 
+### Kafka Connect(Debezium)のイメージ
+
+Kafka Connect は公開イメージを使わず、`images/kafka-connect/Dockerfile` で組み立てる(ADR-0016 §9)。Debezium の公式イメージは最新のパッチ版のタグが毎日付け直され、古いダイジェストが取得できなくなるため。
+
+- ベースは `images.env` の `KAFKA_IMAGE`(`apache/kafka`)。`make up` が build 引数で渡す。
+- 載せるもの: Debezium の Postgres コネクタと、Apicurio の Converter(どちらも Maven Central の成果物。版と SHA-256 を Dockerfile の `ARG` で固定)。
+- 設定: `CONNECT_<NAME>` の環境変数が `connect-distributed.properties` の `<name>` になる(大文字 → 小文字、`_` → `.`)。`docker-compose.yml` の `kafka-connect` を参照。
+
+版を上げる手順:
+
+1. Maven Central で版を確認する(`io.debezium:debezium-connector-postgres`、`io.apicurio:apicurio-registry-distro-connect-converter`。Apicurio は `images.env` の Registry のサーバと同じ版)。
+2. SHA-256 を、Maven Central の `.sha256` と、取得したファイルの値の両方で確かめる。
+
+   ```bash
+   url=https://repo1.maven.org/maven2/io/debezium/debezium-connector-postgres/3.6.3.Final/debezium-connector-postgres-3.6.3.Final-plugin.tar.gz
+   curl -fsS "$url.sha256"; echo
+   curl -fsSL "$url" | shasum -a 256
+   ```
+
+3. Dockerfile の `ARG`(版と SHA-256)を書き換える。
+4. `make up PROFILE=cdc && make verify PROFILE=cdc` を実行し、PR にその結果を載せる(`make up` は `--build` で組み立て直す)。
+
 ## トラブルシューティング
 
 | 症状 | 対処 |
