@@ -26,10 +26,15 @@ swagger-parser = "2.1.48"
 # json-schema-validator 3.x は Jackson 3(tools.jackson)を使う。swagger-parser の Jackson 2(com.fasterxml.jackson)とはパッケージが別なので共存できる。
 json-schema-validator = "3.0.7"
 jackson3 = "3.2.3"
-# swagger-parser が使う slf4j-api と同じ版(2.1 系は alpha のみ)。ログ出力は不要なので nop を使う。
-slf4j = "2.0.18"
+# slf4j-api の 2.0 系の最新安定版(2.1 系は alpha のみ)。contract-check は nop、platform/observability は logback で出力する。
+slf4j = "2.0.20"
 # 外部 CLI。tools/contract-check の build.gradle.kts がチェックサムを検証して取得する(ADR-0013)。
 oasdiff = "1.32.1"
+# P04a ② observability(確認日: 2026-09-27。ADR-0018)
+# OTel の計装ライブラリ(opentelemetry-instrumentation の logback / ktor / kafka / jdbc)は 2.31.1-alpha のみのため使わない(ADR-0018 §4)。
+opentelemetry = "1.66.0"
+opentelemetry-semconv = "1.44.0"
+logback = "1.6.4"
 
 [libraries]
 kotest-framework-engine = { module = "io.kotest:kotest-framework-engine", version.ref = "kotest" }
@@ -42,6 +47,9 @@ kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serializa
 kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "datetime" }
 ktor-server-core = { module = "io.ktor:ktor-server-core", version.ref = "ktor" }
 ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
+ktor-client-cio = { module = "io.ktor:ktor-client-cio", version.ref = "ktor" }
+ktor-server-cio = { module = "io.ktor:ktor-server-cio", version.ref = "ktor" }
+ktor-server-test-host = { module = "io.ktor:ktor-server-test-host", version.ref = "ktor" }
 koin-core = { module = "io.insert-koin:koin-core", version.ref = "koin" }
 exposed-core = { module = "org.jetbrains.exposed:exposed-core", version.ref = "exposed" }
 mockk = { module = "io.mockk:mockk", version.ref = "mockk" }
@@ -51,6 +59,15 @@ swagger-parser = { module = "io.swagger.parser.v3:swagger-parser", version.ref =
 json-schema-validator = { module = "com.networknt:json-schema-validator", version.ref = "json-schema-validator" }
 jackson3-dataformat-yaml = { module = "tools.jackson.dataformat:jackson-dataformat-yaml", version.ref = "jackson3" }
 slf4j-nop = { module = "org.slf4j:slf4j-nop", version.ref = "slf4j" }
+slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
+logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+opentelemetry-api = { module = "io.opentelemetry:opentelemetry-api", version.ref = "opentelemetry" }
+opentelemetry-sdk = { module = "io.opentelemetry:opentelemetry-sdk", version.ref = "opentelemetry" }
+opentelemetry-sdk-testing = { module = "io.opentelemetry:opentelemetry-sdk-testing", version.ref = "opentelemetry" }
+opentelemetry-exporter-otlp = { module = "io.opentelemetry:opentelemetry-exporter-otlp", version.ref = "opentelemetry" }
+# OTLP の送信に JDK の HttpClient を使う(既定の OkHttp の送信部と、それが引き込む Kotlin stdlib の版の衝突を避ける)
+opentelemetry-exporter-sender-jdk = { module = "io.opentelemetry:opentelemetry-exporter-sender-jdk", version.ref = "opentelemetry" }
+opentelemetry-semconv = { module = "io.opentelemetry.semconv:opentelemetry-semconv", version.ref = "opentelemetry-semconv" }
 
 # build-logic が convention plugin から適用するプラグインの実体
 gradle-kotlin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
