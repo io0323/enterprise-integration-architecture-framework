@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  各サービスの logback.xml から読み込む共通設定(ADR-0018 §3)。
+    <configuration>
+      <include resource="io/eia/platform/observability/logback-base.xml"/>
+    </configuration>
+  - 標準出力(EIA_STDOUT): 既定は構造化 JSON。EIA_LOG_FORMAT=console で人が読む形式にする。
+  - OTLP(EIA_OTLP): Observability.init() の後に送る。初期化前のログは溜めておき、初期化時に送る。
+  - 環境変数: OTEL_SERVICE_NAME(service)、EIA_LOG_FORMAT(json|console)、EIA_LOG_LEVEL(root のレベル。既定 INFO)。
+-->
+<included>
+  <appender name="EIA_STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder class="io.eia.platform.observability.logging.EiaLogEncoder">
+      <service>${OTEL_SERVICE_NAME:-unknown}</service>
+      <format>${EIA_LOG_FORMAT:-json}</format>
+    </encoder>
+  </appender>
+
+  <appender name="EIA_OTLP" class="io.eia.platform.observability.logging.OtlpLogAppender"/>
+
+  <root level="${EIA_LOG_LEVEL:-INFO}">
+    <appender-ref ref="EIA_STDOUT"/>
+    <appender-ref ref="EIA_OTLP"/>
+  </root>
+</included>

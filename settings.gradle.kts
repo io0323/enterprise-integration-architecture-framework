@@ -23,6 +23,7 @@ include(
     ":shared:kernel",
     ":shared:resilience",
     ":shared:canonical-model",
+    ":platform:observability",
     ":platform:test-support",
     ":services:order:domain",
     ":services:order:application",
