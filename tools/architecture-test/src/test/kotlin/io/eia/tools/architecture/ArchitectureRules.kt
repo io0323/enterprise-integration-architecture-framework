@@ -232,7 +232,6 @@ internal object ArchitectureRules {
 
     private const val OTEL_SDK_PACKAGE = "io.opentelemetry.sdk"
     private val OTEL_SDK_ALLOWED_PATHS = listOf(Regex("""^platform/observability/"""), Regex("""^services/[^/]+/app/"""))
-    private val OTEL_SDK_QUALIFIED_USE = Regex("""(?<![\w.])${Regex.escape(OTEL_SDK_PACKAGE)}\.""")
     private const val OTEL_SDK_RULE = "OTel SDK の配置"
 
     /**
@@ -241,21 +240,51 @@ internal object ArchitectureRules {
      * import と完全修飾名での参照の両方を検査する([testSupportOnlyFromTests] と同じ方式)。
      */
     fun otelSdkOnlyInAllowedModules(codeBase: CodeBase): List<Violation> =
-        codeBase.files
-            .filter { file -> OTEL_SDK_ALLOWED_PATHS.none { it.containsMatchIn(file.path) } && !TEST_SOURCE_SET.containsMatchIn(file.path) }
+        packageOnlyInAllowedPaths(
+            codeBase,
+            OTEL_SDK_PACKAGE,
+            OTEL_SDK_ALLOWED_PATHS,
+            OTEL_SDK_RULE,
+            "platform/observability と services/*/app だけ。ADR-0004 §4",
+        )
+
+    private const val NIMBUS_PACKAGE = "com.nimbusds"
+    private val NIMBUS_ALLOWED_PATHS = listOf(Regex("""^platform/security/"""))
+    private const val NIMBUS_RULE = "Nimbus JOSE+JWT の配置"
+
+    /**
+     * ADR-0019 §1: JWT・JWKS のライブラリ(Nimbus JOSE+JWT、`com.nimbusds`)を使ってよいのは platform/security だけ。
+     * ほかのモジュールは platform/security の部品(`JwtVerifier`・`eiaJwt`・`requireScopes`)を使い、署名の検証を各所で書かない。
+     * テストのソースセット(テスト用のトークンの作成)は除く。
+     */
+    fun nimbusOnlyInSecurity(codeBase: CodeBase): List<Violation> =
+        packageOnlyInAllowedPaths(codeBase, NIMBUS_PACKAGE, NIMBUS_ALLOWED_PATHS, NIMBUS_RULE, "platform/security だけ。ADR-0019 §1")
+
+    /** [packageName] を、[allowedPaths] 以外の本番コードから import または完全修飾名で参照していれば違反にする。 */
+    private fun packageOnlyInAllowedPaths(
+        codeBase: CodeBase,
+        packageName: String,
+        allowedPaths: List<Regex>,
+        rule: String,
+        allowed: String,
+    ): List<Violation> {
+        val qualifiedUse = Regex("""(?<![\w.])${Regex.escape(packageName)}\.""")
+        return codeBase.files
+            .filter { file -> allowedPaths.none { it.containsMatchIn(file.path) } && !TEST_SOURCE_SET.containsMatchIn(file.path) }
             .flatMap { file ->
                 val imports =
                     file.importNames
-                        .filter { it.isInPackage(OTEL_SDK_PACKAGE) }
-                        .map { Violation(OTEL_SDK_RULE, file.path, "import $it(platform/observability と services/*/app だけ。ADR-0004 §4)") }
+                        .filter { it.isInPackage(packageName) }
+                        .map { Violation(rule, file.path, "import $it($allowed)") }
                 val qualified =
-                    if (OTEL_SDK_QUALIFIED_USE.containsMatchIn(file.code.replace(IMPORT_OR_PACKAGE_LINE, ""))) {
-                        listOf(Violation(OTEL_SDK_RULE, file.path, "完全修飾名で OTel SDK を参照しています(ADR-0004 §4)"))
+                    if (qualifiedUse.containsMatchIn(file.code.replace(IMPORT_OR_PACKAGE_LINE, ""))) {
+                        listOf(Violation(rule, file.path, "完全修飾名で $packageName を参照しています($allowed)"))
                     } else {
                         emptyList()
                     }
                 imports + qualified
             }
+    }
 
     /**
      * DomainError の Retryable と NonRetryable の両方を(間接的な継承を含めて)実装する型を禁止する(ADR-0011)。
