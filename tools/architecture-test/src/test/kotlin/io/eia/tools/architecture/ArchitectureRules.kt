@@ -232,18 +232,29 @@ internal object ArchitectureRules {
 
     private const val OTEL_SDK_PACKAGE = "io.opentelemetry.sdk"
     private val OTEL_SDK_ALLOWED_PATHS = listOf(Regex("""^platform/observability/"""), Regex("""^services/[^/]+/app/"""))
+    private val OTEL_SDK_QUALIFIED_USE = Regex("""(?<![\w.])${Regex.escape(OTEL_SDK_PACKAGE)}\.""")
+    private const val OTEL_SDK_RULE = "OTel SDK の配置"
 
     /**
      * ADR-0004 §4: OTel SDK(`io.opentelemetry.sdk`)を使ってよいのは platform/observability と services/<name>/app だけ。
      * ほかのモジュールは OTel API と platform/observability の部品を使う。テストのソースセット(InMemory の exporter など)は除く。
+     * import と完全修飾名での参照の両方を検査する([testSupportOnlyFromTests] と同じ方式)。
      */
     fun otelSdkOnlyInAllowedModules(codeBase: CodeBase): List<Violation> =
         codeBase.files
             .filter { file -> OTEL_SDK_ALLOWED_PATHS.none { it.containsMatchIn(file.path) } && !TEST_SOURCE_SET.containsMatchIn(file.path) }
             .flatMap { file ->
-                file.importNames
-                    .filter { it.isInPackage(OTEL_SDK_PACKAGE) }
-                    .map { Violation("OTel SDK の配置", file.path, "import $it(OTel SDK は platform/observability と services/*/app だけ。ADR-0004 §4)") }
+                val imports =
+                    file.importNames
+                        .filter { it.isInPackage(OTEL_SDK_PACKAGE) }
+                        .map { Violation(OTEL_SDK_RULE, file.path, "import $it(platform/observability と services/*/app だけ。ADR-0004 §4)") }
+                val qualified =
+                    if (OTEL_SDK_QUALIFIED_USE.containsMatchIn(file.code.replace(IMPORT_OR_PACKAGE_LINE, ""))) {
+                        listOf(Violation(OTEL_SDK_RULE, file.path, "完全修飾名で OTel SDK を参照しています(ADR-0004 §4)"))
+                    } else {
+                        emptyList()
+                    }
+                imports + qualified
             }
 
     /**

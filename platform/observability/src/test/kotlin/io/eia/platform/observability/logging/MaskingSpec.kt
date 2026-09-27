@@ -17,7 +17,7 @@ class MaskingSpec :
 
             test("Bearer / Basic の資格情報を伏せ、方式の名前は残す") {
                 Masking.mask("Authorization: Bearer abc.def-ghi") shouldBe "Authorization: ***"
-                Masking.mask("header bearer abc123 sent") shouldBe "header bearer [token] sent"
+                Masking.mask("header bearer abc123def456 sent") shouldBe "header bearer [token] sent"
                 Masking.mask("Basic dXNlcjpwYXNz") shouldBe "Basic [token]"
             }
         }
@@ -33,6 +33,42 @@ class MaskingSpec :
                     "grant_type=client_credentials&client_secret=***&scope=x"
                 Masking.mask("api_key: k-123, next") shouldBe "api_key: ***, next"
                 Masking.mask("PASSWORD=Hunter2") shouldBe "PASSWORD=***"
+            }
+        }
+
+        context("秘密情報のキー(レビューで見つかった取りこぼし)") {
+            test("camelCase・ハイフン区切り・前後に語が付いたキー") {
+                Masking.mask("""{"accessToken":"opaque-abc","clientSecret":"s3","refreshToken":"r1"}""") shouldBe
+                    """{"accessToken":"***","clientSecret":"***","refreshToken":"***"}"""
+                Masking.mask("accessToken=opaque-abc clientSecret=s3") shouldBe "accessToken=*** clientSecret=***"
+                Masking.mask("x-api-key: k1 api-key=k2") shouldBe "x-api-key: *** api-key=***"
+                Masking.mask("newPassword=n1 passwordHash=h1") shouldBe "newPassword=*** passwordHash=***"
+            }
+
+            test("引用符で囲んだ値(二重・一重)と、一重引用符のキー") {
+                Masking.mask("""password="hunter2" password: "hunter3" token="abc"""") shouldBe
+                    """password="***" password: "***" token="***""""
+                Masking.mask("{'password': 'hunter2'}") shouldBe "{'password': '***'}"
+            }
+
+            test("URL の userinfo") {
+                Masking.mask("connect jdbc:postgresql://eia:pw123@db:5432/x") shouldBe "connect jdbc:postgresql://***:***@db:5432/x"
+            }
+
+            test("値の後ろの ) は残す(toString の形を壊さない)") {
+                Masking.mask("LoginRequest(user=a, password=hunter2)") shouldBe "LoginRequest(user=a, password=***)"
+            }
+        }
+
+        context("誤検知しない") {
+            test("キーのない bearer / basic は、資格情報らしい値だけを伏せる") {
+                Masking.mask("Using basic authentication") shouldBe "Using basic authentication"
+                Masking.mask("Bearer tokens are rotated") shouldBe "Bearer tokens are rotated"
+            }
+
+            test("0 始まりの 10 桁の ID は電話番号にしない(区切りのない携帯の 11 桁だけを伏せる)") {
+                Masking.mask("batch 0123456789") shouldBe "batch 0123456789"
+                Masking.mask("tel 090 1234 5678") shouldBe "tel [phone]"
             }
         }
 

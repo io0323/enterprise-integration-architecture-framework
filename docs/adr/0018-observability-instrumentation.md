@@ -43,6 +43,9 @@ P04a ② で `platform/observability` を作る。Framework 14 章は、全チ�
 - 入口(`ServerObservability`)では、受信した `X-Correlation-Id` を `CorrelationId.parse` で検証して使う。ない・不正・複数あるときは `CorrelationId.generate()` で採番する(Framework 14.1)。不正な値は、値を出さずに警告ログだけを残す。
 - 決まった ID は、ログの MDC(`correlation_id`)と span の属性(`correlation_id`)の両方に入れ、レスポンスのヘッダにも返す。送信側(`ClientObservability`)は、呼び出し元のコルーチンの `ObservabilityContext` から付ける。
 - MDC と OTel の Context は、`ObservabilityContext`(`ThreadContextElement`)がコルーチンの再開のたびに設定し、中断したら元に戻す。`kotlinx-coroutines-slf4j` の `MDCContext` を使わないのは、MDC と OTel の Context を 1 つの要素でまとめて切り替えたいため(別々の要素にすると、片方だけが入った状態を作れてしまう)。
+- 子の span を現在にするときは `ObservabilityRuntime.withSpan(name) { ... }` を使い、OTel の `span.makeCurrent()` を中断(suspend)をまたいで使わない。`makeCurrent()` の Scope はスレッドに結び付くため、コルーチンが別のスレッドで再開すると、以降のログと送信の親がずれる。`withSpan` は `ObservabilityContext` の OTel の Context を差し替える。
+- 送信側で呼び出し側が `X-Correlation-Id` を明示した場合は、正しい値ならそれを送り、span の属性にも同じ値を入れる。不正ならコンテキストの値に置き換える(送る値と span の値を食い違わせない)。
+- 受信した `X-Correlation-Id` が不正なときのログは DEBUG にし、件数はメトリクス `eia.http.server.correlation_id.invalid` で数える。外部から不正な値を大量に送られても、ログが増えないようにするため。
 - **W3C Baggage では運ばない。** Baggage の Propagator も登録しない。
   - INTEGRATION_STANDARDS §2 の標準は `X-Correlation-Id`(HTTP)/ `correlationid`(Kafka のヘッダ)/ manifest の `correlationId` である。Baggage に同じ値を載せると、どちらが正しい値か曖昧になる。
   - Baggage は、Propagator を通るすべての送信(外部の SaaS や取引先への呼び出しを含む)に自動で付く。業務の ID を意図せず社外に出すことになる(Framework 12 章の最小権限・情報の持ち出し)。`X-Correlation-Id` は、送信先ごとにプラグインを付けるかどうかで制御できる。
@@ -62,7 +65,11 @@ P04a ② で `platform/observability` を作る。Framework 14 章は、全チ�
 - OTLP に送るアペンダ(`OtlpLogAppender`)は、OTel の安定版の Logs API で自前に実装する(計装ライブラリの `opentelemetry-logback-appender-1.0` は alpha のみ。§4)。
 - **OTel の初期化より前のログ**: `OtlpLogAppender` は初期化(`Observability.init()`)まで最大 `bufferSize`(既定 1,000)件をメモリに溜め、初期化時に元の時刻のまま送る。溢れた分は捨て、捨てた件数を初期化時に WARN で送る。起動時のログ(設定の読み込み・マイグレーション)は障害の調査に要るが、無制限に溜めると初期化に失敗したときにメモリを使い続けるため、上限を設ける。標準出力には、初期化の前後によらず常に出る(`LoggingSpec` で検査)。
 - 各サービスは `logback.xml` で `io/eia/platform/observability/logback-base.xml` を読み込む。
-- **マスキング**: `Masking` が、トークン(JWT・Bearer / Basic)、秘密情報のキーの値(`password` / `client_secret` など)、メールアドレス、カード番号(Luhn で確認)、電話番号を伏せる。`EiaLogEncoder` と `OtlpLogAppender` が、メッセージ・例外・MDC の値に必ず適用する。
+- **マスキング**: `Masking` が、URL の userinfo、秘密情報のキーの値、トークン(JWT・Bearer / Basic)、メールアドレス、カード番号(Luhn で確認)、電話番号を伏せる。`EiaLogEncoder` と `OtlpLogAppender` が、メッセージ・例外・MDC の値に必ず適用する。
+  - 秘密情報のキーは広めに照合する。大文字小文字と区切り(`_` / `-` / camelCase)を問わず、`password` / `secret` / `token` / `api key` / `credential` / `authorization` / `cookie` などの語を含むキー(`newPassword`、`clientSecret`、`x-api-key` など)の値を、引用符の有無によらず伏せる。
+  - 誤検知と見逃しは、秘密情報は伏せる側(誤検知を許す)に、個人情報の数字は見逃す側(誤検知を減らす)に倒す。キーのない `Bearer` / `Basic` は資格情報らしい値(8 文字以上で、数字・記号を含むか大文字と小文字が混ざる)だけを伏せる。電話番号は、区切りのある番号と区切りのない携帯の 11 桁(`0[789]0`)だけを伏せ、0 始まりの 10 桁の ID は伏せない。
+  - 必須キー(JSON)や、アペンダが設定する属性(OTLP)と同じ名前の MDC のキーは、`mdc.` を付けて出す。必須キーを上書きさせないため。
+  - console 形式でも、メッセージの改行はエスケープして 1 イベント 1 行を保つ。
   - ID のキー(`trace_id` など)は形式を検証済みなので伏せない。数字だけの span_id がカード番号と誤判定されるのを避けるため。
   - プラグインはリクエストとレスポンスの本文を読まず、ログにも出さない。ログを書く側も、受け取った値ではなく参照キーを書く(Framework 14.1)。マスキングは最後の防御であり、網羅は保証しない。
 
@@ -91,6 +98,7 @@ P06・P07 で自前で実装する範囲(`platform/messaging-kafka` / `platform/
 - OTel semconv の `http.server.request.duration` / `http.client.request.duration`(単位は秒のヒストグラム)で、件数(Rate)・`error.type` 付きの件数(Error)・分布(Duration)を表す(Framework 14.1)。
 - 属性は、`http.request.method`(既知でないメソッドは `_OTHER`)、`http.route`(テンプレートのみ)、`http.response.status_code`、`error.type`、`integration_id`(サーバ)、`server.address`(クライアント)。生のパスや ID は入れない(カーディナリティと機密のため)。
 - エラーの定義は semconv に従う。サーバは 5xx と例外、クライアントは 4xx 以上と例外。
+- **キャンセルはエラーに数えない。** クライアントの切断や呼び出し側のタイムアウトで処理がキャンセルされた場合は、応答していないので `http.response.status_code` を記録せず、`error.type` も付けない。500 として数えると、実際には返していない 5xx が Error 率と SLO のアラートを押し上げるため。キャンセルの件数は、ステータスのない件数として見える。
 
 ## Alternatives Considered
 - **OTel の Java エージェント**: §1 の表のとおり。KMP SDK と伝搬の規則が二重になるため不採用。
@@ -108,3 +116,6 @@ P06・P07 で自前で実装する範囲(`platform/messaging-kafka` / `platform/
 - マスキングは正規表現による最後の防御である。13〜19 桁で Luhn に通る数字の列(ミリ秒のエポック時刻など)を誤って伏せることがある。
 - ログは Collector が止まっている間は OTLP 側で欠けうる(標準出力には残る)。
 - 初期化前のログの上限(1,000 件)を超えた分は OTLP には送られない(標準出力には残り、捨てた件数は WARN で分かる)。
+- ログの trace は、記録した時点の現在の span(フラグを含む)を優先し、なければ MDC の trace_id / span_id を使う。MDC だけから作った場合、trace flags は既定値(00)になる。
+- **外部から受け取った sampled フラグを信じる。** サンプラは ParentBased のため、外部の呼び出し元が sampled=1 を送れば記録される。社外に公開する入口では、Gateway(APISIX)で外部の `traceparent` を捨てて付け直すか、信じるかを P05 で決める(ROADMAP P05)。
+- **OTLP の送信は、ローカル参照実装では平文で、認証もない。** 本番の構成では TLS(可能なら mTLS)と送信先の認証が要る。ローカル基盤の転送路の暗号化と合わせて Issue #29 で扱う。資格情報は ③ security の `SecretProvider` から渡す。

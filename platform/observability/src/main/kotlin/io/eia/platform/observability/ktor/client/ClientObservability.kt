@@ -5,6 +5,8 @@ import io.eia.platform.observability.context.LogKeys
 import io.eia.platform.observability.context.ObservabilityContext
 import io.eia.platform.observability.metrics.HttpExchange
 import io.eia.platform.observability.metrics.HttpMetrics
+import io.eia.shared.kernel.CorrelationId
+import io.eia.shared.kernel.getOrNull
 import io.ktor.client.call.HttpClientCall
 import io.ktor.client.plugins.api.ClientPlugin
 import io.ktor.client.plugins.api.Send
@@ -20,6 +22,7 @@ import io.opentelemetry.context.propagation.TextMapSetter
 import io.opentelemetry.semconv.ErrorAttributes
 import io.opentelemetry.semconv.HttpAttributes
 import io.opentelemetry.semconv.ServerAttributes
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlin.time.TimeSource
 
@@ -28,7 +31,9 @@ import kotlin.time.TimeSource
  *
  * - 呼び出し元のコルーチンの [ObservabilityContext](なければ OTel の現在の Context)を親として CLIENT span を作り、
  *   `traceparent` / `tracestate` を注入する。
- * - `X-Correlation-Id` を付ける。呼び出し側が明示的に付けた値は上書きしない。
+ * - `X-Correlation-Id` を付ける。呼び出し側が明示的に付けた正しい値はそのまま使い、span の属性にも同じ値を入れる。
+ *   明示的な値が不正なら、コンテキストの値に置き換える(コンテキストもなければ送らない)。
+ * - 呼び出し側のキャンセルは、応答がないのでステータスを記録せず、エラーにも数えない(ADR-0018 §5)。
  * - RED メトリクス([HttpMetrics])を記録する。URL のパスとクエリは属性に入れない(個人情報やトークンを含みうるため)。
  */
 public val ClientObservability: ClientPlugin<ClientObservabilityConfig> =
@@ -51,11 +56,11 @@ public val ClientObservability: ClientPlugin<ClientObservabilityConfig> =
                     .setAttribute(ServerAttributes.SERVER_PORT, request.url.port.toLong())
                     .startSpan()
             propagator.inject(parent.with(span), request, RequestSetter)
-            observability?.let { context ->
-                span.setAttribute(CORRELATION_ID, context.correlationId.value)
-                if (!request.headers.contains(CorrelationHeaders.X_CORRELATION_ID)) {
-                    request.headers.append(CorrelationHeaders.X_CORRELATION_ID, context.correlationId.value)
-                }
+            val correlationId = correlationIdFor(request, observability)
+            request.headers.remove(CorrelationHeaders.X_CORRELATION_ID)
+            correlationId?.let {
+                request.headers.append(CorrelationHeaders.X_CORRELATION_ID, correlationId.value)
+                span.setAttribute(CORRELATION_ID, correlationId.value)
             }
 
             observe(request.url.host, method, span, metrics) { proceed(request) }
@@ -80,7 +85,8 @@ private suspend fun <T : HttpClientCall> observe(
         failure = e
         throw e
     } finally {
-        val exchange = HttpExchange(method, status, HttpMetrics.clientErrorType(status, failure))
+        val errorType = if (failure is CancellationException) null else HttpMetrics.clientErrorType(status, failure)
+        val exchange = HttpExchange(method, status, errorType)
         status?.let { span.setAttribute(HttpAttributes.HTTP_RESPONSE_STATUS_CODE, it.toLong()) }
         exchange.errorType?.let {
             span.setAttribute(ErrorAttributes.ERROR_TYPE, it)
@@ -92,6 +98,18 @@ private suspend fun <T : HttpClientCall> observe(
 }
 
 private val CORRELATION_ID = AttributeKey.stringKey(LogKeys.CORRELATION_ID)
+
+/** 送る Correlation ID。明示的に付けた正しい値を優先し、なければ(不正なら)コンテキストの値。どちらもなければ `null`。 */
+private fun correlationIdFor(
+    request: HttpRequestBuilder,
+    observability: ObservabilityContext?,
+): CorrelationId? {
+    val explicit =
+        request.headers.getAll(CorrelationHeaders.X_CORRELATION_ID)?.singleOrNull()?.let {
+            CorrelationId.parse(it.trim()).getOrNull()
+        }
+    return explicit ?: observability?.correlationId
+}
 
 private object RequestSetter : TextMapSetter<HttpRequestBuilder> {
     override fun set(

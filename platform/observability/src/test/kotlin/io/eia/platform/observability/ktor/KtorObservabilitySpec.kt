@@ -9,6 +9,7 @@ import io.eia.platform.observability.ktor.server.ServerObservability
 import io.eia.platform.observability.ok
 import io.eia.shared.kernel.CorrelationId
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.nulls.shouldNotBeNull
@@ -148,7 +149,7 @@ class KtorObservabilitySpec :
                 }
             }
 
-            test("不正な X-Correlation-Id と traceparent は捨て、受信した値をログにもヘッダにも出さない") {
+            test("不正な X-Correlation-Id と traceparent は捨て、受信した値をログにもヘッダにも出さない(件数はメトリクス)") {
                 TestTelemetry().use { telemetry ->
                     val bad = "evil value <script>"
                     var echoed: String? = null
@@ -168,7 +169,13 @@ class KtorObservabilitySpec :
                     CorrelationId.parse(echoed.shouldNotBeNull()).ok().value shouldBe echoed
                     span.traceId shouldNotBe TRACE_ID
                     val bodies = telemetry.logs.map { it.bodyValue?.asString().orEmpty() }
-                    bodies.any { it.contains(CorrelationHeaders.X_CORRELATION_ID) && it.contains("不正") } shouldBe true
+                    // 不正な値の件数はメトリクスで数える(ログは DEBUG。FailureCasesSpec)
+                    telemetry
+                        .metrics()
+                        .single { it.name == "eia.http.server.correlation_id.invalid" }
+                        .longSumData.points
+                        .single()
+                        .value shouldBe 1L
                     bodies.none { it.contains("evil") } shouldBe true
                 }
             }
@@ -185,12 +192,7 @@ class KtorObservabilitySpec :
 
                     failed.status.statusCode shouldBe StatusCode.ERROR
                     failed.attributes.get(AttributeKey.stringKey("error.type")) shouldBe "java.lang.IllegalStateException"
-                    failed.events.none {
-                        it.attributes
-                            .asMap()
-                            .values
-                            .any { v -> v.toString().contains("hunter2") }
-                    } shouldBe true
+                    failed.events.shouldBeEmpty() // 例外のイベント(recordException)を入れない
                     missing.status.statusCode shouldBe StatusCode.UNSET
                     // 未処理の例外は Correlation ID と trace_id の付いたログに残し、メッセージの秘密情報は伏せる
                     val error =

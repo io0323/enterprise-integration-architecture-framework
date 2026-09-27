@@ -8,6 +8,7 @@ import io.eia.platform.observability.TestTelemetry
 import io.eia.platform.observability.context.LogKeys
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactly
+import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
@@ -110,6 +111,23 @@ class LoggingSpec :
                 SECRETS.forEach { line shouldNotContain it }
             }
 
+            test("必須キーと同じ名前の MDC のキーは mdc. を付け、必須キーを上書きさせない") {
+                val json = IsolatedLogging().encode("本物", mapOf("message" to "偽物", "level" to "ERROR", "order" to "o-1")).json()
+
+                json["message"]?.jsonPrimitive?.content shouldBe "本物"
+                json["level"]?.jsonPrimitive?.content shouldBe "INFO"
+                json["mdc.message"]?.jsonPrimitive?.content shouldBe "偽物"
+                json["mdc.level"]?.jsonPrimitive?.content shouldBe "ERROR"
+                json["order"]?.jsonPrimitive?.content shouldBe "o-1"
+            }
+
+            test("console でも 1 イベント 1 行にする(改行で別の行を偽装させない)") {
+                val line = IsolatedLogging(format = "console").encode("注文\n2026-01-01T00:00:00Z ERROR [x] 偽の行\r")
+
+                line.trimEnd('\n').lines() shouldHaveSize 1
+                line shouldContain "注文\\n2026-01-01T00:00:00Z ERROR [x] 偽の行\\r"
+            }
+
             test("不正な形式は json にして、logback の状態に警告を残す") {
                 val logging = IsolatedLogging(format = "yaml")
 
@@ -206,6 +224,49 @@ class LoggingSpec :
                     attributes.get(AttributeKey.stringKey("exception.type")) shouldBe "java.lang.IllegalStateException"
                     attributes.get(AttributeKey.stringKey("exception.message")) shouldBe "password=***"
                     attributes.asMap().values.none { it.toString().contains("hunter2") } shouldBe true
+                }
+            }
+
+            test("現在の span をフラグごと使い、属性と同じ名前の MDC のキーには mdc. を付ける") {
+                val logging = IsolatedLogging()
+                TestTelemetry(installLogAppender = false).use { telemetry ->
+                    OtlpLogAppender.install(telemetry.runtime.sdk.sdkLoggerProvider, logging.context)
+                    val span =
+                        telemetry.runtime.tracer
+                            .spanBuilder("child")
+                            .startSpan()
+                    org.slf4j.MDC.put("logger", "偽物")
+                    try {
+                        span.makeCurrent().use { logging.logger.info("子の span の中") }
+                    } finally {
+                        org.slf4j.MDC.clear()
+                        span.end()
+                    }
+                    val record = telemetry.logs.single()
+
+                    record.spanContext.spanId shouldBe span.spanContext.spanId
+                    record.spanContext.traceFlags shouldBe span.spanContext.traceFlags
+                    record.attributes.get(AttributeKey.stringKey("logger")) shouldBe "io.eia.sample.OrderRoutes"
+                    record.attributes.get(AttributeKey.stringKey("mdc.logger")) shouldBe "偽物"
+                }
+            }
+
+            test("記録と初期化が並行しても、溜めたイベントと直接送ったイベントを取りこぼさない") {
+                val logging = IsolatedLogging(bufferSize = 100_000)
+                TestTelemetry(installLogAppender = false).use { telemetry ->
+                    val threads =
+                        (1..4).map { t ->
+                            Thread { repeat(500) { logging.logger.info("t$t-$it") } }.apply { start() }
+                        }
+                    Thread.sleep(5)
+                    OtlpLogAppender.install(telemetry.runtime.sdk.sdkLoggerProvider, logging.context)
+                    threads.forEach(Thread::join)
+
+                    telemetry.logs
+                        .map { it.bodyValue?.asString() }
+                        .toSet()
+                        .size shouldBe 2_000
+                    logging.otlp.pendingCount() shouldBe 0
                 }
             }
 

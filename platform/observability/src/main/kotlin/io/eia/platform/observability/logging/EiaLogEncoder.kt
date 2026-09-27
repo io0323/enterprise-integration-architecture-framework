@@ -34,6 +34,7 @@ public enum class LogFormat {
  *
  * JSON の必須キー: `timestamp`, `level`, `service`, `trace_id`, `span_id`, `correlation_id`, `integration_id`, `message`。
  * 値のないキーは `null` で出す(キーの有無で検索が変わらないように)。ほかに `logger`, `thread`, `exception` と、上記以外の MDC を出す。
+ * これらと同じ名前の MDC のキーは `mdc.` を付けて出す(必須キーを上書きさせない)。
  *
  * メッセージ・例外・MDC の値は [Masking] を通す。ID のキー([LogKeys])は形式を検証済みの値なので、そのまま出す
  * (数字だけの span_id がカード番号と誤判定されないように)。
@@ -77,7 +78,7 @@ public class EiaLogEncoder : EncoderBase<ILoggingEvent>() {
             put("logger", event.loggerName)
             put("thread", event.threadName)
             event.throwableProxy?.let { put("exception", Masking.mask(it.render())) }
-            mdc.filterKeys { it !in LogKeys.ALL }.forEach { (key, value) -> put(key, Masking.mask(value.orEmpty())) }
+            mdc.filterKeys { it !in LogKeys.ALL }.forEach { (key, value) -> put(mdcFieldName(key), Masking.mask(value.orEmpty())) }
         }
     }
 
@@ -89,7 +90,8 @@ public class EiaLogEncoder : EncoderBase<ILoggingEvent>() {
             append(event.level.toString().padEnd(LEVEL_WIDTH)).append(' ')
             append('[').append(service).append("] ")
             append(event.loggerName.substringAfterLast('.')).append(" - ")
-            append(Masking.mask(event.formattedMessage.orEmpty()))
+            // 1 イベント 1 行を保つ(改行を含むメッセージで別の行を偽装させない)
+            append(Masking.mask(event.formattedMessage.orEmpty()).replace("\r", "\\r").replace("\n", "\\n"))
             if (ids.isNotEmpty()) append(" (").append(ids).append(')')
             event.throwableProxy?.let { append('\n').append(Masking.mask(it.render())) }
         }
@@ -97,6 +99,12 @@ public class EiaLogEncoder : EncoderBase<ILoggingEvent>() {
 
     private companion object {
         const val LEVEL_WIDTH = 5
+        const val MDC_PREFIX = "mdc."
+
+        /** エンコーダが出すキー。同じ名前の MDC のキーは [MDC_PREFIX] を付けて出す(必須キーを上書きさせない)。 */
+        val RESERVED_FIELDS = setOf("timestamp", "level", "service", "message", "logger", "thread", "exception") + LogKeys.ALL
+
+        fun mdcFieldName(key: String): String = if (key in RESERVED_FIELDS) "$MDC_PREFIX$key" else key
 
         /** UTC の ISO-8601(logback 1.3 以降はナノ秒まで持つ)。 */
         fun ILoggingEvent.timestamp(): Instant = instant ?: Instant.ofEpochMilli(timeStamp)

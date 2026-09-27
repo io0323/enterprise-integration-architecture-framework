@@ -76,6 +76,7 @@
 ## P05 API Integration: order-service
 - Clean Architecture 4 モジュール構成。`POST /v1/orders`(Idempotency-Key 必須)、`GET /v1/orders/{id}`。Gateway 公開パスは `/sales/v1/orders`(ADR-0005)
 - APISIX 経由公開(JWT 検証・Rate Limit・Correlation ID 付与・prefix 書き換え)、Keycloak Client Credentials
+- 社外から受け取った `traceparent` の扱い(Gateway で捨てて付け直すか、信じるか)を決める。サービスのサンプラは ParentBased のため、外部の sampled フラグがそのまま効く(ADR-0018)
 - mTLS(APISIX → order-service。開発用 CA はスクリプトで生成し、コミットしない)(ADR-0008)
 - エラーは RFC 9457 Problem Details
 - 最低限の RED ダッシュボード(Grafana)
