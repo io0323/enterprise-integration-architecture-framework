@@ -86,7 +86,12 @@ services:
 
   # ---------------------------------------------------------------- cdc
   kafka-connect:
-    image: ${DEBEZIUM_CONNECT_IMAGE:?}
+    # Debezium の公式イメージは使わず、images.env の apache/kafka に Maven Central の Debezium の Postgres コネクタと
+    # Apicurio の Converter を載せて組み立てる(ADR-0016 §9。版と SHA-256 は Dockerfile で固定)
+    build:
+      context: ./images/kafka-connect
+      args:
+        KAFKA_IMAGE: ${KAFKA_IMAGE:?}
     profiles: [cdc]
     depends_on:
       kafka:
@@ -96,31 +101,32 @@ services:
       apicurio:
         condition: service_healthy
     environment:
-      BOOTSTRAP_SERVERS: kafka:9092
+      # CONNECT_<NAME> は connect-distributed.properties の <name>(大文字 → 小文字、_ → .)。images/kafka-connect/connect-entrypoint.sh
+      CONNECT_BOOTSTRAP_SERVERS: kafka:9092
       # Connect の内部トピックと Consumer Group(業務トピックの命名規約の対象外。先頭の _ で区別する)
-      GROUP_ID: debezium.connect
-      CONFIG_STORAGE_TOPIC: _connect.configs
-      OFFSET_STORAGE_TOPIC: _connect.offsets
-      STATUS_STORAGE_TOPIC: _connect.status
-      CONFIG_STORAGE_REPLICATION_FACTOR: 1
-      OFFSET_STORAGE_REPLICATION_FACTOR: 1
-      STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_GROUP_ID: debezium.connect
+      CONNECT_CONFIG_STORAGE_TOPIC: _connect.configs
+      CONNECT_OFFSET_STORAGE_TOPIC: _connect.offsets
+      CONNECT_STATUS_STORAGE_TOPIC: _connect.status
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
       # auto.create.topics.enable=false のため、コネクタの出力先トピックは Connect が明示的に作る(topic.creation.*)
       CONNECT_TOPIC_CREATION_ENABLE: "true"
-      # Apicurio の Avro Converter を有効にする(P06 の Outbox で使う)
-      ENABLE_APICURIO_CONVERTERS: "true"
+      # Apicurio の Avro Converter はイメージに含めている(plugin.path の apicurio-converter。P06 の Outbox で使う)
       # コネクタの設定に秘密情報を平文で書かず、${env:VAR} で参照させる(Framework 12.2。ADR-0016 §7)。
       # 平文で書くと _connect.configs トピックと REST(GET /connectors/{name}/config)から読めてしまう
       CONNECT_CONFIG_PROVIDERS: env
       CONNECT_CONFIG_PROVIDERS_ENV_CLASS: org.apache.kafka.common.config.provider.EnvVarConfigProvider
       DEBEZIUM_DB_PASSWORD: ${DEBEZIUM_DB_PASSWORD:?}
-      HEAP_OPTS: -Xms256m -Xmx384m
+      KAFKA_HEAP_OPTS: -Xms256m -Xmx384m
     ports:
       - 127.0.0.1:19083:8083
     mem_limit: 1g
     healthcheck:
       <<: *healthcheck
-      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8083/connector-plugins"]
+      # apache/kafka には curl がないため、BusyBox の wget を使う
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8083/connector-plugins"]
       # 起動時のグループ参加(NotCoordinator の再試行)で REST の待ち受けまで 1 分以上かかることがある
       start_period: 90s
 

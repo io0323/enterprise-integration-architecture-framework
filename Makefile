@@ -41,8 +41,9 @@ format: ## ktlint で自動整形
 env: ## infra/local/.env(秘密情報)をランダム生成する。既にあれば不足分だけ追記
 	@$(INFRA)/scripts/init-env.sh
 
+# --build: 自前で組み立てるイメージ(kafka-connect。ADR-0016 §9)の Dockerfile の変更を反映する(変更がなければキャッシュを使う)
 up: env ## ローカル基盤を起動し、全コンテナが healthy になるまで待つ(例: make up PROFILE=cdc)
-	$(COMPOSE) $(COMPOSE_PROFILES_ARGS) up -d --wait --wait-timeout 420
+	$(COMPOSE) $(COMPOSE_PROFILES_ARGS) up -d --build --wait --wait-timeout 420
 
 down: env ## ローカル基盤を停止する(全 profile。データは残す)
 	$(COMPOSE) --profile '*' down --remove-orphans
