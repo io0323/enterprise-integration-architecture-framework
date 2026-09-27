@@ -230,6 +230,22 @@ internal object ArchitectureRules {
                 imports + qualified
             }
 
+    private const val OTEL_SDK_PACKAGE = "io.opentelemetry.sdk"
+    private val OTEL_SDK_ALLOWED_PATHS = listOf(Regex("""^platform/observability/"""), Regex("""^services/[^/]+/app/"""))
+
+    /**
+     * ADR-0004 §4: OTel SDK(`io.opentelemetry.sdk`)を使ってよいのは platform/observability と services/<name>/app だけ。
+     * ほかのモジュールは OTel API と platform/observability の部品を使う。テストのソースセット(InMemory の exporter など)は除く。
+     */
+    fun otelSdkOnlyInAllowedModules(codeBase: CodeBase): List<Violation> =
+        codeBase.files
+            .filter { file -> OTEL_SDK_ALLOWED_PATHS.none { it.containsMatchIn(file.path) } && !TEST_SOURCE_SET.containsMatchIn(file.path) }
+            .flatMap { file ->
+                file.importNames
+                    .filter { it.isInPackage(OTEL_SDK_PACKAGE) }
+                    .map { Violation("OTel SDK の配置", file.path, "import $it(OTel SDK は platform/observability と services/*/app だけ。ADR-0004 §4)") }
+            }
+
     /**
      * DomainError の Retryable と NonRetryable の両方を(間接的な継承を含めて)実装する型を禁止する(ADR-0011)。
      * 継承関係は単純名で辿るため、同名の別の型があると誤検知しうる。

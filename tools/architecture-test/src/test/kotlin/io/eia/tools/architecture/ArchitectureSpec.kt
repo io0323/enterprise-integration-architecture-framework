@@ -49,6 +49,10 @@ class ArchitectureSpec :
             ArchitectureRules.testSupportOnlyFromTests(codeBase).assertNone()
         }
 
+        test("OTel SDK は platform/observability と services/*/app だけで使う(ADR-0004 §4)") {
+            ArchitectureRules.otelSdkOnlyInAllowedModules(codeBase).assertNone()
+        }
+
         test("Retryable と NonRetryable の両方を実装する型がない") {
             ArchitectureRules.domainErrorKindIsExclusive(codeBase).assertNone()
         }
