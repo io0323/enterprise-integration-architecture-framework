@@ -1,0 +1,34 @@
+# CollectorIT 用の OTel Collector の設定。OTLP/HTTP で受けて、ファイル(OTLP JSON)に書き出す。
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  file/traces:
+    path: /out/traces.jsonl
+    flush_interval: 200ms
+  file/logs:
+    path: /out/logs.jsonl
+    flush_interval: 200ms
+  file/metrics:
+    path: /out/metrics.jsonl
+    flush_interval: 200ms
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [file/traces]
+    logs:
+      receivers: [otlp]
+      exporters: [file/logs]
+    metrics:
+      receivers: [otlp]
+      exporters: [file/metrics]
