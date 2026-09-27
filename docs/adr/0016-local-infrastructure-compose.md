@@ -106,3 +106,9 @@ Docker のヘルスチェックはコンテナの中で実行されるため、�
 - 2026-09-26: §5 のヘルパーの置き場所を `platform/test-support` に決め、CI の `integration` ジョブを追加した(P04a ①)。
 - 2026-09-26: 変数名の例のファイルを `infra/local/.env.example` から `infra/local/env.example` に改名した。`.claude/settings.json` の deny は allow より優先され、`Read(**/.env.*)` から例のファイルだけを除外できないため、秘密情報の `.env.*` をすべて deny にしたうえで例のファイルを読めるようにするには、名前を変えるしかない(P04a ① のレビュー Major 1)。
 - 2026-09-27: Debezium Connect(`quay.io/debezium/connect:3.6.3.Final`)のダイジェストを `sha256:a41a03c0…` に更新した。上流でタグが付け直され、固定していた `sha256:c51aab05…` が quay.io から削除されて `manifest unknown` になり、`verify (cdc)` が失敗したため。新しいダイジェストが linux/amd64 と linux/arm64 を含むことは `docker buildx imagetools inspect` で確認した(§2)。ダイジェストで固定していても、上流が削除すると取得できなくなる点は §2 の運用(更新手順)で扱う。
+  - タグが付け直された理由: **理由不明**。Debezium のリリースノート・ブログ・`debezium/container-images` の README とワークフローには、リリース済みのタグを作り直す旨の記載が見つからなかった(2026-09-27 に確認)。
+  - quay.io のタグの履歴(`/api/v1/repository/debezium/connect/tag/?specificTag=3.6.3.Final&onlyActiveTags=false`)から分かった事実:
+    - `3.6.3.Final` は、少なくとも 2026-09-19 から**毎日 01:00〜02:30 UTC ごろに別のダイジェストで付け直されている**。
+    - 付け直される前のダイジェストは、確認したものすべて(過去 5 日分)が取得できない(`manifest unknown`)。
+    - 前のパッチ版の `3.6.2.Final` も 2026-09-18 まで同じように毎日付け直され、それ以降は変わっていない(`3.6.3.Final` が出た時期と重なる)。
+  - このため、最新のパッチ版をダイジェストで固定すると、およそ 1 日で取得できなくなる見込みである。固定の方法の見直しと、ダイジェストを取得できるかの定期確認は #35 で扱う。
