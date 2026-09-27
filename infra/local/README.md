@@ -104,6 +104,8 @@ curl -s -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token
 - **PostgreSQL**: `wal_level=logical`(CDC)。初期化スクリプト(`postgres/init/`)はボリュームが空のときだけ実行される。
 - **APISIX**: standalone(`apisix/apisix.yaml`)。業務ルートは P05 以降で追加する。
 - **Observability**: アプリは OTLP を `otel-collector` に送る。traces → Tempo、metrics → Prometheus、logs → Loki。Grafana のデータソースは provisioning 済み(trace ↔ log ↔ metric のリンクつき)。
+  - アプリ(`platform/observability`。ADR-0018)の環境変数: `OTEL_SERVICE_NAME`、`OTEL_EXPORTER_OTLP_ENDPOINT`(OTLP/HTTP。ホストのアプリは `http://localhost:19318`、コンテナのアプリは `http://otel-collector:4318`。未設定なら OTLP に送らず標準出力だけ)、`OTEL_TRACES_SAMPLER_ARG`(起点のサンプリング率。既定 1.0)、`EIA_ENVIRONMENT`(既定 `local`)。
+  - 標準出力のログの形式は `EIA_LOG_FORMAT` で切り替える。既定は `json`(Loki と同じ項目)。手元で読むときは `EIA_LOG_FORMAT=console ./gradlew :services:order:app:run` のように `console` にする。
 - **Toxiproxy**: 起動時に `kafka-host`(19094)、`kafka-internal`(19095)、`postgres`(19433)の proxy を作る(`toxiproxy/toxiproxy.json`)。
 
 ## イメージの更新

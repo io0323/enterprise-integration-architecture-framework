@@ -20,15 +20,15 @@ import io.opentelemetry.api.trace.TraceFlags as OtelTraceFlags
  *
  * - 正しい `traceparent` / `tracestate` に対する抽出・注入の結果は、OTel 標準の `W3CTraceContextPropagator` と同じ(property test で検査)。
  * - 不正な入力の扱いは [TraceParent.parse] に従うため、OTel 標準と一部が異なる(前後の OWS を許す、未定義のフラグを 0 にする。ADR-0018 §1)。
- * - `tracestate` は W3C の規則で検証し、1 つでも不正なメンバーがあれば全体を捨てる(OTel 標準と同じ)。
+ * - `tracestate` は W3C の規則で検証し、1 つでも不正なメンバーがあれば全体を捨てる(`traceparent` は使う)。
  */
 public object EiaTraceContextPropagator : TextMapPropagator {
     public const val TRACESTATE: String = "tracestate"
 
-    /** W3C Trace Context §3.3.1.1: メンバーは 32 個まで。 */
+    /** W3C Trace Context §3.3(tracestate): メンバーは 32 個まで。 */
     private const val MAX_TRACESTATE_MEMBERS = 32
 
-    /** W3C Trace Context §3.3.1.1: 512 文字を超える値は切り詰めてよい。ここでは全体を捨てる。 */
+    /** W3C Trace Context §3.3(tracestate): 512 文字を超える値は切り詰めてよい。ここでは全体を捨てる。 */
     private const val MAX_TRACESTATE_LENGTH = 512
 
     private val FIELDS = listOf(TraceParent.HEADER, TRACESTATE)
@@ -77,7 +77,7 @@ public object EiaTraceContextPropagator : TextMapPropagator {
 
     private fun TraceState.encode(): String = buildList { forEach { key, value -> add("$key=$value") } }.joinToString(",")
 
-    /** W3C Trace Context §3.3.1: `list-member` を `,` で区切る。前後の OWS と空のメンバーは無視する。不正なら既定値(空)を返す。 */
+    /** W3C Trace Context §3.3(tracestate): `list-member` を `,` で区切る。前後の OWS と空のメンバーは無視する。不正なら既定値(空)を返す。 */
     private fun decodeTraceState(header: String): TraceState {
         val members = header.split(',').map { it.trim(' ', '\t') }.filter { it.isNotEmpty() }
         val pairs = members.mapNotNull(::splitMember)

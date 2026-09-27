@@ -38,7 +38,7 @@ ADR-0001 で domain / application / shared を KMP(commonMain)とした。一方
 |---|---|
 | Kafka clients, Debezium, Apicurio serde, avro4k | `platform/messaging-kafka`, `platform/outbox`, `services/*/adapters` |
 | Exposed, Flyway, JDBC | `platform/outbox`, `services/*/adapters` |
-| OTel SDK | `platform/observability`, `services/*/app` |
+| OTel SDK | `platform/observability`, `services/*/app`(Konsist で検査。テストのソースセットは除く) |
 | Ktor Server, Koin | `platform/*`, `services/*/{adapters,app}` |
 | MockK, Testcontainers | 上記モジュールの test / integrationTest |
 | Konsist | `tools/architecture-test` |
@@ -72,3 +72,4 @@ ADR-0001 で domain / application / shared を KMP(commonMain)とした。一方
 - 2026-09-25: パッケージ名を ADR-0010 / MODULE_DESIGN の規約に合わせて修正(決定内容の変更なし)
 - 2026-09-26: §5 の「traceparent と Correlation ID の生成・解析」のうち、Correlation ID は P01 で `shared/kernel`(`CorrelationId`)に実装済みのため、kernel に置いたままとする。`shared/resilience` には traceparent(`io.eia.shared.resilience.trace`)を置く(P04a)。resilience は kernel に依存するため、SDK からも両方を使える。
 - 2026-09-27: §5 に、`TraceParent.generate()` が random フラグを立てることを追記した(P04a ②。PR #30 のレビューの積み残し)。
+- 2026-09-27: §4 の OTel SDK の配置を Konsist(`otelSdkOnlyInAllowedModules`)で検査するようにした(P04a ②。計装方式は ADR-0018)。
