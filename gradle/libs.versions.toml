@@ -38,6 +38,12 @@ logback = "1.6.4"
 # P04a ③ security(確認日: 2026-09-27。ADR-0019)
 # JWT の検証と JWKS の取得・キャッシュ。推移的な依存を持たない。ktor-server-auth-jwt(auth0)は使わない(ADR-0019 §1)。
 nimbus-jose-jwt = "10.10"
+# Kotlin/JS のテストランナー(mocha。Kotlin の Gradle プラグインが入れる)の間接的な依存を、脆弱性の修正版に上げる(確認日: 2026-09-28)。
+# eia.root が yarn.resolution に渡す。mocha 11.7.6 は serialize-javascript ^6.0.2 と diff ^7.0.0 を要求するが、修正版はメジャー版が上がる。
+# - serialize-javascript: GHSA-5c6j-r48x-rmvq(< 7.0.3)と GHSA-qj8w-gfj5-8c6v(< 7.0.5)
+# - diff: GHSA-73rr-hh4g-fpgx(< 8.0.3)。9.x は CommonJS の入口がないため、mocha の require と両立する 8.x の最新にする
+npm-serialize-javascript = "7.1.2"
+npm-diff = "8.0.4"
 
 [libraries]
 kotest-framework-engine = { module = "io.kotest:kotest-framework-engine", version.ref = "kotest" }
