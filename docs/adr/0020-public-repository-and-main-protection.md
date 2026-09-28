@@ -37,7 +37,7 @@ Ruleset `main protection`(ID 24095263)を設定した。
 | バイパス | なし(管理者も対象) |
 
 - **承認の必要数を 0 にした理由**: 1 人で開発しているため。1 以上にすると、自分の PR を承認できず、マージできなくなる。PR を必須にすること自体(main に直接 push できないこと・必須チェックを通すこと)は仕組みで強制する。レビューは、これまでどおり CodeRabbit と `/review-integration` で行う。
-- **マージの方式を rebase だけにした理由**: PR の中のコミットを、Conventional Commits の単位のまま main に残すため。squash は PR を 1 コミットにまとめるため、PR の中で分けたコミット(機能・テスト・ADR など)の区切りが main から消える。main への追従も、PR の画面の「Update branch(rebase)」で行っており、方式を揃える。リポジトリの設定ではマージコミットと squash のボタンも有効のままだが、Ruleset がその方式でのマージを拒否する。
+- **マージの方式を rebase だけにした理由**: PR の中のコミットを、Conventional Commits の単位のまま main に残すため。squash は PR を 1 コミットにまとめるため、PR の中で分けたコミット(機能・テスト・ADR など)の区切りが main から消える。main への追従も、PR の画面の「Update branch(rebase)」で行っており、方式を揃える。リポジトリの設定でもマージコミットと squash を無効にし、rebase だけを残した(Ruleset と二重に制限する)。
 - **最新のブランチであることを求めない理由**: main への追従は、PR の画面の「Update branch(rebase)」で行う運用にしている。求めると、main が進むたびに、すべての PR で追従と CI のやり直しが必要になる。直線履歴を必須にしているため、マージコミットは作られない。
 - **pre-push フックは残す**(多層防御)。push の前に手元で止められるため、誤った push が GitHub に届く前に気づける。
 - **バイパスをなしにした理由**: 管理者でも、Ruleset を明示的に変えない限り main を書き換えられないようにする。緊急時は、Ruleset を一時的に無効にしてから対応し、対応が終わったら戻す。
@@ -99,3 +99,4 @@ LICENSE を置いていないため、著作権法上、すべての権利が作
 
 ## 改訂履歴
 - 2026-09-28: Ruleset のマージの方式を rebase だけにした(§2)。gitleaks の誤検知 7 件を `.gitleaksignore` に登録し、検査は git が追跡しているファイルだけを対象にすることにした(§4)。
+- 2026-09-28: Secret scanning・push protection・Dependabot alerts・Dependabot security updates を有効にし(validity checks と non-provider patterns は無効のまま)、Actions のアクションの SHA 固定を強制した(`sha_pinning_required`)。リポジトリの設定でマージコミットと squash を無効にして rebase だけを残し、マージ後のブランチの自動削除を有効にした。
