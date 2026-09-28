@@ -89,7 +89,7 @@ docs/                   設計書・ロードマップ・標準・ADR・プロ�
 2. ブランチ: `feat/p{NN}-{slug}`、`fix/...`、`docs/...`。コミットは Conventional Commits(`feat(order): ...`)。
 3. 1 フェーズ = 1 PR(大きい場合はサブ PR に分割)。PR テンプレートのチェックリストを埋める。
    - **main に直接 push しない**。変更は必ずブランチ + PR で行う。
-   - main の保護は GitHub の Ruleset で強制している(force push 禁止、直線履歴、PR 必須、build 必須。ADR-0020)。`make setup` で登録する pre-push フックは多層防御として残す(push の前に手元で止める)。
+   - main の保護は GitHub の Ruleset で強制している(force push 禁止、直線履歴、PR 必須、build 必須、マージは rebase だけ。ADR-0020)。`make setup` で登録する pre-push フックは多層防御として残す(push の前に手元で止める)。
    - ブランチは `git switch -c <name> --no-track origin/main` で作る(upstream を main にしない)。
    - push は `git push -u origin <branch>:<branch>` と送り先を明示する。
    - **CI が成功していない PR はマージしない**。必須チェックは `build` だけなので、実行されたほかのジョブ(integration・macos・contract-check・infra)が成功していることは運用で確かめる(ADR-0020 §3)。
@@ -116,6 +116,7 @@ make e2e                      # E2E シナリオ (tests/e2e)
 - テストの無効化・`@Ignore` での CI 通過
 - 秘密情報のコミット、`--no-verify`、`git push --force`(main)
 - `.env` などの秘密情報のファイルを、Read ツールだけでなく `cat`・`grep`・`head` などのコマンドでも読むこと。変数名を確認するときは `infra/local/env.example` を読む(`.claude/settings.json` の deny は Read ツールにしか効かないため、このルールで補う。例のファイルは deny の `**/.env.*` に当たらないよう `env.example` という名前にしている)
+- 検査ツール(gitleaks など)で、git が追跡していないファイル(`.gitignore` の対象の `.env`・`secrets/`・`build/` など)を読むこと。検査ツールは git が追跡しているファイルだけを対象にする(例: `gitleaks git` を使い、`gitleaks dir` は使わない)。誤検知は `.gitleaksignore` に fingerprint で登録する(ADR-0020 §4)
 
 ## 9. 参照ドキュメント
 - 設計書: docs/architecture/EIA-Framework.md
