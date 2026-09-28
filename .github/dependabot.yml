@@ -1,0 +1,19 @@
+# Dependabot のバージョンの更新(ADR-0020)。セキュリティの更新(Dependabot security updates)はリポジトリの設定で有効にしている。
+# - github-actions だけを月 1 回、1 つの PR にまとめて更新する。ワークフローのアクションは SHA で固定しており
+#   (リポジトリの設定 sha_pinning_required も有効)、Dependabot は SHA とバージョンのコメントを書き換えて固定を保つ。
+# - Gradle の依存の更新 PR は、数が多くなるため設定しない(libs.versions.toml を人が確認して上げる)。
+# - Kotlin/JS の kotlin-js-store/yarn.lock を書き換えた PR が来たら、閉じて yarn.resolution で直す
+#   (docs/runbooks/dependabot-kotlin-js.md)。
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      github-actions:
+        patterns: ["*"]
+    labels: ["type:chore", "area:infra"]
+    commit-message:
+      prefix: "chore(ci)"
+    open-pull-requests-limit: 5
