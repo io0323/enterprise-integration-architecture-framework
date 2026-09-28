@@ -116,6 +116,7 @@ make e2e                      # E2E シナリオ (tests/e2e)
 - テストの無効化・`@Ignore` での CI 通過
 - 秘密情報のコミット、`--no-verify`、`git push --force`(main)
 - `.env` などの秘密情報のファイルを、Read ツールだけでなく `cat`・`grep`・`head` などのコマンドでも読むこと。変数名を確認するときは `infra/local/env.example` を読む(`.claude/settings.json` の deny は Read ツールにしか効かないため、このルールで補う。例のファイルは deny の `**/.env.*` に当たらないよう `env.example` という名前にしている)
+- Dependabot が `kotlin-js-store/yarn.lock` だけを書き換えた PR をマージすること(閉じて、`yarn.resolution` で直す。docs/runbooks/dependabot-kotlin-js.md)
 - 検査ツール(gitleaks など)で、git が追跡していないファイル(`.gitignore` の対象の `.env`・`secrets/`・`build/` など)を読むこと。検査ツールは git が追跡しているファイルだけを対象にする(例: `gitleaks git` を使い、`gitleaks dir` は使わない)。誤検知は `.gitleaksignore` に fingerprint で登録する(ADR-0020 §4)
 
 ## 9. 参照ドキュメント
