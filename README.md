@@ -31,3 +31,5 @@ make verify              # 全コンテナが healthy で、各機能が疎通�
 ./gradlew build
 ./gradlew :services:order:app:run
 ```
+
+このリポジトリにはまだ LICENSE がないため、著作権法上すべての権利が作者に留保され、他の人はコードを利用・複製・改変・再配布できません(GitHub の規約による閲覧と fork は可能です)。

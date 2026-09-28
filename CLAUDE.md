@@ -88,10 +88,11 @@ docs/                   設計書・ロードマップ・標準・ADR・プロ�
 1. 着手前に `docs/implementation/ROADMAP.md` の該当フェーズと DoD を読む。大きな変更は **Plan を提示してから実装**。
 2. ブランチ: `feat/p{NN}-{slug}`、`fix/...`、`docs/...`。コミットは Conventional Commits(`feat(order): ...`)。
 3. 1 フェーズ = 1 PR(大きい場合はサブ PR に分割)。PR テンプレートのチェックリストを埋める。
-   - **main に直接 push しない**。変更は必ずブランチ + PR で行う(`make setup` で登録する pre-push フックが拒否する)。
+   - **main に直接 push しない**。変更は必ずブランチ + PR で行う。
+   - main の保護は GitHub の Ruleset で強制している(force push 禁止、直線履歴、PR 必須、build 必須。ADR-0020)。`make setup` で登録する pre-push フックは多層防御として残す(push の前に手元で止める)。
    - ブランチは `git switch -c <name> --no-track origin/main` で作る(upstream を main にしない)。
    - push は `git push -u origin <branch>:<branch>` と送り先を明示する。
-   - **CI が成功していない PR はマージしない**(private リポジトリのためブランチ保護が使えず、運用で担保する)。
+   - **CI が成功していない PR はマージしない**。必須チェックは `build` だけなので、実行されたほかのジョブ(integration・macos・contract-check・infra)が成功していることは運用で確かめる(ADR-0020 §3)。
 4. アーキテクチャ上の決定は `docs/adr/NNNN-*.md` に ADR として残す(`/adr` コマンド)。
 5. 完了前に必ず以下を実行し、全て成功させる:
    - `./gradlew build`(ktlint・detekt・テスト・Konsist 含む)

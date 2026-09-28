@@ -4,7 +4,8 @@
 # 使い方: ./scripts/bootstrap-github.sh [--dry-run] [repo-name] [private|public]
 #   --dry-run  GitHub への書き込みを行わず、実行予定の操作だけを表示する(参照系 API は呼ぶ)
 # 何度実行しても安全(既存のラベル・マイルストーン・Issue は再作成しない)。
-# CODEOWNERS の更新とブランチ保護は本スクリプトの対象外(PR で管理する)。
+# CODEOWNERS の更新と main の保護(Ruleset)の作成は本スクリプトの対象外。CODEOWNERS は PR で管理し、
+# Ruleset は ADR-0020 の設定を GitHub で行う。本スクリプトは、公開範囲と Ruleset が ADR-0020 のとおりかを確かめ、違えば警告する。
 set -euo pipefail
 
 DRY_RUN=false
@@ -18,7 +19,8 @@ for arg in "$@"; do
   esac
 done
 REPO_NAME="${POSITIONAL[0]:-enterprise-integration-architecture-framework}"
-VISIBILITY="${POSITIONAL[1]:-private}"
+# ADR-0020: 公開リポジトリにする(GitHub Free の private リポジトリでは Ruleset を使えず、Actions の無料枠もない)
+VISIBILITY="${POSITIONAL[1]:-public}"
 API_SLEEP="${API_SLEEP:-1}"   # GitHub API 呼び出し間の待ち時間(秒)
 MAX_ATTEMPTS=3
 
@@ -63,6 +65,18 @@ if ! gh repo view "$REPO" >/dev/null 2>&1; then
     retry gh repo create "$REPO" --"$VISIBILITY" --source=. --remote=origin --push \
       --description "Enterprise Integration Architecture Framework - Reference Implementation (Kotlin/KMP)"
   fi
+fi
+# ADR-0020: 公開範囲と main の保護を確かめる(書き込みはしない。--dry-run でも実行する)
+if gh repo view "$REPO" >/dev/null 2>&1; then
+  if [ "$(retry gh repo view "$REPO" --json visibility -q .visibility)" != "PUBLIC" ]; then
+    log "WARN: $REPO is not public. GitHub Free cannot enforce rulesets on private repositories (ADR-0020)."
+  fi
+  rule_types="$(retry gh api "repos/$REPO/rules/branches/main" --jq '.[].type')"
+  for rule in deletion non_fast_forward required_linear_history pull_request required_status_checks; do
+    if ! grep -qxF "$rule" <<<"$rule_types"; then
+      log "WARN: main has no '$rule' rule. Configure the 'main protection' ruleset as described in ADR-0020."
+    fi
+  done
 fi
 if grep -q '@YOUR_GITHUB_USER' .github/CODEOWNERS 2>/dev/null; then
   log "WARN: .github/CODEOWNERS still has @YOUR_GITHUB_USER. Replace it with @$OWNER via a PR."

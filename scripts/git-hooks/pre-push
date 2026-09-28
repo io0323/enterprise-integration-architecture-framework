@@ -1,5 +1,6 @@
 #!/bin/sh
 # main / master への直接 push を拒否する(CLAUDE.md §3・§6)。`make setup` で core.hooksPath に登録される。
+# main は GitHub の Ruleset でも保護している(ADR-0020)。このフックは、push が GitHub に届く前に手元で止める多層防御。
 # git は push するリファレンスごとに "<local ref> <local sha> <remote ref> <remote sha>" を標準入力に渡す。
 
 remote="$1"
@@ -17,7 +18,8 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   git push -u origin <branch>:<branch>               # 送り先のブランチ名を明示して push
   gh pr create --base main --head <branch>           # PR を作成
 
-main の巻き戻しなどの緊急対応は、リポジトリ管理者が GitHub 上で行います。
+main は GitHub の Ruleset でも保護されています(ADR-0020)。main の巻き戻しなどの緊急対応は、
+リポジトリ管理者が Ruleset を一時的に無効にしてから GitHub 上で行います。
 MSG
             status=1
             ;;
