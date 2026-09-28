@@ -1,0 +1,16 @@
+# gitleaks の誤検知(テストのダミーの値)。fingerprint(コミット:ファイル:ルール:行)で 1 件ずつ許可する(ADR-0020 §4)。
+# パスや値で広く許可しない。同じファイルに後から入った本物の秘密情報を見逃さないため。
+# 検査は `gitleaks git --log-opts="--all"` で行う(`gitleaks dir` は .gitignore の対象も読むため使わない。CLAUDE.md §8)。
+
+# PEM の断片(PKCS#8 の見出しの 39 バイト。鍵として使えない)。マスキングの検査の入力
+74112a7398f3a760bb42d883b66d0cbb74059d5b:platform/observability/src/test/kotlin/io/eia/platform/observability/logging/MaskingSpec.kt:private-key:152
+74112a7398f3a760bb42d883b66d0cbb74059d5b:platform/observability/src/test/kotlin/io/eia/platform/observability/logging/MaskingSpec.kt:private-key:159
+74112a7398f3a760bb42d883b66d0cbb74059d5b:platform/observability/src/test/kotlin/io/eia/platform/observability/logging/MaskingSpec.kt:private-key:228
+
+# ダミーの JWT(署名部が "signature" などの平文)。ログに出ないことの検査の入力
+33e6887f90fb0f0e676ea75f86fc6a74e8853076:platform/observability/src/test/kotlin/io/eia/platform/observability/logging/MaskingSpec.kt:jwt:8
+ec635e3ed2c4b19a8253c55e856092893fd7bb3e:platform/observability/src/integrationTest/kotlin/io/eia/platform/observability/CollectorIT.kt:jwt:53
+b4cb46cfabcdb8b4591b8f8e12e8b53f18f80a9d:platform/security/src/test/kotlin/io/eia/platform/security/NoLeakSpec.kt:jwt:55
+
+# 不正な traceparent の値(変数名が secretLike)。エラーに受信した値を含めないことの検査の入力
+14b8ecdbe836cad4aea2171f5aca42091849993f:shared/resilience/src/commonTest/kotlin/io/eia/shared/resilience/trace/TraceParentSpec.kt:generic-api-key:76

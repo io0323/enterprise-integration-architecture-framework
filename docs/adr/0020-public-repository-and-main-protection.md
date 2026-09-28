@@ -31,12 +31,13 @@ Ruleset `main protection`(ID 24095263)を設定した。
 | 削除 | 禁止 |
 | force push | 禁止 |
 | 直線履歴 | 必須(マージコミットを作らない) |
-| PR | 必須。承認の必要数は 0。マージの方式は rebase と squash |
+| PR | 必須。承認の必要数は 0。マージの方式は rebase だけ |
 | 必須チェック | `build`(GitHub Actions が報告したものだけ有効) |
 | 最新のブランチであること | 求めない(`strict_required_status_checks_policy: false`) |
 | バイパス | なし(管理者も対象) |
 
 - **承認の必要数を 0 にした理由**: 1 人で開発しているため。1 以上にすると、自分の PR を承認できず、マージできなくなる。PR を必須にすること自体(main に直接 push できないこと・必須チェックを通すこと)は仕組みで強制する。レビューは、これまでどおり CodeRabbit と `/review-integration` で行う。
+- **マージの方式を rebase だけにした理由**: PR の中のコミットを、Conventional Commits の単位のまま main に残すため。squash は PR を 1 コミットにまとめるため、PR の中で分けたコミット(機能・テスト・ADR など)の区切りが main から消える。main への追従も、PR の画面の「Update branch(rebase)」で行っており、方式を揃える。リポジトリの設定ではマージコミットと squash のボタンも有効のままだが、Ruleset がその方式でのマージを拒否する。
 - **最新のブランチであることを求めない理由**: main への追従は、PR の画面の「Update branch(rebase)」で行う運用にしている。求めると、main が進むたびに、すべての PR で追従と CI のやり直しが必要になる。直線履歴を必須にしているため、マージコミットは作られない。
 - **pre-push フックは残す**(多層防御)。push の前に手元で止められるため、誤った push が GitHub に届く前に気づける。
 - **バイパスをなしにした理由**: 管理者でも、Ruleset を明示的に変えない限り main を書き換えられないようにする。緊急時は、Ruleset を一時的に無効にしてから対応し、対応が終わったら戻す。
@@ -58,6 +59,8 @@ Ruleset `main protection`(ID 24095263)を設定した。
     - **PEM の断片(3 件)**: PKCS#8 の見出しの 39 バイトだけで、鍵として使えない。
     - **traceparent の不正な値(1 件)**: 変数名が `secretLike`。
   - 本物の秘密情報はなかった。
+  - 7 件は、fingerprint(コミット・ファイル・ルール・行)で `.gitleaksignore` に登録した。パスや値の正規表現で許可すると、同じファイルに後から入った本物の秘密情報も見逃すため、検出の 1 件ごとに許可する。テストに新しいダミーの値を足して検出されたら、値がダミーであることを確かめてから、その fingerprint を追加する。
+  - 検査は `gitleaks git`(git の履歴)で行い、`gitleaks dir` は使わない。`gitleaks dir` は、`.gitignore` の対象(`infra/local/.env` など)も読むため(CLAUDE.md §8)。
   - `infra/local/.env` と `infra/local/secrets/` は、一度もコミットされていない。履歴にある例のファイル(`.env.example`、現在は `env.example`)の値は、`__GENERATE__` と固定のユーザー名だけだった。
 - **これまでの方針を続ける**
   - 秘密情報は `make env` が開発者ごとに乱数で作る。`.gitignore` の対象にする。
@@ -93,3 +96,6 @@ LICENSE を置いていないため、著作権法上、すべての権利が作
   挙動には影響しないので、この ADR では変えていない。それぞれの workflow を次に変えるときに見直す。
 - 管理者も main を直接書き換えられない。緊急時は、Ruleset を無効にする操作が要る。
 - 必須チェックが `build` だけなので、integration などが失敗しても、GitHub はマージを止めない。実行されたジョブの結果を確かめるのは、運用(CLAUDE.md §6)である。
+
+## 改訂履歴
+- 2026-09-28: Ruleset のマージの方式を rebase だけにした(§2)。gitleaks の誤検知 7 件を `.gitleaksignore` に登録し、検査は git が追跡しているファイルだけを対象にすることにした(§4)。
