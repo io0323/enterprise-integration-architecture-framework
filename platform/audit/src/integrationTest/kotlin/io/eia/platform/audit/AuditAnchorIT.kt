@@ -211,6 +211,31 @@ class AuditAnchorIT :
             }
         }
 
+        test("サービスが追記を続けている間に検査しても、誤って改竄の疑いにならない(1 つのスナップショットで読む)") {
+            val db = env.newDatabase()
+            val service = newService()
+            (1..50).forEach { db.append(log, it) }
+            db.publish(service)
+            val running =
+                java.util.concurrent.atomic
+                    .AtomicBoolean(true)
+            val appended =
+                java.util.concurrent.atomic
+                    .AtomicInteger()
+            val writer =
+                Thread {
+                    while (running.get()) db.append(log, 1_000 + appended.incrementAndGet())
+                }.apply { start() }
+            try {
+                repeat(5) { db.verify(service).findings.shouldBeEmpty() }
+            } finally {
+                running.set(false)
+                writer.join()
+            }
+            (appended.get() > 0) shouldBe true
+            db.verify(service).findings.shouldBeEmpty()
+        }
+
         test("検査専用の資格情報では、アンカーを読めるが、書けず、消せない") {
             val db = env.newDatabase()
             val service = newService()

@@ -50,6 +50,15 @@ private fun resultSet(values: List<Long>): ResultSet {
     }
 }
 
+/** 接続の設定の問い合わせ(自動コミット・分離レベル・読み取り専用)に、新しい接続と同じ値を返す。それ以外は何もしない。 */
+private fun connectionDefaults(method: String): Any? =
+    when (method) {
+        "getAutoCommit" -> true
+        "getTransactionIsolation" -> Connection.TRANSACTION_READ_COMMITTED
+        "isReadOnly" -> false
+        else -> Unit
+    }
+
 /** 監査テーブルが空の DB(件数は 0、ほかの SELECT は 0 行)。 */
 private fun emptyDatabase(): Connection =
     proxy { method, args ->
@@ -57,14 +66,14 @@ private fun emptyDatabase(): Connection =
             val rows = if ((args[0] as String).startsWith("SELECT count(*)")) resultSet(listOf(0L)) else resultSet(emptyList())
             proxy<PreparedStatement> { name, _ -> if (name == "executeQuery") rows else Unit }
         } else {
-            Unit
+            connectionDefaults(method)
         }
     }
 
 /** SQL の実行で [sqlState] の例外を投げる DB。 */
 private fun failingDatabase(sqlState: String): Connection {
     val statement = proxy<PreparedStatement> { name, _ -> if (name == "executeQuery") throw SQLException("失敗", sqlState) else Unit }
-    return proxy { name, _ -> if (name == "prepareStatement") statement else Unit }
+    return proxy { name, _ -> if (name == "prepareStatement") statement else connectionDefaults(name) }
 }
 
 private class FixedStore(

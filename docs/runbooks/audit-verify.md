@@ -30,6 +30,7 @@ echo $?                           # 0 = 改竄の疑いなし / 1 = 改竄の疑
 | `hash_mismatch` | 記録の列の値が書き換えられた | その `seq` の行。`audit_log` のトリガーが有効か(`SELECT tgname, tgenabled FROM pg_trigger WHERE tgrelid = 'audit.audit_log'::regclass`) |
 | `broken_link` / `missing_seq` / `out_of_order` | 記録の削除・差し込み・入れ替え | 前後の `seq`。PostgreSQL のログで、所有者か superuser の `ALTER TABLE ... DISABLE TRIGGER` と `DELETE` / `UPDATE` |
 | `malformed_record` | 列の値を解釈できない(details が文字列以外など) | その `seq` の行。制約(`CHECK` / `NOT NULL`)が外されていないか |
+| `row_count_mismatch` | 表の件数と検証できた件数が合わない(検査は 1 つのスナップショットで行うので、検査中の追記では起きない) | `SELECT count(*), count(seq), count(hash) FROM audit.audit_log` と、`(seq, hash)` の重複(`GROUP BY seq, hash HAVING count(*) > 1`)。主キーや NOT NULL の制約が外されていないか |
 | `unknown_canonical_version` | 直列化の方法がない版 | `canonical_version` の書き換えか、新しい版に対応する前の `tools/audit-verify` を使っていないか |
 | `anchor_hash_mismatch` / `anchor_record_missing` | アンカーより前の記録の書き換え、またはアンカーより後の記録の削除 | アンカーの `seq` と、現在の末尾の `seq` |
 | `anchor_delete_marker` | アンカーを消そうとした跡(削除マーカー) | 削除マーカーを作った資格情報。audit の資格情報はバケットポリシーで拒否されるため、管理者の資格情報の利用を調べる |

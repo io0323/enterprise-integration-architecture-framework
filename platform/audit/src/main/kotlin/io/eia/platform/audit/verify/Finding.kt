@@ -68,14 +68,14 @@ public sealed interface Finding {
         override fun describe(): String = "seq=$seq: $reason"
     }
 
-    /** 表の件数と、検証で読んだ件数が一致しない(`seq` や `hash` を NULL にした行、境界で重複させた行)。 */
+    /** 表の件数と、検証で読んだ件数が一致しない(`seq` や `hash` を NULL にした行、`(seq, hash)` まで同じ行)。同じスナップショットで数える。 */
     public data class RowCountMismatch(
         val tableRows: Long,
         val verifiedRows: Long,
     ) : Finding {
         override val code: String get() = "row_count_mismatch"
 
-        override fun describe(): String = "表の件数 $tableRows 件のうち、検証できたのは $verifiedRows 件です(seq か hash が NULL の行がある)"
+        override fun describe(): String = "表の件数 $tableRows 件のうち、検証できたのは $verifiedRows 件です(seq か hash が NULL の行、または (seq, hash) まで同じ行がある)"
     }
 
     // ---- アンカー ----
