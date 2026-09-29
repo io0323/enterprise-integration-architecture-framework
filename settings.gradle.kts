@@ -32,5 +32,6 @@ include(
     ":services:order:adapters",
     ":services:order:app",
     ":tools:architecture-test",
+    ":tools:audit-verify",
     ":tools:contract-check",
 )

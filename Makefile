@@ -1,7 +1,7 @@
 # EIAF ローカル開発用コマンド(CLAUDE.md §7)
 GRADLE := ./gradlew
 
-.PHONY: help setup build check arch-test contract-check integration-test format env up down logs ps verify stats clean e2e
+.PHONY: help setup build check arch-test contract-check integration-test format env up down logs ps verify stats clean e2e audit-verify
 
 # ローカル基盤(infra/local。ADR-0016)
 # PROFILE: core / cdc / iot / file / b2b / chaos。core は常に含まれる(積み上げ方式)。空白区切りで複数指定できる。
@@ -59,6 +59,9 @@ ps: env ## コンテナの状態を表示する
 
 verify: ## profile ごとの検証(healthy・機能の疎通。例: make verify PROFILE=file)
 	@$(INFRA)/scripts/verify.sh $(PROFILE)
+
+audit-verify: ## 監査記録の改竄の検査(例: make audit-verify SERVICE=order。終了コード 0=正常 / 1=改竄の疑い / 2=実行できない。ADR-0017)
+	@$(INFRA)/scripts/audit-verify.sh $(SERVICE)
 
 stats: ## 起動中コンテナのメモリ使用量(docker stats)
 	@$(INFRA)/scripts/stats.sh
