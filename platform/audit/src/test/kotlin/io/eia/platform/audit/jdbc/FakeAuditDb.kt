@@ -31,7 +31,9 @@ internal class FakeAuditDb(
                 "getAutoCommit" -> auto
                 "setAutoCommit" -> auto = args[0] as Boolean
                 "prepareStatement" -> statement(args[0] as String)
-                "setReadOnly", "close", "commit", "rollback" -> Unit
+                "setReadOnly", "close", "commit", "rollback", "setTransactionIsolation" -> Unit
+                "isReadOnly" -> false
+                "getTransactionIsolation" -> Connection.TRANSACTION_READ_COMMITTED
                 "isClosed" -> false
                 else -> throw UnsupportedOperationException("Connection.$method")
             }

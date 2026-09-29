@@ -1,6 +1,7 @@
 package io.eia.platform.audit.anchor
 
 import io.eia.platform.audit.AuditError
+import io.eia.platform.audit.AuditMisuse
 import io.eia.platform.audit.AuditStorageUnavailable
 import io.eia.platform.audit.jdbc.AuditLog
 import io.eia.platform.audit.jdbc.FakeAuditDb
@@ -59,7 +60,8 @@ class AnchorFlowSpec :
         fun verify(
             db: FakeAuditDb,
             store: AnchorStore,
-        ): VerificationReport = AuditVerification(SERVICE, store, RETENTION).run(db.connection()).getOrNull().shouldNotBeNull()
+        ): VerificationReport =
+            AuditVerification(SERVICE, store, RETENTION).run(db.connection(autoCommit = true)).getOrNull().shouldNotBeNull()
 
         test("記録がなければアンカーを保存しない") {
             val store = InMemoryAnchorStore(clock)
@@ -115,12 +117,23 @@ class AnchorFlowSpec :
                 RETENTION,
                 clock,
             ).publish(db.connection()).shouldBeInstanceOf<Result.Err<AuditStorageUnavailable>>()
-            AuditVerification(SERVICE, store, RETENTION).run(db.connection()).shouldBeInstanceOf<Result.Err<AuditStorageUnavailable>>()
+            AuditVerification(
+                SERVICE,
+                store,
+                RETENTION,
+            ).run(db.connection(autoCommit = true)).shouldBeInstanceOf<Result.Err<AuditStorageUnavailable>>()
             store.failure = null
             db.failWith = "08006"
             AnchorPublisher(SERVICE, store, RETENTION, clock).publish(db.connection()).shouldBeInstanceOf<Result.Err<AuditError>>()
             db.failWith = "08006"
-            AuditVerification(SERVICE, store, RETENTION).run(db.connection()).shouldBeInstanceOf<Result.Err<AuditError>>()
+            AuditVerification(SERVICE, store, RETENTION).run(db.connection(autoCommit = true)).shouldBeInstanceOf<Result.Err<AuditError>>()
+        }
+
+        test("検証は自動コミットが有効な専用の接続でだけ行う(呼び出し側のトランザクションを巻き戻さない)") {
+            val db = FakeAuditDb()
+            AuditVerification(SERVICE, InMemoryAnchorStore(clock), RETENTION)
+                .run(db.connection(autoCommit = false))
+                .shouldBeInstanceOf<Result.Err<AuditMisuse>>()
         }
 
         test("保持期間は正の期間だけを受け付ける") {

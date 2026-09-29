@@ -85,7 +85,9 @@ allowed "verify: 版の保持の設定(get-object-retention)を取得できる" 
 denied "verify: put できない" as verify put-object --bucket "$bucket" --key "verify/$RUN_ID-by-verify.json" --body "$work/body.json" \
   --object-lock-mode COMPLIANCE --object-lock-retain-until-date "$retain_until"
 denied "verify: 削除マーカーを作れない" as verify delete-object --bucket "$bucket" --key "$key"
+denied "verify: 版を削除できない" as verify delete-object --bucket "$bucket" --key "$key" --version-id "$version"
 denied "verify: ほかのバケットを list できない" as verify list-objects-v2 --bucket "$other"
+denied "verify: ほかのバケットから get できない" as verify get-object --bucket "$other" --key k.txt "$work/other-verify.txt"
 
 # --- COMPLIANCE は管理者の資格情報でも解除できない(ADR-0015 で持ち越した確認) ---
 denied "admin: 保持期限内の版を削除できない(COMPLIANCE)" as admin delete-object --bucket "$bucket" --key "$key" --version-id "$version" --bypass-governance-retention
