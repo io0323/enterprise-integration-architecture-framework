@@ -30,8 +30,9 @@ fi
 # shellcheck disable=SC1091
 source "$here/.env"
 password="${!password_var:-}"
-if [[ -z "$password" || -z "${AUDIT_S3_ACCESS_KEY:-}" || -z "${AUDIT_S3_SECRET_KEY:-}" ]]; then
-  echo "infra/local/.env に $password_var / AUDIT_S3_ACCESS_KEY / AUDIT_S3_SECRET_KEY がありません。make env を実行してください" >&2
+# S3 は検査専用の読み取り専用の資格情報(eiaf-audit-verify)を使う。アンカーを書ける資格情報は使わない(ADR-0017 §7)
+if [[ -z "$password" || -z "${AUDIT_VERIFY_S3_ACCESS_KEY:-}" || -z "${AUDIT_VERIFY_S3_SECRET_KEY:-}" ]]; then
+  echo "infra/local/.env に $password_var / AUDIT_VERIFY_S3_ACCESS_KEY / AUDIT_VERIFY_S3_SECRET_KEY がありません。make env を実行してください" >&2
   exit 2
 fi
 
@@ -49,7 +50,7 @@ exec env -i PATH="$PATH" HOME="$HOME" JAVA_HOME="${JAVA_HOME:-}" \
   AUDIT_DB_PASSWORD="$password" \
   AUDIT_S3_ENDPOINT="http://localhost:19333" \
   AUDIT_S3_BUCKET="eiaf-audit" \
-  AUDIT_S3_ACCESS_KEY="$AUDIT_S3_ACCESS_KEY" \
-  AUDIT_S3_SECRET_KEY="$AUDIT_S3_SECRET_KEY" \
+  AUDIT_S3_ACCESS_KEY="$AUDIT_VERIFY_S3_ACCESS_KEY" \
+  AUDIT_S3_SECRET_KEY="$AUDIT_VERIFY_S3_SECRET_KEY" \
   AUDIT_MIN_RETENTION="${AUDIT_MIN_RETENTION:-P1D}" \
   "$root/tools/audit-verify/build/install/audit-verify/bin/audit-verify"

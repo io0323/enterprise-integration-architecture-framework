@@ -16,6 +16,7 @@ import java.time.format.DateTimeParseException
 /**
  * 検査の設定。環境変数から読む(`scripts/audit-verify.sh` が infra/local/.env とサービス名から組み立てる)。
  * DB のパスワードと S3 の資格情報は設定に持たず、実行時に SecretProvider から取る。
+ * S3 の資格情報(`AUDIT_S3_ACCESS_KEY` / `AUDIT_S3_SECRET_KEY`)には、読み取り専用の `eiaf-audit-verify` の値を渡す(ADR-0017 §7)。
  */
 internal data class AuditVerifyConfig(
     val service: ServiceName,

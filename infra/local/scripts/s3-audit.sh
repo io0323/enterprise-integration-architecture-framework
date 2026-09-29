@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # 監査のアンカー用のバケット(eiaf-audit)と、audit の資格情報の範囲を検査する(ADR-0017)。
 # verify.sh が AWS CLI のコンテナ内で実行する。結果を 1 行ずつ「OK <内容>」「NG <内容>」で出力する。
-# 環境変数: ADMIN_ACCESS_KEY / ADMIN_SECRET_KEY(管理者)、AUDIT_ACCESS_KEY / AUDIT_SECRET_KEY(audit)、RUN_ID、S3_ENDPOINT。
+# 環境変数: ADMIN_ACCESS_KEY / ADMIN_SECRET_KEY(管理者)、AUDIT_ACCESS_KEY / AUDIT_SECRET_KEY(audit)、
+# VERIFY_ACCESS_KEY / VERIFY_SECRET_KEY(検査専用の eiaf-audit-verify)、RUN_ID、S3_ENDPOINT。
 set -uo pipefail
 
 aws configure set default.s3.addressing_style path
@@ -12,13 +13,13 @@ key="verify/$RUN_ID.json"
 work="$(mktemp -d)"
 echo "{\"verify\":\"$RUN_ID\"}" >"$work/body.json"
 
-as() { # as <admin|audit> <s3api の引数...>
+as() { # as <admin|audit|verify> <s3api の引数...>
   local who="$1"; shift
-  if [[ "$who" == admin ]]; then
-    AWS_ACCESS_KEY_ID="$ADMIN_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$ADMIN_SECRET_KEY" aws --endpoint-url "$S3_ENDPOINT" s3api "$@"
-  else
-    AWS_ACCESS_KEY_ID="$AUDIT_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$AUDIT_SECRET_KEY" aws --endpoint-url "$S3_ENDPOINT" s3api "$@"
-  fi
+  case "$who" in
+    admin) AWS_ACCESS_KEY_ID="$ADMIN_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$ADMIN_SECRET_KEY" aws --endpoint-url "$S3_ENDPOINT" s3api "$@" ;;
+    audit) AWS_ACCESS_KEY_ID="$AUDIT_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$AUDIT_SECRET_KEY" aws --endpoint-url "$S3_ENDPOINT" s3api "$@" ;;
+    verify) AWS_ACCESS_KEY_ID="$VERIFY_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$VERIFY_SECRET_KEY" aws --endpoint-url "$S3_ENDPOINT" s3api "$@" ;;
+  esac
 }
 ok() { echo "OK $1"; }
 ng() { echo "NG $1${2:+ ($2)}"; }
@@ -76,6 +77,15 @@ denied "audit: ほかのバケットを list できない" as audit list-objects
 denied "audit: ほかのバケットに put できない" as audit put-object --bucket "$other" --key z.txt --body "$work/body.json"
 denied "audit: ほかのバケットから get できない" as audit get-object --bucket "$other" --key k.txt "$work/other.txt"
 denied "audit: ほかのバケットのオブジェクトを delete できない" as audit delete-object --bucket "$other" --key k.txt
+
+# --- 検査専用の資格情報(eiaf-audit-verify)は読むだけ ---
+allowed "verify: 全版の一覧(list-object-versions)を取得できる" as verify list-object-versions --bucket "$bucket" --prefix verify/
+allowed "verify: get-object できる" as verify get-object --bucket "$bucket" --key "$key" --version-id "$version" "$work/got-verify.json"
+allowed "verify: 版の保持の設定(get-object-retention)を取得できる" as verify get-object-retention --bucket "$bucket" --key "$key" --version-id "$version"
+denied "verify: put できない" as verify put-object --bucket "$bucket" --key "verify/$RUN_ID-by-verify.json" --body "$work/body.json" \
+  --object-lock-mode COMPLIANCE --object-lock-retain-until-date "$retain_until"
+denied "verify: 削除マーカーを作れない" as verify delete-object --bucket "$bucket" --key "$key"
+denied "verify: ほかのバケットを list できない" as verify list-objects-v2 --bucket "$other"
 
 # --- COMPLIANCE は管理者の資格情報でも解除できない(ADR-0015 で持ち越した確認) ---
 denied "admin: 保持期限内の版を削除できない(COMPLIANCE)" as admin delete-object --bucket "$bucket" --key "$key" --version-id "$version" --bypass-governance-retention
