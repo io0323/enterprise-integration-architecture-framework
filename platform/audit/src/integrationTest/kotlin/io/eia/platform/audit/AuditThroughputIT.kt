@@ -18,13 +18,22 @@ import javax.sql.DataSource
 
 private const val WARMUP = 200
 private const val MEASURED = 2_000
-private val CONCURRENCY = listOf(1, 4, 16)
+private const val ROUNDS = 3
+private val CONCURRENCY = listOf(1, 2, 4, 8, 16)
+
+/** 1 回の計測の結果。[lockWaiters] は advisory lock を待っていた接続の数の平均(pg_stat_activity を数ミリ秒ごとに見る)。 */
+private data class Round(
+    val perSecond: Double,
+    val lockWaiters: Double,
+)
 
 /**
- * 追記の性能の目安(ADR-0017・docs/reports/p04a-audit-throughput.md)。
+ * 追記の性能の目安(ADR-0017・docs/reports/p04a-audit-throughput.md)。ローカルでの目安であり、本番の性能値ではない。
  *
  * - chained: [AuditLog.append](advisory lock で直列にし、末尾を読んでハッシュを計算して INSERT)を 1 トランザクション 1 件で実行する。
  * - plain: 同じ列の別のテーブルに、ロックもハッシュもなしで INSERT する(比較の基準)。
+ * - 同時実行数ごとに [ROUNDS] 回計測し、中央値と最小・最大を出す。1 件あたりの平均の所要時間(同時実行数 ÷ 件数/秒)と、
+ *   ロックを待っていた接続の数の平均も出す(直列にしたことによる待ちの量を見るため)。
  *
  * 結果は build/reports/audit/throughput.md に書く。値は実行環境で大きく変わるため、ここでは検証(欠番・分岐がないこと)だけを確かめる。
  */
@@ -41,19 +50,28 @@ class AuditThroughputIT :
                 db.owner.connection.use { it.createPlainTable() }
                 pool(db, threads).use { pool ->
                     val log = AuditLog()
-                    val chained = measure(pool, threads) { connection, n -> log.append(connection, sampleEvent(n)) }
-                    val plain = measure(pool, threads) { connection, n -> connection.plainInsert(n) }
+                    run(pool, threads, WARMUP) { connection, n -> log.append(connection, sampleEvent(n)) }
+                    run(pool, threads, WARMUP) { connection, n -> connection.plainInsert(n) }
+                    val chained = (1..ROUNDS).map { measure(db, pool, threads) { connection, n -> log.append(connection, sampleEvent(n)) } }
+                    val plain = (1..ROUNDS).map { measure(db, pool, threads) { connection, n -> connection.plainInsert(n) } }
+                    val chainedMedian = chained.map { it.perSecond }.median()
+                    val plainMedian = plain.map { it.perSecond }.median()
                     rows +=
-                        "| $threads | ${"%,.0f".format(chained)} | ${"%,.0f".format(plain)} | ${"%.0f".format(100 * chained / plain)}% |"
+                        "| $threads | ${chained.map { it.perSecond }.summary()} | ${"%.2f".format(threads * 1000 / chainedMedian)} | " +
+                        "${"%.1f".format(chained.map { it.lockWaiters }.median())} | ${plain.map { it.perSecond }.summary()} | " +
+                        "${"%.0f".format(100 * chainedMedian / plainMedian)}% |"
                 }
                 val result = db.verifyChain()
                 result.findings.shouldBeEmpty()
-                result.count shouldBe (WARMUP + MEASURED).toLong()
+                result.count shouldBe (WARMUP + ROUNDS * MEASURED).toLong()
             }
             val report =
                 buildString {
-                    appendLine("| 同時実行数 | chained(件/秒) | plain(件/秒) | chained / plain |")
-                    appendLine("|---:|---:|---:|---:|")
+                    appendLine(
+                        "| 同時実行数 | chained 件/秒 中央値(最小〜最大) | chained 1 件の平均時間(ms) | ロック待ちの接続数の平均 | " +
+                            "plain 件/秒 中央値(最小〜最大) | chained / plain |",
+                    )
+                    appendLine("|---:|---:|---:|---:|---:|---:|")
                     rows.forEach(::appendLine)
                 }
             println(report)
@@ -62,6 +80,10 @@ class AuditThroughputIT :
             Files.writeString(output, report)
         }
     })
+
+private fun List<Double>.median(): Double = sorted()[size / 2]
+
+private fun List<Double>.summary(): String = "${"%,.0f".format(median())}(${"%,.0f".format(min())}〜${"%,.0f".format(max())})"
 
 private fun pool(
     db: AuditDatabase,
@@ -76,17 +98,50 @@ private fun pool(
         },
     )
 
-/** [WARMUP] 件を捨ててから [MEASURED] 件を [threads] 並列で実行し、1 秒あたりの件数を返す。1 件 = 1 トランザクション。 */
+/** [MEASURED] 件を [threads] 並列で実行し、1 秒あたりの件数と、その間のロック待ちの接続数の平均を返す。1 件 = 1 トランザクション。 */
 private fun measure(
+    db: AuditDatabase,
     dataSource: DataSource,
     threads: Int,
     action: (Connection, Int) -> Unit,
-): Double {
-    run(dataSource, threads, WARMUP, action)
+): Round {
+    val sampler = LockWaitSampler(db)
     val started = System.nanoTime()
     run(dataSource, threads, MEASURED, action)
     val seconds = (System.nanoTime() - started) / 1e9
-    return MEASURED / seconds
+    return Round(MEASURED / seconds, sampler.stop())
+}
+
+/** 別の接続(superuser)から pg_stat_activity を見て、advisory lock を待っている接続の数を数える。 */
+private class LockWaitSampler(
+    db: AuditDatabase,
+) {
+    @Volatile private var running = true
+    private val samples = mutableListOf<Int>()
+    private val thread =
+        Thread {
+            db.superuser { connection ->
+                connection
+                    .prepareStatement(
+                        "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() " +
+                            "AND wait_event_type = 'Lock' AND wait_event = 'advisory'",
+                    ).use { statement ->
+                        while (running) {
+                            statement.executeQuery().use { rows ->
+                                rows.next()
+                                synchronized(samples) { samples += rows.getInt(1) }
+                            }
+                            Thread.sleep(2)
+                        }
+                    }
+            }
+        }.apply { start() }
+
+    fun stop(): Double {
+        running = false
+        thread.join()
+        return synchronized(samples) { if (samples.isEmpty()) 0.0 else samples.average() }
+    }
 }
 
 private fun run(
