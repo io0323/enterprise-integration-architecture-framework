@@ -32,20 +32,39 @@ private val ENV =
 private val SECRETS = EnvSecretProvider(mapOf("AUDIT_DB_PASSWORD" to "db-password-value"))
 private val CREATED: Instant = Instant.parse("2026-09-28T01:00:00Z")
 
-private inline fun <reified T> proxy(crossinline handler: (String) -> Any?): T =
-    Proxy.newProxyInstance(T::class.java.classLoader, arrayOf(T::class.java)) { _, method, _ -> handler(method.name) } as T
+private inline fun <reified T> proxy(crossinline handler: (String, Array<Any?>) -> Any?): T =
+    Proxy.newProxyInstance(
+        T::class.java.classLoader,
+        arrayOf(T::class.java),
+    ) { _, method, args -> handler(method.name, args ?: emptyArray()) } as T
 
-/** 監査テーブルが空の DB(どの SELECT も 0 行)。 */
-private fun emptyDatabase(): Connection {
-    val rows = proxy<ResultSet> { if (it == "next") false else Unit }
-    val statement = proxy<PreparedStatement> { if (it == "executeQuery") rows else Unit }
-    return proxy { if (it == "prepareStatement") statement else Unit }
+/** 1 列の結果([values] の行数)。 */
+private fun resultSet(values: List<Long>): ResultSet {
+    var index = -1
+    return proxy { method, _ ->
+        when (method) {
+            "next" -> ++index < values.size
+            "getLong" -> values[index]
+            else -> Unit
+        }
+    }
 }
+
+/** 監査テーブルが空の DB(件数は 0、ほかの SELECT は 0 行)。 */
+private fun emptyDatabase(): Connection =
+    proxy { method, args ->
+        if (method == "prepareStatement") {
+            val rows = if ((args[0] as String).startsWith("SELECT count(*)")) resultSet(listOf(0L)) else resultSet(emptyList())
+            proxy<PreparedStatement> { name, _ -> if (name == "executeQuery") rows else Unit }
+        } else {
+            Unit
+        }
+    }
 
 /** SQL の実行で [sqlState] の例外を投げる DB。 */
 private fun failingDatabase(sqlState: String): Connection {
-    val statement = proxy<PreparedStatement> { if (it == "executeQuery") throw SQLException("失敗", sqlState) else Unit }
-    return proxy { if (it == "prepareStatement") statement else Unit }
+    val statement = proxy<PreparedStatement> { name, _ -> if (name == "executeQuery") throw SQLException("失敗", sqlState) else Unit }
+    return proxy { name, _ -> if (name == "prepareStatement") statement else Unit }
 }
 
 private class FixedStore(
@@ -112,6 +131,16 @@ class AuditVerifyCommandSpec :
             run(connect = { _, _, _ -> failingDatabase("42501") }).second shouldContain "AUDIT_DB_USER"
         }
 
+        test("想定外の例外も終了コード 2(1 = 改竄の疑いと区別する)。例外のメッセージは出さない") {
+            val buffer = ByteArrayOutputStream()
+            val code =
+                AuditVerifyCommand(SECRETS, { _, _, _ -> emptyDatabase() }, { _, _ -> throw IllegalStateException("secret-in-message") })
+                    .run(ENV, PrintStream(buffer, true, Charsets.UTF_8))
+            code shouldBe AuditVerifyCommand.FAILED
+            buffer.toString(Charsets.UTF_8) shouldContain "IllegalStateException"
+            buffer.toString(Charsets.UTF_8) shouldNotContain "secret-in-message"
+        }
+
         test("DB のパスワードがなければ終了コード 2") {
             val buffer = ByteArrayOutputStream()
             AuditVerifyCommand(EnvSecretProvider(emptyMap()), { _, _, _ -> emptyDatabase() }, { _, _ -> FixedStore(ok(emptyList())) })
@@ -126,6 +155,7 @@ class AuditVerifyCommandSpec :
                 ENV + ("AUDIT_JDBC_URL" to "jdbc:mysql://x"),
                 ENV - "AUDIT_DB_USER",
                 ENV + ("AUDIT_S3_ENDPOINT" to "http://bad host"),
+                ENV + ("AUDIT_S3_ENDPOINT" to "localhost:19333"),
                 ENV + ("AUDIT_S3_PATH_STYLE" to "yes"),
                 ENV + ("AUDIT_MIN_RETENTION" to "1d"),
                 ENV + ("AUDIT_MIN_RETENTION" to "-P1D"),

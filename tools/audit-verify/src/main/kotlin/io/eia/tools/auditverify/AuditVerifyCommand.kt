@@ -29,8 +29,23 @@ internal class AuditVerifyCommand(
         SecretProvider,
     ) -> AnchorStore = { config, provider -> S3AnchorStore(config.s3, provider) },
 ) {
-    @Suppress("ReturnCount") // 設定・資格情報・検査のそれぞれの失敗で返す
+    /**
+     * 検査して終了コードを返す。想定外の例外も [FAILED] にする(JVM が例外で終わると終了コードが 1 になり、
+     * 「改竄の疑い」と区別できなくなるため)。例外のメッセージは値を含みうるので、クラス名だけを出す。
+     */
+    @Suppress("TooGenericExceptionCaught") // 境界で全例外を終了コード 2 に変換するのがこの関数の責務
     fun run(
+        env: Map<String, String>,
+        out: PrintStream,
+    ): Int =
+        try {
+            verify(env, out)
+        } catch (e: Exception) {
+            failed(out, "想定外のエラー(${e::class.simpleName})")
+        }
+
+    @Suppress("ReturnCount") // 設定・資格情報・検査のそれぞれの失敗で返す
+    private fun verify(
         env: Map<String, String>,
         out: PrintStream,
     ): Int {

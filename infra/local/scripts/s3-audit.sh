@@ -40,10 +40,11 @@ denied() { # denied <内容> <コマンド...>: AccessDenied で失敗すれば 
 }
 
 # --- バケットの設定 ---
-allowed "バケット $bucket の Object Lock が有効" bash -c \
-  "[[ \$(AWS_ACCESS_KEY_ID='$ADMIN_ACCESS_KEY' AWS_SECRET_ACCESS_KEY='$ADMIN_SECRET_KEY' aws --endpoint-url '$S3_ENDPOINT' s3api get-object-lock-configuration --bucket $bucket --query ObjectLockConfiguration.ObjectLockEnabled --output text) == Enabled ]]"
-allowed "バケットポリシーが設定されている(audit の管理操作を拒否する)" bash -c \
-  "AWS_ACCESS_KEY_ID='$ADMIN_ACCESS_KEY' AWS_SECRET_ACCESS_KEY='$ADMIN_SECRET_KEY' aws --endpoint-url '$S3_ENDPOINT' s3api get-bucket-policy --bucket $bucket --output text | grep -q AuditIdentityCannotManageBucketOrDelete"
+# 資格情報はコマンドの文字列に埋め込まず、as 関数(環境変数)で渡す
+lock_enabled() { [[ "$(as admin get-object-lock-configuration --bucket "$bucket" --query ObjectLockConfiguration.ObjectLockEnabled --output text)" == Enabled ]]; }
+policy_applied() { as admin get-bucket-policy --bucket "$bucket" --output text | grep -q AuditIdentityCannotManageBucketOrDelete; }
+allowed "バケット $bucket の Object Lock が有効" lock_enabled
+allowed "バケットポリシーが設定されている(audit の管理操作を拒否する)" policy_applied
 
 # --- audit の資格情報で必要な操作ができる ---
 # 短縮の検査は、短縮後の期限がまだ先のうちに行う(過ぎた日時は権限の前に InvalidRequest で拒否されるため)

@@ -35,7 +35,7 @@ public class ChainVerifier(
                 val form = canonicalForms(row.record.canonicalVersion)
                 when {
                     form == null -> findings += Finding.UnknownCanonicalVersion(row.seq, row.record.canonicalVersion)
-                    form.hash(row.record).hex != row.hash -> findings += Finding.HashMismatch(row.seq)
+                    else -> checkHash(form, row)
                 }
             }
         }
@@ -44,6 +44,21 @@ public class ChainVerifier(
         previousHash = row.hash
         previousSeq = maxOf(previousSeq ?: row.seq, row.seq)
         count++
+    }
+
+    /** 直列化できない値(範囲外の時刻など)は、検証を止めずに解釈できない行として報告する。 */
+    private fun checkHash(
+        form: CanonicalForm,
+        row: StoredRow.Parsed,
+    ) {
+        val hash =
+            try {
+                form.hash(row.record).hex
+            } catch (e: ArithmeticException) {
+                findings += Finding.MalformedRecord(row.seq, "直列化できない値があります(${e::class.simpleName})")
+                return
+            }
+        if (hash != row.hash) findings += Finding.HashMismatch(row.seq)
     }
 
     private fun checkOrder(seq: Long) {

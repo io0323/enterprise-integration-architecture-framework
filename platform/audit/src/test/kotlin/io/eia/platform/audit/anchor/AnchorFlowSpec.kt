@@ -98,6 +98,13 @@ class AnchorFlowSpec :
             report.findings shouldContainExactly listOf(Finding.AnchorRecordMissing(published.key, published.versionId, 3, 2))
         }
 
+        test("seq を NULL にした行(読めない行)があれば、表の件数との不一致で検出する") {
+            val db = FakeAuditDb()
+            db.appendAll(log, 3)
+            db.rows += db.rows[2].toMutableMap().apply { this["seq"] = null }
+            verify(db, InMemoryAnchorStore(clock)).findings shouldContainExactly listOf(Finding.RowCountMismatch(4, 3))
+        }
+
         test("保存先・DB の失敗をそのまま返す") {
             val db = FakeAuditDb()
             db.appendAll(log, 1)

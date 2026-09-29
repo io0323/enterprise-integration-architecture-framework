@@ -42,6 +42,9 @@ public object AuditSchema {
                 .load()
                 .migrate()
             Unit
-        }.mapError { AuditStorageRejected("PostgreSQL", it.message) }
+        }.mapError {
+            // Flyway の例外のメッセージは SQL 文や接続先を含みうるため、例外のクラス名だけを入れる(SqlErrors と同じ方針)
+            AuditStorageRejected("PostgreSQL", "マイグレーションに失敗しました(${it.message})")
+        }
     }
 }

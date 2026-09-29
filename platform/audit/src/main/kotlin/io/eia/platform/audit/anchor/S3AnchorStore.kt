@@ -25,6 +25,7 @@ import software.amazon.awssdk.services.s3.model.ListObjectVersionsRequest
 import software.amazon.awssdk.services.s3.model.ObjectLockMode
 import software.amazon.awssdk.services.s3.model.PutObjectRequest
 import software.amazon.awssdk.services.s3.model.S3Exception
+import java.io.IOException
 import java.net.URI
 import java.security.MessageDigest
 import java.time.Duration
@@ -92,10 +93,13 @@ public class S3AnchorStore internal constructor(
                 page.versions().forEach { version -> versions += readVersion(version.key(), version.versionId(), version.lastModified()) }
                 keyMarker = page.nextKeyMarker()
                 versionIdMarker = page.nextVersionIdMarker()
-            } while (page.isTruncated == true)
+                // 続きがあると言いながらマーカーを返さない互換ストレージで、同じページを取り続けないようにする
+                val hasNext = page.isTruncated == true && keyMarker != null
+            } while (hasNext)
             ok(versions.sortedWith(compareBy(AnchorVersion::key, AnchorVersion::lastModified, AnchorVersion::versionId)))
         }
 
+    @Suppress("ReturnCount") // 本文を取得できない・読めないときは理由つきの版を返す
     private fun readVersion(
         key: String,
         versionId: String,
@@ -116,6 +120,8 @@ public class S3AnchorStore internal constructor(
                     }
             } catch (e: S3Exception) {
                 return AnchorVersion(key, versionId, lastModified, false, null, null, null, "取得できません(${errorCode(e)})")
+            } catch (e: IOException) {
+                return AnchorVersion(key, versionId, lastModified, false, null, null, null, "読み取れません(${e::class.simpleName})")
             }
         val retention =
             try {
