@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 検査の結果は標準出力に出す。ライブラリ(AWS SDK・PostgreSQL の JDBC・Flyway)のログは ERROR だけを標準エラーに出す -->
+<configuration>
+    <statusListener class="ch.qos.logback.core.status.NopStatusListener"/>
+    <appender name="STDERR" class="ch.qos.logback.core.ConsoleAppender">
+        <target>System.err</target>
+        <encoder class="io.eia.platform.observability.logging.EiaLogEncoder"/>
+    </appender>
+    <root level="ERROR">
+        <appender-ref ref="STDERR"/>
+    </root>
+</configuration>
