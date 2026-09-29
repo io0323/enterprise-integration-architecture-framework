@@ -27,7 +27,7 @@ P04a ④ で `platform/audit` を作る。Framework 14.1 は「誰が・いつ�
 | 区分 | 列 | 内容 |
 |---|---|---|
 | 誰が | `actor_type` / `actor_id` | `user` / `service` / `partner` / `system` と、その ID |
-| いつ | `occurred_at` / `recorded_at` | 業務の事象の時刻 / 記録した時刻(UTC、マイクロ秒に切り捨て) |
+| いつ | `occurred_at` / `recorded_at` | 業務の事象の時刻 / 記録した時刻(UTC、マイクロ秒に切り捨て)。`recorded_at` はチェーンのロックを取った後に読むので、`seq` の順と揃う(時計が戻らない限り) |
 | 何を | `action` / `target_type` / `target_id` / `outcome` | 例 `order.create` / `order` / `ord-123` / `success`・`failure`・`denied` |
 | どこへ | `destination` | 例 `kafka:sales.order.created.v1`・`partner:acme`。送り先がなければ NULL |
 | 本文の代わり | `payload_sha256` / `payload_ref` | ペイロードの SHA-256 か参照キーだけ。本文を入れる列は作らない |
@@ -36,6 +36,7 @@ P04a ④ で `platform/audit` を作る。Framework 14.1 は「誰が・いつ�
 
 - 識別子の欄(actor・target・destination・payload_ref)は伏せない。制御文字と長さだけを検査する(256〜1,024 文字)。ここに個人情報や本文を入れないのは、呼び出し側の責務とする(参照キーを入れる)。
 - 違反は `InvalidAuditEvent` で返し、DB には触れない。
+- `actor_id` などは個人データになりうる。`audit.audit_log` の機密区分と保持期間は、利用するサービスのカタログ(`contracts/catalog/*.yaml`)に記載する(P05 以降。Framework 16)。
 
 ### 2. テーブルと権限: 各サービスの DB に置き、チェーンはサービスごとに独立させる
 - テーブルは、各サービスの DB のスキーマ `audit` に `audit.audit_log` として作る。
@@ -105,6 +106,11 @@ P04a ④ で `platform/audit` を作る。Framework 14.1 は「誰が・いつ�
   - 代わりに、Object Lock つきの put には `Content-MD5` と `x-amz-checksum-sha256` を自分で計算して付ける(S3 は Object Lock つきの put にチェックサムを求める)。付くことは、統合テストで送信するヘッダを記録して確かめた。
   - 資格情報は、呼び出しのたびに `SecretProvider` から取る(ADR-0019 §6。ローテーションに追従する)。
   - エラーの理由には、S3 のエラーコードだけを入れる。
+  - **同期呼び出しの 4 点セット(Framework 13)の扱い**
+    - Timeout: 接続 5 秒、呼び出し全体 30 秒を明示する。
+    - Retry: SDK の既定の再試行に任せる。
+    - Circuit Breaker と Fallback は付けない。アンカーの保存は日次などのバッチの処理で、利用者の要求の経路にないため。失敗は `AuditStorageUnavailable`(Retryable)で返し、呼び出し側のスケジューラが次の回で再実行する。
+- **アンカーの JSON は、契約(`contracts/`)には置かない。** このリポジトリの中でだけ書き・読む、ストレージの内部の形式として扱う。形式はこの ADR と `Anchor.FORMAT`(`eiaf.audit.anchor.v1`)で固定する。外部の監査人に渡す形式が必要になったら、`contracts/files/` にスキーマを置いて契約にする。
 
 ### 6. 改竄の検査
 - **チェーン**(`ChainVerifier`): `seq` の昇順に 1 件ずつ読み(1,000 件ずつのキーセットのページング。全件をメモリに載せない)、次を検出する。
@@ -113,7 +119,12 @@ P04a ④ で `platform/audit` を作る。Framework 14.1 は「誰が・いつ�
   - `missing_seq`: 欠番
   - `out_of_order`: 順序の入れ替え・重複
   - `unknown_canonical_version`: 直列化の方法がない版
-  - `malformed_record`: 解釈できない行(details が文字列以外を含む、NOT NULL の列が NULL など)
+  - `malformed_record`: 解釈できない行(details が文字列以外を含む、NOT NULL の列が NULL、時刻が `'infinity'` など記録できる範囲の外)
+  - `row_count_mismatch`: 表の件数と検証できた件数が一致しない
+
+  - ページングのキーは `(seq, hash)` の組にする。`seq` だけだと、主キーを外して `seq` を重複させた行が、ページの境界で読み飛ばされる。
+  - `seq` や `hash` を NULL にした行は、行の比較に一致せず読まれない。そのため、走査の後に表の件数(`count(*)`)と照合する。
+  - 直列化できない値(範囲外の時刻)を含む行も、例外で検証を止めずに `malformed_record` にする。
 
   ある記録で不一致を見つけても、以降は保存された `hash` でつなぐ。1 件の改竄で後続の全件を不一致にせず、改竄された位置を特定するため。
 - **アンカー**(`AnchorVerifier`): `anchors/{service}/` の**全版**(削除マーカーを含む)について、次を確かめる。
@@ -127,6 +138,7 @@ P04a ④ で `platform/audit` を作る。Framework 14.1 は「誰が・いつ�
 - **`make audit-verify SERVICE=<name>`**(`tools/audit-verify`)
   - 1 つのサービスについて、上の検査を行う。
   - 終了コード: **0** = 改竄の疑いなし、**1** = 改竄の疑いあり、**2** = 検査を実行できない(設定・接続の失敗、監査テーブルがない)。
+  - 想定外の例外もすべて 2 にする。JVM が例外で終わると終了コードが 1 になり、「改竄の疑い」と区別できなくなるため。出力には例外のクラス名だけを出す。
   - 出力には `seq` とアンカーのキーだけを出し、記録の中身と資格情報は出さない。
   - DB にはアプリ用のロール(読み取り専用の接続)で、S3 には audit の資格情報で接続する。
   - 起動スクリプトを直接実行して、終了コードを保つ(Gradle の `run` は終了コードを 1 に丸めるため)。
@@ -165,6 +177,10 @@ P04a ④ で `platform/audit` を作る。Framework 14.1 は「誰が・いつ�
 - **保持期限が切れたアンカー**は、管理者が削除できる。削除された後は、その時点までの照合ができない。保持期間は、監査証跡の保存期間以上に設定する(本番は環境ごとの設定)。
 - **管理者の S3 の資格情報**(`eiaf`)は、audit のバケットのポリシーを外せる。本番では、管理者の資格情報の利用を監査し、S3 の細かい権限(IAM のポリシー)でアプリ用と管理用を分ける。
 - ローカルの S3 は平文の http(ADR-0008 の「転送路の暗号化」、#29)。
+- **アンカーを保存する前にチェーンを検証していない。** 前回のアンカーより後に改竄されていれば、改竄後の状態をアンカーとして固定する。ただし、前回のアンカーより前の改竄は、その後の検査で検出できる。保存の前の検証は、P05 でスケジュールに結線するときに、処理の時間とあわせて決める。
+- **アンカーが古くなったことを検出しない。** アンカーがない場合は「注意」を出すが、終了コードは 0 のまま。スケジュールの結線漏れや、アンカーの保存の失敗が続く状況は、P05 で最後に成功した時刻のメトリクスとアラートを設けて扱う。
+- **監査のメトリクス**(追記の失敗・所要時間・ロックの待ち、アンカーの保存の成否): P05 で、`platform/observability` を経由して出す。
+- **traceparent と Correlation ID** は、呼び出し側が `AuditEvent` に渡す。現在のコンテキストから埋めるヘルパは、P05 でサービスに結線するときに用意する。
 
 ## Alternatives Considered
 - **`SELECT ... FOR UPDATE` でチェーンの先頭の行をロックする**: 先頭を持つ表が 1 つ増え、その行の更新(UPDATE)が必要になり、追記専用の表の権限の設計と合わない。advisory lock なら表を増やさずに済む。不採用。
