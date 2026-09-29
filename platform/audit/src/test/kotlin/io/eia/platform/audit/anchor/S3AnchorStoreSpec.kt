@@ -36,6 +36,8 @@ import software.amazon.awssdk.services.s3.model.PutObjectRequest
 import software.amazon.awssdk.services.s3.model.PutObjectResponse
 import software.amazon.awssdk.services.s3.model.S3Exception
 import java.io.ByteArrayInputStream
+import java.io.IOException
+import java.io.InputStream
 import java.net.URI
 import java.security.MessageDigest
 import java.time.Instant
@@ -190,6 +192,42 @@ class S3AnchorStoreSpec :
             val version = S3AnchorStore(CONFIG, client).listVersions("anchors/order/").getOrNull()!!.single()
             version.body shouldBe null
             version.readError shouldBe "取得できません(AccessDenied)"
+        }
+
+        test("続きがあると言いながらマーカーを返さないストレージでも、同じページを取り続けない") {
+            val client = mockk<S3Client>()
+            every { client.listObjectVersions(any<ListObjectVersionsRequest>()) } returns
+                ListObjectVersionsResponse.builder().isTruncated(true).build()
+            S3AnchorStore(CONFIG, client).listVersions("anchors/order/").getOrNull() shouldBe emptyList()
+            verify(exactly = 1) { client.listObjectVersions(any<ListObjectVersionsRequest>()) }
+        }
+
+        test("本文の読み取りの I/O エラーは、その版の理由にする") {
+            val client = mockk<S3Client>()
+            every { client.listObjectVersions(any<ListObjectVersionsRequest>()) } returns
+                ListObjectVersionsResponse
+                    .builder()
+                    .isTruncated(false)
+                    .versions(
+                        ObjectVersion
+                            .builder()
+                            .key("anchors/order/a.json")
+                            .versionId("v1")
+                            .lastModified(MODIFIED)
+                            .build(),
+                    ).build()
+            val broken =
+                object : InputStream() {
+                    override fun read(): Int = throw IOException("reset")
+                }
+            every { client.getObject(any<GetObjectRequest>()) } returns
+                ResponseInputStream(GetObjectResponse.builder().build(), AbortableInputStream.create(broken))
+            every { client.getObjectRetention(any<GetObjectRetentionRequest>()) } returns GetObjectRetentionResponse.builder().build()
+            S3AnchorStore(CONFIG, client)
+                .listVersions("anchors/order/")
+                .getOrNull()!!
+                .single()
+                .readError shouldBe "読み取れません(IOException)"
         }
 
         test("保持の設定の取得が 404 以外で失敗したら、一覧の取得を失敗にする") {

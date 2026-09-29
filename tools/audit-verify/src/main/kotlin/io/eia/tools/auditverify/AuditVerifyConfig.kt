@@ -64,12 +64,19 @@ internal data class AuditVerifyConfig(
             )
         }
 
-        private fun parseEndpoint(value: String?): Result<URI, String> =
-            try {
-                ok(URI(value ?: DEFAULT_S3_ENDPOINT))
-            } catch (e: URISyntaxException) {
-                err("$S3_ENDPOINT が URI として不正です(${e::class.simpleName})")
+        private fun parseEndpoint(value: String?): Result<URI, String> {
+            val uri =
+                try {
+                    URI(value ?: DEFAULT_S3_ENDPOINT)
+                } catch (e: URISyntaxException) {
+                    return err("$S3_ENDPOINT が URI として不正です(${e::class.simpleName})")
+                }
+            return if (uri.scheme in setOf("http", "https") && !uri.host.isNullOrEmpty()) {
+                ok(uri)
+            } else {
+                err("$S3_ENDPOINT は http(s)://<host>:<port> の形にしてください")
             }
+        }
 
         private fun parsePathStyle(value: String?): Result<Boolean, String> =
             when (value?.lowercase()) {

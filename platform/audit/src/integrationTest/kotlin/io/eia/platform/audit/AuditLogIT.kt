@@ -148,6 +148,46 @@ class AuditLogIT :
                 .seq shouldBe 2
         }
 
+        test("アプリ用のロールはトリガーを外せない") {
+            val db = env.newDatabase()
+            val error =
+                shouldThrow<SQLException> { db.app.connection.use { it.execute("ALTER TABLE audit.audit_log DISABLE TRIGGER USER") } }
+            error.sqlState shouldBe INSUFFICIENT_PRIVILEGE
+        }
+
+        test("occurred_at を 'infinity' に書き換えても検証は止まらず、解釈できない行として検出する") {
+            val db = env.newDatabase()
+            (1..3).forEach { db.append(log, it) }
+            db.tamper("UPDATE audit.audit_log SET occurred_at = 'infinity' WHERE seq = 2")
+            db
+                .verifyChain()
+                .findings
+                .single()
+                .shouldBeInstanceOf<Finding.MalformedRecord>()
+                .seq shouldBe 2
+        }
+
+        test("主キーを外して、ページの境界に重複した seq と NULL の seq の行を入れると検出する") {
+            val db = env.newDatabase()
+            (1..10).forEach { db.append(log, it) }
+            val copy =
+                "INSERT INTO audit.audit_log SELECT %s, canonical_version, occurred_at, recorded_at, actor_type, 'forged', action, " +
+                    "target_type, target_id, destination, outcome, payload_sha256, payload_ref, correlation_id, traceparent, details, " +
+                    "prev_hash, repeat('%s', 64) FROM audit.audit_log WHERE seq = 7"
+            db.tamper(
+                "ALTER TABLE audit.audit_log DROP CONSTRAINT audit_log_pkey; " +
+                    "ALTER TABLE audit.audit_log ALTER COLUMN seq DROP NOT NULL; " +
+                    copy.format("NULL", "e") + "; " + copy.format("7", "f"),
+            )
+            // verifyChain は 7 件ずつ読む。seq = 7 はページの境界
+            db.verifyChain().findings shouldContainExactly
+                listOf(Finding.OutOfOrder(7, 7), Finding.BrokenLink(7), Finding.HashMismatch(7), Finding.BrokenLink(8))
+            db.app.connection.use { connection ->
+                AuditLogReader.countRows(connection).getOrNull() shouldBe 12L
+                AuditLogReader.forEachRow(connection) {}.getOrNull() shouldBe 11L
+            }
+        }
+
         test("トランザクションの外(自動コミット)や REPEATABLE READ では追記しない") {
             val db = env.newDatabase()
             db.app.connection.use { connection ->

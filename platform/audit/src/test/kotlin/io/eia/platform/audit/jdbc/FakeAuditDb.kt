@@ -72,14 +72,27 @@ internal class FakeAuditDb(
                 resultSet(listOf(mapOf("1" to null))).also { lockCount++ }
             }
 
-            sql.contains("ORDER BY seq DESC LIMIT 1") -> {
-                resultSet(listOfNotNull(rows.maxByOrNull { it["seq"] as Long }))
+            sql.startsWith("SELECT count(*)") -> {
+                resultSet(listOf(mapOf("1" to rows.size.toLong())))
             }
 
-            sql.contains("WHERE seq > ?") -> {
-                val after = params[0] as Long
-                val limit = params[1] as Int
-                resultSet(rows.filter { (it["seq"] as Long) > after }.sortedBy { it["seq"] as Long }.take(limit))
+            sql.contains("ORDER BY seq DESC LIMIT 1") -> {
+                resultSet(listOfNotNull(rows.filter { it["seq"] != null }.maxByOrNull { it["seq"] as Long }))
+            }
+
+            sql.contains("WHERE (seq, hash) > (?, ?)") -> {
+                val afterSeq = params[0] as Long
+                val afterHash = params[1] as String
+                val limit = params[2] as Int
+                // PostgreSQL の行の比較と同じく、seq か hash が NULL の行は一致しない
+                val order = compareBy<Map<String, Any?>>({ it["seq"] as Long }, { it["hash"] as String })
+                resultSet(
+                    rows
+                        .filter { it["seq"] != null && it["hash"] != null }
+                        .filter { (it["seq"] as Long) > afterSeq || (it["seq"] == afterSeq && (it["hash"] as String) > afterHash) }
+                        .sortedWith(order)
+                        .take(limit),
+                )
             }
 
             else -> {

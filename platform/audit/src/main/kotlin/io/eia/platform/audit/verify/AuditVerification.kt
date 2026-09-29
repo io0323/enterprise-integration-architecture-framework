@@ -31,18 +31,25 @@ public class AuditVerification(
                 is Result.Err -> return listed
             }
         val chainVerifier = ChainVerifier(anchorVerifier.checkpoints(versions))
-        when (val read = AuditLogReader.forEachRow(connection, consumer = chainVerifier::accept)) {
-            is Result.Ok -> Unit
-            is Result.Err -> return read
-        }
+        val read =
+            when (val result = AuditLogReader.forEachRow(connection, consumer = chainVerifier::accept)) {
+                is Result.Ok -> result.value
+                is Result.Err -> return result
+            }
+        val tableRows =
+            when (val result = AuditLogReader.countRows(connection)) {
+                is Result.Ok -> result.value
+                is Result.Err -> return result
+            }
         val chain = chainVerifier.result()
+        val countFindings = if (tableRows == read) emptyList() else listOf(Finding.RowCountMismatch(tableRows, read))
         return ok(
             VerificationReport(
                 service = service,
                 recordCount = chain.count,
                 headSeq = chain.headSeq,
                 anchorVersionCount = versions.size,
-                findings = chain.findings + anchorVerifier.verify(versions, chain),
+                findings = chain.findings + countFindings + anchorVerifier.verify(versions, chain),
             ),
         )
     }

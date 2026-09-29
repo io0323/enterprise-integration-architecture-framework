@@ -44,13 +44,14 @@ public class AuditLog(
                 is Result.Ok -> result.value
                 is Result.Err -> return result
             }
-        val recordedAt = AuditEventNormalizer.truncateToMicros(clock.instant())
         return sqlCatching {
             checkTransaction(connection)?.let { return@sqlCatching err(it) }
             connection.prepareStatement("SELECT pg_advisory_xact_lock(?)").use {
                 it.setLong(1, CHAIN_LOCK_KEY)
                 it.executeQuery().close()
             }
+            // ロックを取った後に時刻を読む(seq の順と recorded_at の順を揃える)
+            val recordedAt = AuditEventNormalizer.truncateToMicros(clock.instant())
             val tail = AuditLogReader.head(connection)
             val record =
                 normalized.toRecord(

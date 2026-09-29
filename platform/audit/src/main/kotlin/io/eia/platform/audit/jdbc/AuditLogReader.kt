@@ -1,6 +1,7 @@
 package io.eia.platform.audit.jdbc
 
 import io.eia.platform.audit.AuditError
+import io.eia.platform.audit.AuditEventNormalizer
 import io.eia.platform.audit.AuditRecord
 import io.eia.platform.audit.StoredRow
 import io.eia.shared.kernel.Result
@@ -37,8 +38,11 @@ public object AuditLogReader {
         }
 
     /**
-     * `seq` の昇順に 1 ページ([pageSize] 件)ずつ読んで [consumer] に渡す(キーセットのページング。全件をメモリに載せない)。
+     * `(seq, hash)` の昇順に 1 ページ([pageSize] 件)ずつ読んで [consumer] に渡す(キーセットのページング。全件をメモリに載せない)。
      * 読み終えた件数を返す。
+     *
+     * ページングのキーを `seq` だけにすると、主キーを外して `seq` を重複させた行がページの境界で読み飛ばされるため、`hash` と組にする。
+     * `seq` や `hash` を NULL にした行はここでは読めないので、[countRows] の件数と照合する(AuditVerification)。
      */
     public fun forEachRow(
         connection: Connection,
@@ -46,28 +50,52 @@ public object AuditLogReader {
         consumer: (StoredRow) -> Unit,
     ): Result<Long, AuditError> =
         sqlCatching {
-            var after = Long.MIN_VALUE
+            var afterSeq = Long.MIN_VALUE
+            var afterHash = ""
             var count = 0L
             do {
-                val page = page(connection, after, pageSize)
-                page.forEach(consumer)
+                val page = page(connection, afterSeq, afterHash, pageSize)
+                page.forEach { consumer(it.row) }
                 count += page.size
-                page.lastOrNull()?.let { after = it.seq }
+                page.lastOrNull()?.let {
+                    afterSeq = it.row.seq
+                    afterHash = it.pageHash
+                }
             } while (page.size == pageSize)
             ok(count)
         }
 
+    /** 表の全件数(`seq` や `hash` が NULL の行も含む)。 */
+    public fun countRows(connection: Connection): Result<Long, AuditError> =
+        sqlCatching {
+            connection.prepareStatement("SELECT count(*) FROM ${AuditSchema.TABLE}").use { statement ->
+                statement.executeQuery().use { rows ->
+                    rows.next()
+                    ok(rows.getLong(1))
+                }
+            }
+        }
+
+    /** 読んだ行と、次のページの起点にする `hash` の値(保存された値そのもの)。 */
+    private class PagedRow(
+        val row: StoredRow,
+        val pageHash: String,
+    )
+
     private fun page(
         connection: Connection,
-        after: Long,
+        afterSeq: Long,
+        afterHash: String,
         pageSize: Int,
-    ): List<StoredRow> =
-        connection.prepareStatement("$SELECT WHERE seq > ? ORDER BY seq LIMIT ?").use { statement ->
-            statement.setLong(1, after)
-            statement.setInt(2, pageSize)
+    ): List<PagedRow> =
+        connection.prepareStatement("$SELECT WHERE (seq, hash) > (?, ?) ORDER BY seq, hash LIMIT ?").use { statement ->
+            var index = 0
+            statement.setLong(++index, afterSeq)
+            statement.setString(++index, afterHash)
+            statement.setInt(++index, pageSize)
             statement.executeQuery().use { rows ->
                 buildList {
-                    while (rows.next()) add(rows.toStoredRow())
+                    while (rows.next()) add(PagedRow(rows.toStoredRow(), rows.getString("hash").orEmpty()))
                 }
             }
         }
@@ -84,6 +112,11 @@ public object AuditLogReader {
         fun malformed(reason: String) = StoredRow.Malformed(seq, hash.orEmpty(), prevHash.orEmpty(), reason)
         if (hash == null || prevHash == null) return malformed("hash か prev_hash が NULL です")
         if (occurredAt == null || recordedAt == null) return malformed("occurred_at か recorded_at が NULL です")
+        // 'infinity' など、記録する側が受け付けない範囲の時刻(直列化でマイクロ秒に直せない)
+        val outOfRange =
+            AuditEventNormalizer.checkInstant("occurred_at", occurredAt.toInstant())
+                ?: AuditEventNormalizer.checkInstant("recorded_at", recordedAt.toInstant())
+        if (outOfRange != null) return malformed("${outOfRange.field} が記録できる範囲の外です")
         val details =
             when (val parsed = parseDetails(getString("details"))) {
                 is Result.Ok -> parsed.value

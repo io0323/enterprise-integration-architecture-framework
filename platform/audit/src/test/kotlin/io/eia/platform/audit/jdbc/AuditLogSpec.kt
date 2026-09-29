@@ -27,6 +27,7 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import java.time.Clock
 import java.time.Instant
+import java.time.OffsetDateTime
 import java.time.ZoneOffset
 
 private val CLOCK: Clock = Clock.fixed(Instant.parse("2026-09-28T10:00:00.123456789Z"), ZoneOffset.UTC)
@@ -86,14 +87,37 @@ class AuditLogSpec :
             db.verify() shouldContainExactly listOf(Finding.HashMismatch(2))
         }
 
-        test("details が JSON のオブジェクトでない行・hash が NULL の行は解釈できない行になる") {
+        test("details が JSON のオブジェクトでない行・prev_hash が NULL の行は解釈できない行になる。hash が NULL の行はページングで読まれない") {
             val db = FakeAuditDb()
-            db.appendAll(log, 2)
+            db.appendAll(log, 3)
             db.rows[0]["details"] = "[]"
-            db.rows[1]["hash"] = null
+            db.rows[1]["prev_hash"] = null
+            db.rows[2]["hash"] = null
             val rows = mutableListOf<StoredRow>()
+            // hash が NULL の行は (seq, hash) の比較に一致しない。表の件数との照合(countRows)で検出する(AnchorFlowSpec)
             AuditLogReader.forEachRow(db.connection(), consumer = rows::add).getOrNull() shouldBe 2L
+            AuditLogReader.countRows(db.connection()).getOrNull() shouldBe 3L
             rows.forEach { it.shouldBeInstanceOf<StoredRow.Malformed>() }
+        }
+
+        test("記録できる範囲の外の時刻('infinity' など)の行は、検証を止めずに解釈できない行として報告する") {
+            val db = FakeAuditDb()
+            db.appendAll(log, 3)
+            db.rows[1]["occurred_at"] = OffsetDateTime.MAX
+            db.verify().map { it::class } shouldBe listOf(Finding.MalformedRecord::class)
+        }
+
+        test("主キーを外して、ページの境界の seq を重複させた行も検証する") {
+            val db = FakeAuditDb()
+            db.appendAll(log, 4)
+            // pageSize = 2 の境界(seq = 2)に、内容の違う行を差し込む
+            db.rows +=
+                db.rows[1].toMutableMap().apply {
+                    this["actor_id"] = "forged"
+                    this["hash"] = "f".repeat(64)
+                }
+            db.verify(pageSize = 2) shouldContainExactly
+                listOf(Finding.OutOfOrder(2, 2), Finding.BrokenLink(2), Finding.HashMismatch(2), Finding.BrokenLink(3))
         }
 
         test("記録がなければ末尾は null") {
