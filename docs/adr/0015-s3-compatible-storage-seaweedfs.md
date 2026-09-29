@@ -56,3 +56,6 @@
 - S3 API だけを使うため、本番で AWS S3・他の S3 互換ストレージへ替えるときも、アプリはエンドポイント・認証情報・addressing style の設定を変えるだけでよい。
 - Object Lock の Compliance モードの厳密さ(ルートの権限でも消せないか、保持期限を短くできないか)は、P04a の Audit の統合テストで改めて確かめる。P03 では、保持期限内の版を通常の資格情報で削除できないことまでを確かめた。
 - `weed server` を 1 プロセスで動かすのはローカル専用の構成で、冗長性はない。
+
+## 改訂履歴
+- 2026-09-29: Object Lock の Compliance モードの厳密さを、P04a ④ で確かめた(ADR-0017 §7)。**管理者の資格情報でも**、保持期限内の版を削除できず(`--bypass-governance-retention` を付けても)、保持期限を短縮できず、GOVERNANCE に変更できなかった。空でないバケットは削除できない。`make verify PROFILE=file`(`scripts/s3-audit.sh`)と `AuditAnchorIT` で毎回確かめる。あわせて、SeaweedFS の identity の `Write` がバケットの管理操作(Object Lock の設定の変更など)を含むことが分かり、audit の identity はバケットポリシーで拒否した(ADR-0017 §7)。

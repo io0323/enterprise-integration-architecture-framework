@@ -78,13 +78,15 @@ Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)�
 
 | 対象 | 利用者 | 値 |
 |---|---|---|
-| PostgreSQL(サービス別) | `order_service` / `inventory_service` / `payment_service` / `shipping_service` / `legacy_sim` / `batch_etl`(DB 名と同じ) | `.env` の `<SERVICE>_DB_PASSWORD`。他のサービスの DB には接続できない |
+| PostgreSQL(サービス別) | `order_service` / `inventory_service` / `payment_service` / `shipping_service` / `legacy_sim` / `batch_etl`(DB 名と同じ。DB の所有者で、マイグレーションに使う) | `.env` の `<SERVICE>_DB_PASSWORD`。他のサービスの DB には接続できない |
+| PostgreSQL(サービス別のアプリ用) | `<DB 名>_app`(例 `order_service_app`)。表を所有せず、権限は各マイグレーションが付ける(監査記録は INSERT と SELECT だけ。ADR-0017) | `.env` の `<SERVICE>_APP_DB_PASSWORD`。**P04a ④ より前に作ったボリュームには無いので、`make clean` が必要** |
 | PostgreSQL(CDC) | `debezium`(REPLICATION) | `DEBEZIUM_DB_PASSWORD` |
 | Keycloak 管理 | `admin` | `KEYCLOAK_ADMIN_PASSWORD` |
 | Keycloak client credentials | `eiaf-e2e`(スコープ `sales.order:read` / `sales.order:write`、`aud` = `order-api`) | `EIAF_E2E_CLIENT_SECRET` |
 | Grafana | `admin` | `GRAFANA_ADMIN_PASSWORD` |
 | MQTT | `MQTT_USERNAME` | `MQTT_PASSWORD` |
-| S3 | — | `S3_ACCESS_KEY` / `S3_SECRET_KEY` |
+| S3(管理者) | `eiaf`(Admin)。バケットとポリシーの作成用 | `S3_ACCESS_KEY` / `S3_SECRET_KEY` |
+| S3(監査のアンカー) | `eiaf-audit`。バケット `eiaf-audit` の Read / Write / List だけ。バケットの管理操作と削除はバケットポリシーで拒否する(ADR-0017 §7) | `AUDIT_S3_ACCESS_KEY` / `AUDIT_S3_SECRET_KEY` |
 | SFTP | `eiaf-file` / `partner01` | 秘密鍵 `secrets/sftp-file` / `secrets/sftp-b2b` |
 
 トークンの取得例:
@@ -106,6 +108,7 @@ curl -s -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token
 - **Observability**: アプリは OTLP を `otel-collector` に送る。traces → Tempo、metrics → Prometheus、logs → Loki。Grafana のデータソースは provisioning 済み(trace ↔ log ↔ metric のリンクつき)。
   - アプリ(`platform/observability`。ADR-0018)の環境変数: `OTEL_SERVICE_NAME`、`OTEL_EXPORTER_OTLP_ENDPOINT`(OTLP/HTTP。ホストのアプリは `http://localhost:19318`、コンテナのアプリは `http://otel-collector:4318`。未設定なら OTLP に送らず標準出力だけ)、`OTEL_TRACES_SAMPLER_ARG`(起点のサンプリング率。既定 1.0)、`EIA_ENVIRONMENT`(既定 `local`)。
   - 標準出力のログの形式は `EIA_LOG_FORMAT` で切り替える。既定は `json`(Loki と同じ項目)。手元で読むときは `EIA_LOG_FORMAT=console ./gradlew :services:order:app:run` のように `console` にする。
+- **監査(ADR-0017)**: `seaweedfs-init`(file / b2b profile)が、`make up` のたびにバケット `eiaf-audit`(Object Lock)を作り、`seaweedfs/audit-bucket-policy.json` を設定して終了する。`make verify` は、このコンテナを終了コード 0 で判定する。改竄の検査は `make audit-verify SERVICE=<name>`(終了コード 0 / 1 / 2。`docs/runbooks/audit-verify.md`)。
 - **Toxiproxy**: 起動時に `kafka-host`(19094)、`kafka-internal`(19095)、`postgres`(19433)の proxy を作る(`toxiproxy/toxiproxy.json`)。
 
 ## イメージの更新
@@ -151,6 +154,8 @@ Kafka Connect は公開イメージを使わず、`images/kafka-connect/Dockerfi
 | `make up` が `required variable ... is missing` で止まる | `make env` を実行する(新しいフェーズで変数が増えると、不足分だけ追記される) |
 | tempo / loki が permission denied で起動しない | 以前の版(root で実行していた)で作ったボリュームが残っている。`make clean` でボリュームを削除してから `make up` |
 | `postgres/init/` を変えたのに反映されない | 初期化スクリプトは初回だけ実行される。`make clean` でボリュームを削除してから `make up` |
+| `make verify` が「アプリ用のロール ..._app がない」で失敗する | P04a ④ より前に作ったボリューム。`make clean` でボリュームを削除してから `make up` |
+| Docker Desktop を再起動した後、otel-collector / loki が healthy にならない(`/probe/bin/wget: no such file or directory`) | 再起動でコンテナの image マウントが外れる。`make down && make up` でコンテナを作り直す(ボリュームは残る) |
 | otel-collector / loki が healthy にならない | Docker が image マウントに対応していない。Docker Desktop / Engine を更新する |
 | コンテナが再起動を繰り返す(OOM) | `make stats` で使用量を確認し、Docker に割り当てるメモリを増やすか、不要な profile を止める(`make down` して必要な profile だけ `make up`) |
 | ポートが使用中で起動しない | 19000〜19999 を使う他のプロセスを止める(`lsof -iTCP:19092 -sTCP:LISTEN` など) |
