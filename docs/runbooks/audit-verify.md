@@ -47,5 +47,5 @@ echo $?                           # 0 = 改竄の疑いなし / 1 = 改竄の疑
 | `SQLSTATE 28P01`(認証の失敗) | アプリ用のロール(`{name}_app`)がない古いボリューム。`make clean && make up`(ADR-0017 §2) |
 | `SQLSTATE 42P01`(監査テーブルがありません) | そのサービスがまだ `AuditSchema.migrate` を実行していない(P05 以降でサービスが作る) |
 | `SQLSTATE 42501`(権限がありません) | `AUDIT_DB_USER` が監査テーブルを読めるロールか |
-| `S3 ... AccessDenied` | `AUDIT_S3_ACCESS_KEY` / `AUDIT_S3_SECRET_KEY` と、`seaweedfs-init` の結果(`make logs SERVICE=seaweedfs-init`) |
+| `S3 ... AccessDenied` | 検査は読み取り専用の `eiaf-audit-verify`(`.env` の `AUDIT_VERIFY_S3_ACCESS_KEY` / `AUDIT_VERIFY_S3_SECRET_KEY`)で行う。`make env` の後に `make up` で SeaweedFS に反映されているか、`seaweedfs-init` の結果(`make logs SERVICE=seaweedfs-init`)を確かめる |
 | `tools/audit-verify をビルドできません` | `JAVA_HOME` が JDK 21 以上を指しているか |

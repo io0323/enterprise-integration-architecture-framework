@@ -69,13 +69,16 @@ class AuditAnchorIT :
         val recorder = PutHeaderRecorder()
         val store by lazy { env.anchorStore(listOf(recorder)) }
 
+        // 検査は、アンカーを書けない読み取り専用の資格情報で行う(make audit-verify と同じ)
+        val verifyStore by lazy { env.anchorStore(identity = AuditEnvironment.VERIFY) }
+
         fun newService(): ServiceName = ServiceName.parse("svc-${services.incrementAndGet()}").getOrNull()!!
 
         fun AuditDatabase.publish(service: ServiceName): PublishedAnchor =
             app.connection.use { AnchorPublisher(service, store, RETENTION).publish(it).getOrNull().shouldNotBeNull() }
 
         fun AuditDatabase.verify(service: ServiceName): VerificationReport =
-            app.connection.use { AuditVerification(service, store, MIN_RETENTION).run(it).getOrNull().shouldNotBeNull() }
+            app.connection.use { AuditVerification(service, verifyStore, MIN_RETENTION).run(it).getOrNull().shouldNotBeNull() }
 
         test("アンカーを COMPLIANCE・保持期限つきで anchors/{service}/{UTC の日付}.json に保存し、put にチェックサムが付く") {
             val db = env.newDatabase()
@@ -206,6 +209,31 @@ class AuditAnchorIT :
                 forbidden { audit.getObjectAsBytes { it.bucket(other).key("k.txt") } }
                 forbidden { audit.deleteObject { it.bucket(other).key("k.txt") } }
             }
+        }
+
+        test("検査専用の資格情報では、アンカーを読めるが、書けず、消せない") {
+            val db = env.newDatabase()
+            val service = newService()
+            db.append(log, 1)
+            val published = db.publish(service)
+            env.verifyClient().use { verify ->
+                verify.getObjectAsBytes { it.bucket(AuditEnvironment.BUCKET).key(published.key).versionId(published.versionId) }
+                forbidden {
+                    verify.putObject(
+                        {
+                            it
+                                .bucket(AuditEnvironment.BUCKET)
+                                .key(AnchorKeys.of(service, Instant.now()))
+                                .objectLockMode(ObjectLockMode.COMPLIANCE)
+                                .objectLockRetainUntilDate(Instant.now().plus(RETENTION))
+                        },
+                        RequestBody.fromBytes(published.anchor.toJson()),
+                    )
+                }
+                forbidden { verify.deleteObject { it.bucket(AuditEnvironment.BUCKET).key(published.key) } }
+                forbidden { verify.deleteObject { it.bucket(AuditEnvironment.BUCKET).key(published.key).versionId(published.versionId) } }
+            }
+            db.verify(service).findings.shouldBeEmpty()
         }
 
         test("バケットの既定の保持設定を GOVERNANCE に書き換えても、アプリが保存したアンカーは COMPLIANCE になる") {

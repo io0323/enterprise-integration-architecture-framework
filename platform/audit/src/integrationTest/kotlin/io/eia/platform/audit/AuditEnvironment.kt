@@ -40,6 +40,7 @@ internal class AuditEnvironment : AutoCloseable {
             mapOf(
                 ADMIN to listOf("Admin", "Read", "Write", "List", "Tagging"),
                 AUDIT to listOf("Read:$BUCKET", "Write:$BUCKET", "List:$BUCKET"),
+                VERIFY to listOf("Read:$BUCKET", "List:$BUCKET"),
             ),
         )
     private val ownerPassword = randomHex()
@@ -82,8 +83,12 @@ internal class AuditEnvironment : AutoCloseable {
         block: (Connection) -> T,
     ): T = dataSource(postgres.username, postgres.password, database).connection.use(block)
 
-    fun anchorStore(interceptors: List<ExecutionInterceptor> = emptyList()): S3AnchorStore {
-        val credentials = seaweed.credentials.getValue(AUDIT)
+    /** [identity] の資格情報のアンカーの保存先。既定は書込み用の `eiaf-audit`、検査は読み取り専用の `eiaf-audit-verify`。 */
+    fun anchorStore(
+        interceptors: List<ExecutionInterceptor> = emptyList(),
+        identity: String = AUDIT,
+    ): S3AnchorStore {
+        val credentials = seaweed.credentials.getValue(identity)
         val secrets =
             EnvSecretProvider(mapOf("AUDIT_S3_ACCESS_KEY" to credentials.accessKey, "AUDIT_S3_SECRET_KEY" to credentials.secretKey))
         val config = S3AnchorStoreConfig(endpoint = URI(seaweed.endpoint), bucket = BUCKET)
@@ -92,6 +97,9 @@ internal class AuditEnvironment : AutoCloseable {
 
     /** audit の資格情報の S3 クライアント(権限の検査用。SDK を直接使う)。 */
     fun auditClient(): S3Client = s3Client(seaweed.credentials.getValue(AUDIT))
+
+    /** 検査専用(読み取り専用)の資格情報の S3 クライアント。 */
+    fun verifyClient(): S3Client = s3Client(seaweed.credentials.getValue(VERIFY))
 
     private fun s3Client(credentials: SeaweedFsContainer.S3Credentials): S3Client =
         S3Client
@@ -126,6 +134,7 @@ internal class AuditEnvironment : AutoCloseable {
         const val BUCKET = "eiaf-audit"
         const val ADMIN = "eiaf"
         const val AUDIT = "eiaf-audit"
+        const val VERIFY = "eiaf-audit-verify"
         const val OWNER_ROLE = "order_service"
         const val APP_ROLE = "order_service_app"
         private const val SECRET_BYTES = 16

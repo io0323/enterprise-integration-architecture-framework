@@ -52,6 +52,12 @@ verify_health() {
     local state
     state="$("${compose[@]}" ps -a --format '{{.State}}/{{.Health}}/{{.ExitCode}}' "$svc" 2>/dev/null | head -1)"
     if [[ " ${ONESHOT_SERVICES[*]} " == *" $svc "* ]]; then
+      # up --wait はヘルスチェックのないコンテナを「起動中」で待ち終えるため、終了するまで待つ(最大 60 秒)
+      for ((i = 0; i < 30; i++)); do
+        [[ "$state" == running/* ]] || break
+        sleep 2
+        state="$("${compose[@]}" ps -a --format '{{.State}}/{{.Health}}/{{.ExitCode}}' "$svc" 2>/dev/null | head -1)"
+      done
       # 初期化して終了するコンテナは、終了コード 0 で止まっていれば成功
       if [[ "$state" == "exited//0" ]]; then pass "$svc: 初期化が完了 (exit 0)"; else fail "$svc: ${state:-コンテナなし}"; fi
     elif [[ "$state" == running/healthy/* ]]; then
@@ -317,6 +323,7 @@ verify_audit_bucket() {
   output="$(docker run --rm --network eiaf \
     -e ADMIN_ACCESS_KEY="$S3_ACCESS_KEY" -e ADMIN_SECRET_KEY="$S3_SECRET_KEY" \
     -e AUDIT_ACCESS_KEY="$AUDIT_S3_ACCESS_KEY" -e AUDIT_SECRET_KEY="$AUDIT_S3_SECRET_KEY" \
+    -e VERIFY_ACCESS_KEY="$AUDIT_VERIFY_S3_ACCESS_KEY" -e VERIFY_SECRET_KEY="$AUDIT_VERIFY_S3_SECRET_KEY" \
     -e RUN_ID="$(date +%s)-$$" -e S3_ENDPOINT=http://seaweedfs:8333 \
     -v "$here/scripts/s3-audit.sh:/s3-audit.sh:ro" --entrypoint bash "$AWS_CLI_IMAGE" /s3-audit.sh 2>&1 || true)"
   while IFS= read -r line; do
