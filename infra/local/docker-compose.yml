@@ -163,20 +163,25 @@ services:
   seaweedfs:
     image: ${SEAWEEDFS_IMAGE:?}
     profiles: [file, b2b]
-    # S3 の認証情報(.env)から設定ファイルを生成してから起動する
+    # S3 の認証情報(.env)から設定ファイルを生成してから起動する。
+    # - eiaf: 管理者(バケットとポリシーの作成用)
+    # - eiaf-audit: 監査のアンカー専用。操作はバケット eiaf-audit に限る。Write に含まれる管理操作(Object Lock の設定の変更など)は、
+    #   seaweedfs-init が設定するバケットポリシーで拒否する(ADR-0017)
     entrypoint:
       - sh
       - -c
       - >-
         mkdir -p /etc/seaweedfs &&
-        printf '{"identities":[{"name":"eiaf","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","Write","List","Tagging"]}]}'
-        "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY" > /etc/seaweedfs/s3.json &&
+        printf '{"identities":[{"name":"eiaf","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","Write","List","Tagging"]},{"name":"eiaf-audit","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Read:eiaf-audit","Write:eiaf-audit","List:eiaf-audit"]}]}'
+        "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY" "$$AUDIT_S3_ACCESS_KEY" "$$AUDIT_S3_SECRET_KEY" > /etc/seaweedfs/s3.json &&
         exec weed server -dir=/data -ip=seaweedfs -ip.bind=0.0.0.0
         -master.volumeSizeLimitMB=256 -volume.max=32
         -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3.json
     environment:
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:?make env を実行してください}
       S3_SECRET_KEY: ${S3_SECRET_KEY:?}
+      AUDIT_S3_ACCESS_KEY: ${AUDIT_S3_ACCESS_KEY:?make env を実行してください}
+      AUDIT_S3_SECRET_KEY: ${AUDIT_S3_SECRET_KEY:?}
     ports:
       - 127.0.0.1:19333:8333
     volumes:
@@ -185,6 +190,24 @@ services:
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8333/healthz"]
+
+  # 監査のアンカー用のバケット(eiaf-audit。Object Lock)とバケットポリシーを作る(ADR-0017)。make up のたびに実行して終了する
+  seaweedfs-init:
+    image: ${AWS_CLI_IMAGE:?}
+    profiles: [file, b2b]
+    depends_on:
+      seaweedfs:
+        condition: service_healthy
+    entrypoint: ["bash", "/init/init-audit-bucket.sh"]
+    environment:
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:?make env を実行してください}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:?}
+      S3_ENDPOINT: http://seaweedfs:8333
+    volumes:
+      - ./seaweedfs/init-audit-bucket.sh:/init/init-audit-bucket.sh:ro
+      - ./seaweedfs/audit-bucket-policy.json:/init/audit-bucket-policy.json:ro
+    mem_limit: 256m
+    restart: "no"
 
   # SFTP(file profile。社内システムとのファイル授受)。公開鍵認証のみ
   sftp:
@@ -280,6 +303,13 @@ services:
       SHIPPING_DB_PASSWORD: ${SHIPPING_DB_PASSWORD:?}
       LEGACY_SIM_DB_PASSWORD: ${LEGACY_SIM_DB_PASSWORD:?}
       BATCH_ETL_DB_PASSWORD: ${BATCH_ETL_DB_PASSWORD:?}
+      # アプリ用のロール({name}_app。ADR-0017)。追加前のボリュームには作られないため make clean が必要(infra/local/README.md)
+      ORDER_APP_DB_PASSWORD: ${ORDER_APP_DB_PASSWORD:?make env を実行してください}
+      INVENTORY_APP_DB_PASSWORD: ${INVENTORY_APP_DB_PASSWORD:?}
+      PAYMENT_APP_DB_PASSWORD: ${PAYMENT_APP_DB_PASSWORD:?}
+      SHIPPING_APP_DB_PASSWORD: ${SHIPPING_APP_DB_PASSWORD:?}
+      LEGACY_SIM_APP_DB_PASSWORD: ${LEGACY_SIM_APP_DB_PASSWORD:?}
+      BATCH_ETL_APP_DB_PASSWORD: ${BATCH_ETL_APP_DB_PASSWORD:?}
       KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?}
       APICURIO_DB_PASSWORD: ${APICURIO_DB_PASSWORD:?}
       DEBEZIUM_DB_PASSWORD: ${DEBEZIUM_DB_PASSWORD:?make env を実行してください}
