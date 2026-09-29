@@ -44,6 +44,13 @@ nimbus-jose-jwt = "10.10"
 # - diff: GHSA-73rr-hh4g-fpgx(< 8.0.3)。9.x は CommonJS の入口がないため、mocha の require と両立する 8.x の最新にする
 npm-serialize-javascript = "7.1.2"
 npm-diff = "8.0.4"
+# P04a ④ audit(確認日: 2026-09-28。ADR-0017)
+flyway = "13.8.0"
+postgresql = "42.7.13"
+# S3 クライアント。HTTP の実装は JDK の HttpURLConnection(url-connection-client)で、Netty・Apache・CRT を持ち込まない(ADR-0017)
+aws-sdk = "2.55.6"
+# 統合テストの計測(並列の追記)でだけ使うコネクションプール
+hikaricp = "7.1.0"
 
 [libraries]
 kotest-framework-engine = { module = "io.kotest:kotest-framework-engine", version.ref = "kotest" }
@@ -65,6 +72,15 @@ ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx
 ktor-server-test-host = { module = "io.ktor:ktor-server-test-host", version.ref = "ktor" }
 koin-core = { module = "io.insert-koin:koin-core", version.ref = "koin" }
 exposed-core = { module = "org.jetbrains.exposed:exposed-core", version.ref = "exposed" }
+exposed-jdbc = { module = "org.jetbrains.exposed:exposed-jdbc", version.ref = "exposed" }
+flyway-core = { module = "org.flywaydb:flyway-core", version.ref = "flyway" }
+flyway-database-postgresql = { module = "org.flywaydb:flyway-database-postgresql", version.ref = "flyway" }
+postgresql = { module = "org.postgresql:postgresql", version.ref = "postgresql" }
+aws-sdk-bom = { module = "software.amazon.awssdk:bom", version.ref = "aws-sdk" }
+aws-sdk-s3 = { module = "software.amazon.awssdk:s3" }
+aws-sdk-url-connection-client = { module = "software.amazon.awssdk:url-connection-client" }
+hikaricp = { module = "com.zaxxer:HikariCP", version.ref = "hikaricp" }
+testcontainers-postgresql = { module = "org.testcontainers:testcontainers-postgresql", version.ref = "testcontainers" }
 mockk = { module = "io.mockk:mockk", version.ref = "mockk" }
 testcontainers = { module = "org.testcontainers:testcontainers", version.ref = "testcontainers" }
 avro = { module = "org.apache.avro:avro", version.ref = "avro" }
