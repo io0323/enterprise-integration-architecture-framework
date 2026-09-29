@@ -35,3 +35,4 @@ CLAUDE.md §6 の「設計書と乖離する場合は ADR を書く」に従い�
 - 2026-09-26: Audit の日次アンカーの保存先を MinIO から SeaweedFS に読み替えた(ADR-0015)。Kafka の SSL / ACL の `secure` profile は P03 の範囲から外し、Issue #26 で扱う(ADR-0016 §8)。
 - 2026-09-26: 転送路の暗号化と基盤の管理 API の認証の縮退を表に追加した(PR #28 のレビュー。対応は #29)。
 - 2026-09-27: `SecretProvider` と、環境変数・Docker secrets(`NAME_FILE`)から読む `EnvSecretProvider` を `platform/security` に実装した。規則は ADR-0019 §6(P04a ③)。
+- 2026-09-29: Audit を `platform/audit` に実装した(P04a ④。ADR-0017)。表の「UPDATE / DELETE 権限を付けない」は、アプリ用のロール(`{name}_app`)に INSERT / SELECT だけを付け、加えてトリガーで UPDATE / DELETE / TRUNCATE を拒否する形にした。アンカーは SeaweedFS の Object Lock(COMPLIANCE)に、audit 専用の資格情報で保存する。トリガーを外せるロールによる改竄は防げず、ハッシュチェーンとアンカーとの照合(`make audit-verify`)で検出する。
