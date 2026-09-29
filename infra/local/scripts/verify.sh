@@ -50,10 +50,19 @@ verify_health() {
   services="$("${compose[@]}" config --services)"
   for svc in $services; do
     local state
-    state="$("${compose[@]}" ps -a --format '{{.State}}/{{.Health}}' "$svc" 2>/dev/null | head -1)"
-    if [[ "$state" == "running/healthy" ]]; then pass "$svc: $state"; else fail "$svc: ${state:-コンテナなし}"; fi
+    state="$("${compose[@]}" ps -a --format '{{.State}}/{{.Health}}/{{.ExitCode}}' "$svc" 2>/dev/null | head -1)"
+    if [[ " ${ONESHOT_SERVICES[*]} " == *" $svc "* ]]; then
+      # 初期化して終了するコンテナは、終了コード 0 で止まっていれば成功
+      if [[ "$state" == "exited//0" ]]; then pass "$svc: 初期化が完了 (exit 0)"; else fail "$svc: ${state:-コンテナなし}"; fi
+    elif [[ "$state" == running/healthy/* ]]; then
+      pass "$svc: running/healthy"
+    else
+      fail "$svc: ${state:-コンテナなし}"
+    fi
   done
 }
+# 初期化して終了するコンテナ(healthy ではなく終了コードで判定する)
+ONESHOT_SERVICES=(seaweedfs-init)
 
 # ------------------------------------------------------------------ core
 verify_core() {
@@ -110,6 +119,22 @@ print(d.get("iss"), ",".join(aud), " ".join(sorted(d.get("scope","").split())))'
     pass "PostgreSQL: order_service は inventory_service に接続できない"
   fi
   check "PostgreSQL: wal_level=logical" equals logical psql_super 'show wal_level'
+  # アプリ用のロール({name}_app。ADR-0017)。ロールの追加より前に作ったボリュームには無いため、make clean が必要
+  local db app_roles_ok=true
+  for db in order_service inventory_service payment_service shipping_service legacy_sim batch_etl; do
+    if ! equals 1 psql_super "select count(*) from pg_roles where rolname = '${db}_app' and not rolsuper and not rolcreaterole and not rolcreatedb"; then
+      fail "PostgreSQL: アプリ用のロール ${db}_app がない(ボリュームが古い場合は make clean → make up)"
+      app_roles_ok=false
+    fi
+  done
+  if $app_roles_ok; then pass "PostgreSQL: サービス別 DB のアプリ用のロール({name}_app)がある"; fi
+  check "PostgreSQL: order_service_app で order_service に接続できる" \
+    "${compose[@]}" exec -T -e PGPASSWORD="$ORDER_APP_DB_PASSWORD" postgres psql -h 127.0.0.1 -U order_service_app -d order_service -tAc 'select 1'
+  if "${compose[@]}" exec -T -e PGPASSWORD="$ORDER_APP_DB_PASSWORD" postgres psql -h 127.0.0.1 -U order_service_app -d inventory_service -tAc 'select 1' >/dev/null 2>&1; then
+    fail "PostgreSQL: order_service_app が inventory_service に接続できてしまう"
+  else
+    pass "PostgreSQL: order_service_app は inventory_service に接続できない"
+  fi
 
   # Kafka: 自動作成が無効で、明示的に作ったトピックで produce / consume できる
   local topic="eiaf.verify.probed.v1" kbin=/opt/kafka/bin
@@ -283,6 +308,24 @@ verify_s3() {
   done <<<"$output"
   grep -q -E '^(OK|NG) ' <<<"$output" || fail "S3: 検査スクリプトを実行できない ($(tail -1 <<<"$output"))"
   check "S3: ホストのポート 19333 で応答する" curl -fsS -o /dev/null http://localhost:19333/healthz
+  verify_audit_bucket
+}
+
+# 監査のアンカー用のバケットと、audit の資格情報の範囲(scripts/s3-audit.sh。ADR-0017)
+verify_audit_bucket() {
+  local output line
+  output="$(docker run --rm --network eiaf \
+    -e ADMIN_ACCESS_KEY="$S3_ACCESS_KEY" -e ADMIN_SECRET_KEY="$S3_SECRET_KEY" \
+    -e AUDIT_ACCESS_KEY="$AUDIT_S3_ACCESS_KEY" -e AUDIT_SECRET_KEY="$AUDIT_S3_SECRET_KEY" \
+    -e RUN_ID="$(date +%s)-$$" -e S3_ENDPOINT=http://seaweedfs:8333 \
+    -v "$here/scripts/s3-audit.sh:/s3-audit.sh:ro" --entrypoint bash "$AWS_CLI_IMAGE" /s3-audit.sh 2>&1 || true)"
+  while IFS= read -r line; do
+    case "$line" in
+      "OK "*) pass "S3 audit: ${line#OK }" ;;
+      "NG "*) fail "S3 audit: ${line#NG }" ;;
+    esac
+  done <<<"$output"
+  grep -q -E '^(OK|NG) ' <<<"$output" || fail "S3 audit: 検査スクリプトを実行できない ($(tail -1 <<<"$output"))"
 }
 
 # SFTP: 公開鍵認証で接続し、一時名で置いて正式名にリネーム(Framework 9)→ 取得 → 削除できる。パスワード認証は拒否する
