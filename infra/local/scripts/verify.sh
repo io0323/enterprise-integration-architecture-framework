@@ -51,24 +51,13 @@ verify_health() {
   for svc in $services; do
     local state
     state="$("${compose[@]}" ps -a --format '{{.State}}/{{.Health}}/{{.ExitCode}}' "$svc" 2>/dev/null | head -1)"
-    if [[ " ${ONESHOT_SERVICES[*]} " == *" $svc "* ]]; then
-      # up --wait はヘルスチェックのないコンテナを「起動中」で待ち終えるため、終了するまで待つ(最大 60 秒)
-      for ((i = 0; i < 30; i++)); do
-        [[ "$state" == running/* ]] || break
-        sleep 2
-        state="$("${compose[@]}" ps -a --format '{{.State}}/{{.Health}}/{{.ExitCode}}' "$svc" 2>/dev/null | head -1)"
-      done
-      # 初期化して終了するコンテナは、終了コード 0 で止まっていれば成功
-      if [[ "$state" == "exited//0" ]]; then pass "$svc: 初期化が完了 (exit 0)"; else fail "$svc: ${state:-コンテナなし}"; fi
-    elif [[ "$state" == running/healthy/* ]]; then
+    if [[ "$state" == running/healthy/* ]]; then
       pass "$svc: running/healthy"
     else
       fail "$svc: ${state:-コンテナなし}"
     fi
   done
 }
-# 初期化して終了するコンテナ(healthy ではなく終了コードで判定する)
-ONESHOT_SERVICES=(seaweedfs-init)
 
 # ------------------------------------------------------------------ core
 verify_core() {

@@ -195,7 +195,8 @@ services:
       <<: *healthcheck
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8333/healthz"]
 
-  # 監査のアンカー用のバケット(eiaf-audit。Object Lock)とバケットポリシーを作る(ADR-0017)。make up のたびに実行して終了する
+  # 監査のアンカー用のバケット(eiaf-audit。Object Lock)とバケットポリシーを作る(ADR-0017)。make up のたびに実行し、終えたら待機する。
+  # 完了はヘルスチェック(完了のファイル)で示す。終了させると、Compose v2.38 の up --wait が失敗として扱うため
   seaweedfs-init:
     image: ${AWS_CLI_IMAGE:?}
     profiles: [file, b2b]
@@ -212,6 +213,9 @@ services:
       - ./seaweedfs/audit-bucket-policy.json:/init/audit-bucket-policy.json:ro
     mem_limit: 256m
     restart: "no"
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "test", "-f", "/tmp/initialized"]
 
   # SFTP(file profile。社内システムとのファイル授受)。公開鍵認証のみ
   sftp:
