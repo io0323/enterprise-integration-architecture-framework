@@ -167,8 +167,31 @@ Circuit Breaker のしきい値(既定 50%)を下回る失敗率が長く続く�
   - 戻り値の型(`Result<AccessToken, TokenError>`)は変えない。`ResilienceError` は `TokenEndpointUnavailable` に写す(`timeout` / `deadline_exceeded` / `circuit_open` / `bulkhead_full`。`circuit_open` は Open が明けるまでの時間を `retryAfter` に持つ)。
   - IdP の 5xx(500 を含む)は、ADR-0019 §4 のとおり Retryable のままにする。トークンの取得は、依存先ごとに 500 を一時的な障害として扱う例(§3 と Consequences)にあたる。
   - Fallback は、既存の「期限前の取り直しに失敗したら、期限内のトークンを使い続ける」処理をそのまま使う(`Fallback` の型は使わない。キャッシュの状態と一体のため)。
-- **呼び出し元の締め切りの引き継ぎはしない。** `Resilience.execute` は `deadline` を引数で受け取るだけで、coroutine のコンテキストなどで呼び出し元の残り時間を引き継ぐ仕組みを持たない。入れ子の `Resilience`(API の処理の途中のトークンの取得など)は、それぞれ自分の締め切りで動く。仕組みは P05 で入れる(Issue #48)。
+- **呼び出し元の締め切りの引き継ぎ**は、② の時点では入れず、P05 で §12 として入れた(Issue #48)。
 - **platform のモジュール間の依存は、許可した一覧だけにする**(Konsist の `PlatformDependencyRules`。MODULE_DESIGN §2)。`platform/security` → `platform/reliability` を加える。
+
+### 12. 呼び出し元の締め切りを、入れ子の `Resilience` に引き継ぐ(P05。Issue #48)
+Framework 13.1 のタイムバジェットは、入口に配分した時間を、その内側のすべての呼び出しで分け合う。§1 の締め切りは `execute` の引数だけで受け取るため、入れ子の `Resilience`(API の処理の途中のトークンの取得など)は、入口の予算を超えて待ちえた。
+
+- **締め切りはコルーチンのコンテキストで運ぶ**(`CallDeadline`。`CoroutineContext.Element`)。KMP の commonMain で使え、呼び出しの引数を増やさずに、関数の境界を越えて届く。
+  - 入口(API のハンドラなど)は `withCallDeadline(budget) { ... }` で置く。すでに締め切りがあり、その残り時間が `budget` 以下なら、それを保つ(内側で延ばせない)。
+  - `CallDeadline` は期限を知らせるだけで、打ち切らない。打ち切るのは `Resilience`(や呼び出し側の `withTimeout`)。
+  - 期限は作った側の `TimeSource` の `TimeMark` で持つ。読む側の `Resilience` が別の `TimeSource`(テストの仮想時間など)を使っていても、残り時間は期限を作った側の時刻で測る。
+- **`Resilience` の締め切りは、自分の締め切り(`deadline` の引数か設定)と、呼び出し元の `CallDeadline` の残り時間の短い方にする。**
+  - どちらもなければ締め切りなし。延ばすことはできない。
+  - 呼び出し元の期限を過ぎていれば予算を 0 にし、§1 のとおり呼び出さずに `DeadlineExceeded` を返す(Circuit Breaker に数えない)。
+  - `DeadlineExceeded.deadline` は、この短い方の予算を表す。
+- **`Resilience` は、試行の block に、その試行の残り時間を `CallDeadline` で渡す。** 残り時間は、試行の Timeout(`min(attemptTimeout, 締め切りの残り時間)`)。
+  - これで、block の中の `Resilience` は、外側の試行が打ち切られる時刻を超えて待たない。
+  - 内側のリトライの待ちが外側の残り時間を超えるなら、待たずに見送る(`RetrySuppression.DEADLINE`)。外側に打ち切られてキャンセルされるのを待たずに、エラーを外側に返せる。
+- **数え方は §1・§3 を変えない。**
+  - 呼び出し元の締め切りで打ち切った試行も、自分の締め切りで打ち切った試行と同じく、Circuit Breaker とリトライバジェットの失敗に数える。
+  - 内側の `DeadlineExceeded`(Retryable)が外側の block の結果として返った場合も、外側の失敗に数える。block 全体が外側の試行の時間内に終わらなかったことを表すため。外側で数えたくない場合は、block の中で別のエラーに写す(§3 の `ResilienceRejection` と同じ扱い)。
+- **`ClientCredentialsTokenProvider` での扱い**(ADR-0019 §4):
+  - 取得の締め切りは、上の規則で呼び出し元の残り時間に縮む。
+  - 取得中の呼び出しを待つ時間(`Mutex`)も、呼び出し元の残り時間までにする。待ちきれなければ `deadline_exceeded` を返す。ロックを取れたかは Bulkhead と同じく `withTimeoutOrNull` の戻り値で判断しない(§5)。
+  - 呼び出し元の締め切りで打ち切った取得の失敗(`DeadlineExceeded.deadline` が設定の締め切りより短い)は、待っていた呼び出しに共有しない。その失敗は、取得した呼び出しの予算によるもので、待っていた呼び出しは自分の残り時間で取り直せるため。
+  - 設定の締め切りで打ち切った失敗と、そのほかの失敗は、これまでどおり共有する(IdP の障害中に「待ち数 × 締め切り」待たせない。ADR-0019 §4)。
 
 ## Alternatives Considered
 - **Resilience4j を使う / Arrow(arrow-resilience)を使う**: ADR-0004 で不採用(native / js で使えない。`Either` と kernel の `Result` が併存する)。
@@ -178,6 +201,9 @@ Circuit Breaker のしきい値(既定 50%)を下回る失敗率が長く続く�
 - **Open から Half-Open への遷移をタイマーで行う**: 呼び出しがなくても状態が変わりメトリクスは正確になるが、依存先ごとにタイマーのコルーチンとそのスコープの管理が要る。最初の呼び出しで遷移すれば足りる。不採用。
 - **壁時計(`Clock`)で測る**: §6 のとおり巻き戻りの影響を受ける。不採用。
 - **リトライバジェットを入れない(Circuit Breaker と maxAttempts の上限で足りるとする)**: 増幅は最大 3 倍に抑えられるが、しきい値を下回る失敗率が続く状況では 3 倍の負荷が続く。不採用。
+- **締め切りを `execute` の引数で明示的に渡し続ける(§12 を入れない)**: 呼び出しの途中の層(トークンの取得のように、呼び出し元が `Resilience` を持っていることを知らない部品)まで、すべての関数に残り時間の引数が要る。渡し忘れると、その先は入口の予算を超えて待つ。不採用。
+- **`CallDeadline` を `withTimeout` で打ち切る要素にする**: 締め切りを置いただけで、置いた範囲の処理(DB の更新の後の応答など)が途中でキャンセルされる。打ち切りの場所は `Resilience` の試行に限り、`CallDeadline` は知らせるだけにした。不採用。
+- **呼び出し元の締め切りで打ち切った試行を Circuit Breaker に数えない**: 予算の短い呼び出しが続いても、依存先が遮断されにくくなる。一方、ハングした依存先に対して、予算の短い呼び出しだけが続くと遮断されない(§1 の理由と同じ)。§1 の数え方を保った。不採用。
 - **時間あたりのリトライの割合で上限を設ける(Finagle の RetryBudget)**: 時間の窓の管理が要る。gRPC の方式は時間に依存せず、状態も整数 1 つで済む。不採用。
 
 ## Consequences(トレードオフ)
@@ -187,8 +213,9 @@ Circuit Breaker のしきい値(既定 50%)を下回る失敗率が長く続く�
 - Open の期間が過ぎても、次の呼び出しまで `state` は OPEN のまま。メトリクスの gauge は、呼び出しがない間は Open を示し続ける。
 - 並行性は `Mutex` で守るので、呼び出しごとにロックを 2 回(許可と記録)取る。依存先への呼び出し(ミリ秒単位)に比べて小さいとみなす。
 - ADR-0004 §5 の「`Clock` をインジェクション」は、経過時間については `TimeSource` と読み替える(ADR-0004 の改訂履歴に記録する)。
-- 呼び出し元の締め切りを引き継がないため、P05 までは、入れ子の `Resilience` が入口の予算を超えて待ちうる(Issue #48)。
+- 呼び出し元の締め切りを引き継ぐ(§12)ため、呼び出し元の予算が短いと、依存先が通常の応答時間で返せない試行も失敗に数える。予算が短い呼び出しが多い依存先では、Circuit Breaker が開きやすくなる。`minimumCalls` と `failureRateThreshold`(§4)で、予算の短い一部の呼び出しだけでは開かないようにしている。入口の予算は、依存先の通常の応答時間より十分長く配分する。
 - `ClientCredentialsConfig.timeout` をなくしたため、トークンの取得の Timeout を変えるときは、`Resilience` を作って `ClientCredentialsTokenProvider` に渡す。
 
 ## 改訂履歴
 - 2026-09-30: ② の決定を追記した(§3 の分類の置き場所、§7 のメトリクスの一覧と `retryBudgetTokens`・重複登録の検出、§11 の結線)。
+- 2026-09-30: §12(呼び出し元の締め切りの引き継ぎ。`CallDeadline`)を追記した(P05 ①。Issue #48)。§11 と Consequences の「引き継がない」を改めた。
