@@ -69,10 +69,17 @@ services/order/
     usecase/PlaceOrderService.kt, GetOrderService.kt
   adapters/src/main/kotlin/io/eia/order/adapters/             # package io.eia.order.adapters
     in/rest/OrderRoutes.kt, OrderDtoMapper.kt
-    out/persistence/ExposedOrderRepository.kt, ExposedOutbox.kt
+    out/persistence/ExposedOrderRepository.kt, ExposedTransactionRunner.kt, OrderSchema.kt(order と監査のマイグレーション),
+                    UuidV7OrderIdGenerator.kt, ExposedOutbox.kt(P06)
+  adapters/src/main/resources/db/order/                       # Flyway(所有者のロールで適用。アプリのロールには必要な権限だけを付ける)
   app/src/main/kotlin/io/eia/order/app/                       # package io.eia.order.app
     Main.kt, Modules.kt(Koin), Config.kt
 ```
+
+**永続化の方針**(全サービスで揃える):
+- Exposed はトランザクションの管理に使い、ロックの意味が重要な SQL(楽観的ロック、`ON CONFLICT` など)は PreparedStatement で直接書く(`platform/audit` と同じ書き方。ADR-0017)。
+- マイグレーションは DB の所有者のロール(`{service}`)で適用し、アプリはマイグレーションが権限を付けたロール(`{service}_app`。所有者の権限を持たない)で接続する。監査の表(`AuditSchema`)も同じ DB に適用する。
+- SQL の例外は SQLSTATE で Retryable / NonRetryable に分類し、ドライバのメッセージ(行の値を含みうる)はエラーに入れない。
 
 ## 3.1 Gradle 以外のディレクトリ
 | パス | 内容 | 命名 |
