@@ -24,17 +24,25 @@ P00 で `tools/architecture-test` に Konsist のアーキテクチャテスト�
 6. **shared の許可リストと DomainError 分類の排他**(P01 で追加):
    - `shared/kernel` の commonMain は `kotlin.*` と自身(`io.eia.shared.kernel.*`)だけを、`shared/canonical-model` の commonMain はそれに加えて `kotlinx.serialization.*` と `io.eia.shared.canonical.*` だけを import できる。`shared/resilience` の commonMain は、`kotlin.*`・`kotlinx.coroutines.*`(ADR-0021 §10)・kernel・自身だけを import できる。禁止リスト(Decision 3・ADR-0004 §2)は既知のフレームワークしか検出できないため、基盤モジュールでは許可リストでフレームワーク依存ゼロを担保する。
    - `DomainError.Retryable` と `DomainError.NonRetryable` の両方を、間接的な継承も含めて実装する型を禁止する(ADR-0011 §6)。継承関係はコードベース内の型の単純名で辿る。
+7. **services の domain と application は Canonical Model に依存しない**(P05 で追加):
+   - `services/*/domain` と `services/*/application` は、`io.eia.shared.canonical` を import も完全修飾名での参照もしない。テストのソースセットも対象にする(`canonicalModelOutsideDomainAndApplication`)。
+   - domain は、そのサービスの業務のルールを表す独自のモデルにする(例: `io.eia.order.domain.Order`)。Canonical Model(全社で共有する交換用のモデル。Framework 15.1)・契約の DTO との変換は adapters のマッパーで行う。
+   - 理由: domain と Canonical Model は、変わる理由と速さが違う。domain はサービスの業務のルール(状態遷移・楽観的ロックの版など)で変わり、Canonical Model は連携する全サービスの合意で、互換性の規則(ADR-0014)に縛られて変わる。domain が Canonical Model に依存すると、Canonical Model の変更がサービスの業務のルールに波及し、逆に業務のルールのための項目が Canonical Model に漏れる。
+   - application も対象にする。変換を adapters に集めるので、application は Canonical Model を使う理由がない。MODULE_DESIGN §2 の依存の図は、`application → canonical-model` から `adapters → canonical-model` に改めた。
 
 ## Alternatives Considered
 - Konsist の `assertArchitecture` を使う: レイヤにファイルが 1 つもないと失敗し、空モジュールの段階(P00)では使えない。サービス間依存と配置の検査も別途必要になる。import ベースの独自検査にした。
 - 依存方向を隣接レイヤに限定する(adapters → domain を禁止する): マッパーが domain を参照できず、CLAUDE.md §4 と矛盾する。不採用。
+- domain のモデルとして Canonical Model をそのまま使う(Decision 7 の代わり): 変換のコードは減るが、Canonical Model の変更(互換性の規則に縛られる)がサービスの業務のルールに波及し、状態遷移や版のような業務の項目を Canonical Model に足したくなる。不採用。
 - `kotlin.jvm.*` を全面的に禁止したまま、値オブジェクトに `@JvmInline` を使わない: JVM で boxing が発生し、CODING_STANDARDS と矛盾する。不採用。
 
 ## Consequences(トレードオフ)
 - 完全修飾名で書いた参照(import なし)による依存方向違反は検出できない。Gradle のモジュール依存(Decision 2)で大半を防ぐ。
 - `kotlin.Result` の検出はテキストに基づくため、稀に誤検知しうる。誤検知が出たら、`io.eia.shared.kernel.Result` を明示的に import すれば解消する。
 - 禁止 import のリストはライブラリを追加するたびに更新が必要(ADR-0004 と同じ)。
+- Decision 7 により、Canonical Model とサービスの domain の間の変換(マッパー)を、サービスごとに adapters に書く必要がある。
 
 ## 改訂履歴
 - 2026-09-25: Decision 6(shared の許可リスト、DomainError 分類の排他)を追加(P01)
 - 2026-09-30: Decision 6 に `shared/resilience` の許可リスト(`kotlinx.coroutines` を追加)を明記した(P04b。ADR-0021 §10)
+- 2026-09-30: Decision 7(services の domain と application は Canonical Model に依存しない)を追加した(P05 ③a)

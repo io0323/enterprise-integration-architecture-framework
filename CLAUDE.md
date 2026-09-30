@@ -65,7 +65,7 @@ docs/                   設計書・ロードマップ・標準・ADR・プロ�
 - 外部 I/O は必ず application の **Port(interface)** 経由。Adapter は Port を実装する。
 - ユースケースは 1 クラス 1 ユースケース(`XxxUseCase` / `operator fun invoke`)。
 - 例外は境界で `Result<T, DomainError>`(`io.eia.shared.kernel.Result`)に変換。domain 内で例外を業務制御に使わない。`kotlin.Result` は使用禁止(ADR-0004)。
-- DTO(契約モデル)と domain モデルを混同しない。変換は adapters のマッパーで行う。
+- DTO(契約モデル)と domain モデルを混同しない。変換は adapters のマッパーで行う。domain と application は Canonical Model(`shared/canonical-model`)にも依存せず、Canonical Model との変換も adapters で行う(ADR-0010 Decision 7。Konsist で検査)。
 
 ## 5. 連携実装の必須ルール(Framework 準拠。違反はレビューで却下)
 | 区分 | 必須事項 | 参照章 |
