@@ -44,6 +44,23 @@ internal class CodeBase(
             .filter { SOURCE_PATH.containsMatchIn(it.path) }
             .sortedBy { it.path }
 
+    /** platform 配下のモジュール名(ディレクトリ名)。 */
+    val platformModules: List<String> =
+        root
+            .resolve("platform")
+            .listFiles()
+            .orEmpty()
+            .filter { it.isDirectory }
+            .map { it.name }
+            .sorted()
+
+    /** platform のモジュール名 → `build.gradle.kts` の本文(ファイルがあるモジュールだけ)。 */
+    val platformBuildScripts: Map<String, String> =
+        platformModules
+            .associateWith { root.resolve("platform/$it/build.gradle.kts") }
+            .filterValues { it.isFile }
+            .mapValues { (_, file) -> file.readText() }
+
     fun filesUnder(prefix: String): List<SourceFile> = files.filter { it.path.startsWith(prefix) }
 
     companion object {
