@@ -23,6 +23,7 @@ include(
     ":shared:kernel",
     ":shared:resilience",
     ":shared:canonical-model",
+    ":platform:api",
     ":platform:audit",
     ":platform:observability",
     ":platform:reliability",
