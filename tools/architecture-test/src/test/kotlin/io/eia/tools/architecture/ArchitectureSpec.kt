@@ -65,6 +65,10 @@ class ArchitectureSpec :
             ArchitectureRules.nimbusOnlyInSecurity(codeBase).assertNone()
         }
 
+        test("services の domain と application は Canonical Model に依存しない(ADR-0010 Decision 7)") {
+            ArchitectureRules.canonicalModelOutsideDomainAndApplication(codeBase).assertNone()
+        }
+
         test("Retryable と NonRetryable の両方を実装する型がない") {
             ArchitectureRules.domainErrorKindIsExclusive(codeBase).assertNone()
         }

@@ -268,23 +268,44 @@ internal object ArchitectureRules {
         allowedPaths: List<Regex>,
         rule: String,
         allowed: String,
+    ): List<Violation> =
+        codeBase.files
+            .filter { file -> allowedPaths.none { it.containsMatchIn(file.path) } && !TEST_SOURCE_SET.containsMatchIn(file.path) }
+            .flatMap { file -> packageUses(file, packageName, rule, allowed) }
+
+    private const val CANONICAL_PACKAGE = "$BASE_PACKAGE.shared.canonical"
+    private val CANONICAL_FORBIDDEN_PATHS = Regex("""^services/[^/]+/(domain|application)/""")
+    private const val CANONICAL_RULE = "Canonical Model の配置"
+
+    /**
+     * ADR-0010 Decision 7: services の domain と application は、Canonical Model(`io.eia.shared.canonical`)に依存しない。
+     * domain はサービスの業務のルールを表す独自のモデルとし、Canonical Model・契約の DTO との変換は adapters で行う。
+     * テストのソースセットも含めて検査する(domain と application のテストで、Canonical Model を前提にしないため)。
+     */
+    fun canonicalModelOutsideDomainAndApplication(codeBase: CodeBase): List<Violation> =
+        codeBase.files
+            .filter { CANONICAL_FORBIDDEN_PATHS.containsMatchIn(it.path) }
+            .flatMap { file -> packageUses(file, CANONICAL_PACKAGE, CANONICAL_RULE, "変換は adapters で行う。ADR-0010 Decision 7") }
+
+    /** [file] が [packageName] を import または完全修飾名で参照していれば、その違反。 */
+    private fun packageUses(
+        file: SourceFile,
+        packageName: String,
+        rule: String,
+        allowed: String,
     ): List<Violation> {
         val qualifiedUse = Regex("""(?<![\w.])${Regex.escape(packageName)}\.""")
-        return codeBase.files
-            .filter { file -> allowedPaths.none { it.containsMatchIn(file.path) } && !TEST_SOURCE_SET.containsMatchIn(file.path) }
-            .flatMap { file ->
-                val imports =
-                    file.importNames
-                        .filter { it.isInPackage(packageName) }
-                        .map { Violation(rule, file.path, "import $it($allowed)") }
-                val qualified =
-                    if (qualifiedUse.containsMatchIn(file.code.replace(IMPORT_OR_PACKAGE_LINE, ""))) {
-                        listOf(Violation(rule, file.path, "完全修飾名で $packageName を参照しています($allowed)"))
-                    } else {
-                        emptyList()
-                    }
-                imports + qualified
+        val imports =
+            file.importNames
+                .filter { it.isInPackage(packageName) }
+                .map { Violation(rule, file.path, "import $it($allowed)") }
+        val qualified =
+            if (qualifiedUse.containsMatchIn(file.code.replace(IMPORT_OR_PACKAGE_LINE, ""))) {
+                listOf(Violation(rule, file.path, "完全修飾名で $packageName を参照しています($allowed)"))
+            } else {
+                emptyList()
             }
+        return imports + qualified
     }
 
     /**
