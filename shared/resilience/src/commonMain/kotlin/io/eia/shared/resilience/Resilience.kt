@@ -6,6 +6,7 @@ import io.eia.shared.kernel.RetryDecision
 import io.eia.shared.kernel.RetryPolicy
 import io.eia.shared.kernel.err
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.random.Random
 import kotlin.time.ComparableTimeMark
@@ -23,6 +24,8 @@ import kotlin.time.TimeSource
  * - Retry の待ち時間と回数は kernel の [io.eia.shared.kernel.RetryPolicy] で決める(Retry-After の優先を含む)。
  * - 締め切りまでの残り時間を超えて待つリトライはしない。試行の Timeout も残り時間までに縮める。
  *   Circuit Breaker が開いたら、待たずに返す。
+ * - 呼び出し元の締め切り([CallDeadline])があれば、自分の締め切りとの短い方を使う。[block] には試行の残り時間を
+ *   [CallDeadline] で渡すので、[block] の中の [Resilience](入れ子)もそれを超えて待たない(ADR-0021 §12)。
  * - 手元で断った呼び出し([ResilienceRejection])はリトライしない。
  * - タイムアウトは coroutines のタイムアウトで行い、呼び出し側のキャンセル(`CancellationException`)は捕まえずに伝える。
  * - [block] は例外ではなく `Result` で失敗を返す(境界の例外は `catching` で変換しておく)。[block] の例外はそのまま伝える。
@@ -55,7 +58,8 @@ public class Resilience(
      * [block] を呼ぶ。
      *
      * @param deadline この呼び出しの締め切り(タイムバジェット)。既定は [ResilienceConfig.deadline]。
-     *   入口から配分された残り時間を渡してよい。0 以下なら [block] を呼ばずに [DeadlineExceeded] を返す
+     *   呼び出し元の締め切り([CallDeadline])の残り時間の方が短ければ、そちらを使う(延ばすことはできない)。
+     *   実際の締め切りが 0 以下なら [block] を呼ばずに [DeadlineExceeded] を返す
      * @param retry この呼び出しの RetryPolicy。既定は [ResilienceConfig.retry]。冪等でない呼び出しは `null` を渡して
      *   リトライを止める(Circuit Breaker とリトライバジェットは、同じ依存先の状態を共有したまま使う)
      */
@@ -63,7 +67,7 @@ public class Resilience(
         deadline: Duration? = config.deadline,
         retry: RetryPolicy? = config.retry,
         block: suspend () -> Result<T, DomainError>,
-    ): Result<T, DomainError> = retrying(deadline?.let { Deadline(it, timeSource.markNow() + it) }, retry, block)
+    ): Result<T, DomainError> = retrying(effectiveDeadline(deadline), retry, block)
 
     /** [execute] の最終的なエラーが [fallback] の対象なら、代替動作の結果を返す。 */
     public suspend fun <T> execute(
@@ -76,6 +80,16 @@ public class Resilience(
         if (result !is Result.Err || !fallback.appliesTo(result.error)) return result
         listener.onFallback(name, result.error)
         return fallback.handler(result.error)
+    }
+
+    /**
+     * 自分の締め切り [own] と、呼び出し元の締め切り([CallDeadline])の残り時間の短い方。どちらもなければ `null`。
+     * 呼び出し元の期限を過ぎていれば 0 にする([DeadlineExceeded] の予算に負の値を入れない)。
+     */
+    private suspend fun effectiveDeadline(own: Duration?): Deadline? {
+        val inherited = CallDeadline.current()?.remaining()?.coerceAtLeast(Duration.ZERO)
+        val budget = if (own == null || (inherited != null && inherited < own)) inherited else own
+        return budget?.let { Deadline(it, timeSource.markNow() + it) }
     }
 
     @Suppress("ReturnCount") // リトライを見送る理由ごとに、その時点の結果を返す
@@ -111,6 +125,7 @@ public class Resilience(
      * 1 回の試行。締め切りがあれば、試行の Timeout と Bulkhead の待ち時間を残り時間までに縮める(ADR-0021 §1)。
      * 締め切りで打ち切った試行も、依存先が期限内に応答しなかった失敗として Circuit Breaker に数える
      * (数えないと、ハングした依存先に対して Circuit Breaker が開かない)。
+     * [block] には、この試行の Timeout を [CallDeadline] として渡す(入れ子の [Resilience] に引き継ぐ。ADR-0021 §12)。
      */
     private suspend fun <T> attemptOnce(
         deadline: Deadline?,
@@ -125,7 +140,9 @@ public class Resilience(
             } else {
                 AttemptTimedOut(name, config.attemptTimeout)
             }
-        val timed: suspend () -> Result<T, DomainError> = { withTimeoutOrNull(timeout) { block() } ?: timedOut(onTimeout) }
+        val timed: suspend () -> Result<T, DomainError> = {
+            withTimeoutOrNull(timeout) { withContext(CallDeadline.after(timeout, timeSource)) { block() } } ?: timedOut(onTimeout)
+        }
         val isolated: suspend () -> Result<T, DomainError> = { bulkhead?.execute(remaining, timed) ?: timed() }
         val result = circuitBreaker?.execute(isolated) ?: isolated()
         retryBudget?.record(Outcome.of(result))
@@ -141,7 +158,7 @@ public class Resilience(
         return err(error)
     }
 
-    /** 締め切り。[budget] は渡された予算、[at] は期限の時刻。 */
+    /** 締め切り。[budget] はこの呼び出しの予算(自分の締め切りと呼び出し元の残り時間の短い方)、[at] は期限の時刻。 */
     private class Deadline(
         val budget: Duration,
         private val at: ComparableTimeMark,
