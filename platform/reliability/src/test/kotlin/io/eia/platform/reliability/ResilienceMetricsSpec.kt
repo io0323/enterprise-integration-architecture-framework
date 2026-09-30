@@ -13,6 +13,7 @@ import io.eia.shared.resilience.Fallback
 import io.eia.shared.resilience.ResilienceConfig
 import io.eia.shared.resilience.RetryBudgetConfig
 import io.eia.shared.resilience.SlidingWindow
+import io.eia.shared.resilience.withCallDeadline
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.engine.coroutines.testScheduler
@@ -138,6 +139,21 @@ class ResilienceMetricsSpec :
                 mapOf(dependency("shipping", "kind" to "attempt") to 1L, dependency("shipping", "kind" to "deadline") to 1L)
             collected.points("eia.resilience.retries.suppressed") shouldBe mapOf(dependency("shipping", "reason" to "deadline") to 1L)
             collected.points("eia.resilience.fallbacks") shouldBe mapOf(dependency("shipping") to 1L)
+        }
+
+        test("呼び出し元の締め切りで打ち切った試行は kind=caller_deadline で数える(ADR-0021 §12)") {
+            val config = ResilienceConfig(attemptTimeout = 1.seconds, retry = null, circuitBreaker = null)
+            val resilience = metrics.resilience("billing", config, testScheduler.timeSource)
+
+            withCallDeadline(200.milliseconds, testScheduler.timeSource) {
+                resilience.execute {
+                    delay(5.seconds)
+                    ok("late")
+                }
+            }
+
+            reader.collectAllMetrics().points("eia.resilience.timeouts") shouldBe
+                mapOf(dependency("billing", "kind" to "caller_deadline") to 1L)
         }
 
         test("Bulkhead の拒否") {
