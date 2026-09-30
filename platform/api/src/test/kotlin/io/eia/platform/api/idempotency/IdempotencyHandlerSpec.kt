@@ -60,9 +60,9 @@ private class Fixture(
 ) {
     val clock = MutableClock()
     val transaction = FakeTransaction()
-    val store = FakeIdempotencyStore(transaction)
+    val store = FakeIdempotencyStore(transaction, clock)
     val service = OrderService(transaction)
-    val handler = IdempotencyHandler(store, config, clock)
+    val handler = IdempotencyHandler(store, config)
 
     suspend fun execute(
         request: IdempotencyRequest = request(),
@@ -123,10 +123,10 @@ class IdempotencyHandlerSpec :
                 f.execute()
                 f.clock.advance(24.hours - 1.seconds)
                 f.execute().shouldBeInstanceOf<IdempotencyOutcome.Replayed>()
-                f.store.purgeExpired(f.clock.now()) shouldBe 0
+                f.store.purgeExpired(60.seconds) shouldBe 0
 
                 f.clock.advance(1.seconds)
-                f.store.purgeExpired(f.clock.now()) shouldBe 1
+                f.store.purgeExpired(60.seconds) shouldBe 1
                 f.execute().shouldBeInstanceOf<IdempotencyOutcome.Processed>()
                 f.service.calls shouldBe 2
             }
@@ -156,7 +156,7 @@ class IdempotencyHandlerSpec :
 
             test("処理中のままリースが切れたら(プロセスが落ちた場合など)、同じ要求で引き継いで処理する") {
                 val f = Fixture()
-                f.store.claim(request(), f.clock.now(), 60.seconds) // 落ちたプロセスが残した処理中の記録
+                f.store.claim(request(), 60.seconds) // 落ちたプロセスが残した処理中の記録
                 f.execute() shouldBe IdempotencyOutcome.InProgress(60.seconds)
 
                 f.clock.advance(60.seconds)
@@ -166,7 +166,7 @@ class IdempotencyHandlerSpec :
 
             test("リースが切れても、指紋の違う要求は引き継がない") {
                 val f = Fixture()
-                f.store.claim(request(), f.clock.now(), 60.seconds)
+                f.store.claim(request(), 60.seconds)
                 f.clock.advance(61.seconds)
                 f.execute(request("""{"sku":"B","quantity":1}""")) shouldBe IdempotencyOutcome.KeyReused
                 f.service.calls shouldBe 0
