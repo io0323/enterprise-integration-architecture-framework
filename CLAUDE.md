@@ -93,6 +93,7 @@ docs/                   設計書・ロードマップ・標準・ADR・プロ�
    - ブランチは `git switch -c <name> --no-track origin/main` で作る(upstream を main にしない)。
    - push は `git push -u origin <branch>:<branch>` と送り先を明示する。
    - **CI が成功していない PR はマージしない**。必須チェックは `build` だけなので、実行されたほかのジョブ(integration・macos・contract-check・infra)が成功していることは運用で確かめる(ADR-0020 §3)。
+   - CI の失敗したジョブを再実行してよいのは、原因が特定できていて、PR の差分と無関係な場合だけ。再実行したときは PR 本文に理由を書く。同じ原因で 2 回失敗したら Issue で直す。
 4. アーキテクチャ上の決定は `docs/adr/NNNN-*.md` に ADR として残す(`/adr` コマンド)。
 5. 完了前に必ず以下を実行し、全て成功させる:
    - `./gradlew build`(ktlint・detekt・テスト・Konsist 含む)
