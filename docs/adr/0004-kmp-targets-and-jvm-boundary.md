@@ -73,3 +73,4 @@ ADR-0001 で domain / application / shared を KMP(commonMain)とした。一方
 - 2026-09-26: §5 の「traceparent と Correlation ID の生成・解析」のうち、Correlation ID は P01 で `shared/kernel`(`CorrelationId`)に実装済みのため、kernel に置いたままとする。`shared/resilience` には traceparent(`io.eia.shared.resilience.trace`)を置く(P04a)。resilience は kernel に依存するため、SDK からも両方を使える。
 - 2026-09-27: §5 に、`TraceParent.generate()` が random フラグを立てることを追記した(P04a ②。PR #30 のレビューの積み残し)。
 - 2026-09-27: §4 の OTel SDK の配置を Konsist(`otelSdkOnlyInAllowedModules`)で検査するようにした(P04a ②。計装方式は ADR-0018)。
+- 2026-09-30: §5 の「`Clock` と `Random` をインジェクションする」のうち、経過時間(締め切り・Circuit Breaker の Open の期間)は、壁時計の `Clock` ではなく単調な `TimeSource` を注入する(P04b。理由は ADR-0021 §6)。業務の時刻には引き続き `Clock` を使う。
