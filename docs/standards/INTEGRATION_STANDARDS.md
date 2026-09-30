@@ -23,6 +23,11 @@
 | Idempotency-Key | POST 必須 | — | 24h 保持 |
 | ce_id, ce_source, ce_type, ce_time, ce_specversion | — | ○ | CloudEvents binary mode |
 
+### Idempotency-Key の応答(ADR-0022 §3)
+- 部品は `platform/api` の `respondIdempotently`(判定は `IdempotencyHandler`、保存先は `IdempotencyStore` の Port)。キーの範囲はクライアント(`azp`)ごと。
+- 同じキーの再送: 内容(指紋 = メソッド・パス・正規化した本文)が同じなら保存した応答を返し `Idempotent-Replayed: true` を付ける。違えば 422。処理中なら 409 と `Retry-After`。キーがない・不正なら 400。
+- 5xx・429・408 は保存せず、業務の更新も取り消す(同じキーで再試行できる)。これが成り立つのは、副作用がすべて同じトランザクションの中にある場合だけ。**イベントは Outbox(ADR-0007)を通して発行する。**
+
 ### File manifest(`contracts/files/manifest.v1.schema.json`)
 必須項目: `file`, `recordCount`, `sha256`, `schemaVersion`, `createdAt`(UTC), `traceparent`, `correlationId`。
 
