@@ -294,6 +294,9 @@ class CircuitBreakerSpec :
                 breaker.state shouldBe CircuitState.CLOSED
             }
 
+            // このテストはキャンセル時の返却(finally の NonCancellable)を保証していない。競合を再現できないため。
+            // Mutex に競合がなければ、キャンセル後の lock も速い経路で取れるので、NonCancellable を外してもこのテストは通る。
+            // 確かめているのは、キャンセルで終わった試行を数えずに枠を返す(IGNORED)ことだけ。
             test("Half-Open の試行がキャンセルされたら、枠を返す") {
                 val breaker = testScheduler.breaker(RecordingListener())
                 breaker.fail(4)
