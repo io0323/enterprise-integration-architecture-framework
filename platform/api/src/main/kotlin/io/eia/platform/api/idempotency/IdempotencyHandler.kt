@@ -3,7 +3,6 @@ package io.eia.platform.api.idempotency
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
-import kotlin.time.Clock
 import kotlin.time.Duration
 
 /**
@@ -47,18 +46,20 @@ public sealed interface IdempotencyOutcome {
  * 4. 例外・キャンセルでは、トランザクションを取り消し、処理中の記録を消して伝える。
  * 5. 保存のときにリースを失っていた(期限が切れて引き継がれた)ら、トランザクションを取り消し、改めて記録を見て返す
  *    (引き継いだ側が完了していれば、その応答を返す)。
+ * 6. **指紋が違えば、状態(処理中・完了)やリースの有効・期限切れに関係なく 422**([IdempotencyOutcome.KeyReused])。
+ *
+ * リースと保持期限の時刻は保存先が決める([IdempotencyStore])。このクラスはアプリの時計を使わない。
  */
 public class IdempotencyHandler(
     private val store: IdempotencyStore,
     private val config: IdempotencyConfig = IdempotencyConfig(),
-    private val clock: Clock = Clock.System,
 ) {
     public suspend fun execute(
         request: IdempotencyRequest,
         transaction: TransactionBoundary,
         process: suspend () -> HttpSnapshot,
     ): IdempotencyOutcome =
-        when (val claim = store.claim(request, clock.now(), config.lease)) {
+        when (val claim = store.claim(request, config.lease)) {
             is ClaimResult.Acquired -> processWith(claim.lease, request, transaction, process)
             else -> existing(claim, request)
         }
@@ -74,7 +75,7 @@ public class IdempotencyHandler(
 
             is ClaimResult.InProgress -> {
                 if (claim.fingerprint == request.fingerprint) {
-                    IdempotencyOutcome.InProgress((claim.leaseExpiresAt - clock.now()).coerceAtLeast(Duration.ZERO))
+                    IdempotencyOutcome.InProgress(claim.leaseRemaining.coerceAtLeast(Duration.ZERO))
                 } else {
                     IdempotencyOutcome.KeyReused
                 }
@@ -115,13 +116,13 @@ public class IdempotencyHandler(
         response: HttpSnapshot,
     ): HttpSnapshot {
         if (!IdempotencyConfig.isStorable(response.status)) throw NotStored(response)
-        if (!store.complete(lease, store(response), clock.now() + config.retention)) throw LeaseLost()
+        if (!store.complete(lease, store(response), config.retention)) throw LeaseLost()
         return response
     }
 
     /** リースを失った後に、記録を見て返す。引き継いだ側が完了していれば、その応答(または指紋の違い)を返す。 */
     private suspend fun afterLeaseLost(request: IdempotencyRequest): IdempotencyOutcome =
-        when (val claim = store.claim(request, clock.now(), config.lease)) {
+        when (val claim = store.claim(request, config.lease)) {
             is ClaimResult.Acquired -> {
                 release(claim.lease)
                 IdempotencyOutcome.InProgress(retryAfter = null)

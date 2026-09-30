@@ -51,9 +51,13 @@ internal class FakeTransaction : TransactionBoundary {
     }
 }
 
-/** メモリ上の保存先。[IdempotencyStore] の約束どおりに振る舞い、[complete] は [transaction] に参加する。 */
+/**
+ * メモリ上の保存先。[IdempotencyStore] の約束どおりに振る舞い、[complete] は [transaction] に参加する。
+ * [clock] は保存先の時刻(PostgreSQL の実装では DB の時刻)の代わり。
+ */
 internal class FakeIdempotencyStore(
     private val transaction: FakeTransaction,
+    private val clock: MutableClock = MutableClock(),
 ) : IdempotencyStore {
     private sealed interface Row {
         val fingerprint: RequestFingerprint
@@ -81,17 +85,17 @@ internal class FakeIdempotencyStore(
 
     override suspend fun claim(
         request: IdempotencyRequest,
-        now: Instant,
         lease: Duration,
     ): ClaimResult =
         mutex.withLock {
+            val now = clock.now()
             val row = rows[request.scope]
             when {
                 row == null || (row is Row.Completed && now >= row.expiresAt) -> acquire(request, now, lease)
                 row is Row.Completed -> ClaimResult.Completed(row.fingerprint, row.response)
-                row is Row.InProgress && now < row.leaseExpiresAt -> ClaimResult.InProgress(row.fingerprint, row.leaseExpiresAt)
+                row is Row.InProgress && now < row.leaseExpiresAt -> ClaimResult.InProgress(row.fingerprint, row.leaseExpiresAt - now)
                 row.fingerprint == request.fingerprint -> acquire(request, now, lease)
-                else -> ClaimResult.InProgress(row.fingerprint, (row as Row.InProgress).leaseExpiresAt)
+                else -> ClaimResult.InProgress(row.fingerprint, Duration.ZERO)
             }
         }
 
@@ -102,17 +106,18 @@ internal class FakeIdempotencyStore(
     ): ClaimResult.Acquired {
         val token = "token-${++tokens}"
         rows[request.scope] = Row.InProgress(request.fingerprint, token, now + lease)
-        return ClaimResult.Acquired(Lease(request.scope, token, now + lease))
+        return ClaimResult.Acquired(Lease(request.scope, token))
     }
 
     override suspend fun complete(
         lease: Lease,
         response: StoredResponse,
-        expiresAt: Instant,
+        retention: Duration,
     ): Boolean =
         mutex.withLock {
             val row = rows[lease.scope] as? Row.InProgress
             if (row == null || row.token != lease.token) return@withLock false
+            val expiresAt = clock.now() + retention
             transaction.write { rows[lease.scope] = Row.Completed(row.fingerprint, response, expiresAt) }
             true
         }
@@ -124,9 +129,17 @@ internal class FakeIdempotencyStore(
         }
     }
 
-    override suspend fun purgeExpired(now: Instant): Int =
+    override suspend fun purgeExpired(inProgressGrace: Duration): Int =
         mutex.withLock {
-            val expired = rows.filterValues { it is Row.Completed && now >= it.expiresAt }.keys
+            val now = clock.now()
+            val expired =
+                rows
+                    .filterValues {
+                        when (it) {
+                            is Row.Completed -> now >= it.expiresAt
+                            is Row.InProgress -> now >= it.leaseExpiresAt + inProgressGrace
+                        }
+                    }.keys
             expired.forEach(rows::remove)
             expired.size
         }
