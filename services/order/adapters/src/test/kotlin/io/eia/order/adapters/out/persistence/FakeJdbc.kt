@@ -22,8 +22,8 @@ internal class FakeJdbc {
 
     val executed = mutableListOf<Executed>()
 
-    /** SQL(の先頭)ごとの、SELECT が返す行。 */
-    var rows: (String) -> List<Map<String, Any?>> = { emptyList() }
+    /** SQL(の先頭)とパラメータごとの、SELECT(と RETURNING)が返す行。 */
+    var rows: (String, Map<Int, Any?>) -> List<Map<String, Any?>> = { _, _ -> emptyList() }
 
     /** UPDATE / INSERT の更新件数。 */
     var updated: (String) -> Int = { 1 }
@@ -50,6 +50,7 @@ internal class FakeJdbc {
             every { setLong(any(), any()) } answers { params[firstArg()] = secondArg<Long>() }
             every { setInt(any(), any()) } answers { params[firstArg()] = secondArg<Int>() }
             every { setTimestamp(any(), any()) } answers { params[firstArg()] = secondArg<Timestamp>() }
+            every { setBytes(any(), any()) } answers { params[firstArg()] = secondArg<ByteArray>() }
             every { addBatch() } answers { batches += params.toMap() }
             every { executeBatch() } answers {
                 fail()
@@ -64,7 +65,7 @@ internal class FakeJdbc {
             every { executeQuery() } answers {
                 fail()
                 executed += Executed(sql, params.toMap())
-                resultSet(rows(sql))
+                resultSet(rows(sql, params.toMap()))
             }
         }
     }
@@ -77,6 +78,7 @@ internal class FakeJdbc {
             every { getLong(any<String>()) } answers { (rows[index][firstArg()] as Number).toLong() }
             every { getInt(any<String>()) } answers { (rows[index][firstArg()] as Number).toInt() }
             every { getTimestamp(any<String>()) } answers { rows[index][firstArg()] as Timestamp }
+            every { getBytes(any<String>()) } answers { rows[index][firstArg()] as ByteArray }
         }
     }
 }

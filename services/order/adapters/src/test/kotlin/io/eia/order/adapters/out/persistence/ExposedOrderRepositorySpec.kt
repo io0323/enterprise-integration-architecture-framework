@@ -98,7 +98,7 @@ private fun FakeJdbc.returning(
     lines: List<Map<String, Any?>> = lineRows(),
     exists: Boolean = order != null,
 ) {
-    rows = { sql ->
+    rows = { sql, _ ->
         when {
             sql.startsWith("SELECT id") -> listOfNotNull(order)
             sql.startsWith("SELECT line_number") -> lines
