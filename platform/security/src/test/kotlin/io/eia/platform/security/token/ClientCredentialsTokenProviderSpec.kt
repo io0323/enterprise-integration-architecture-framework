@@ -21,6 +21,7 @@ import io.eia.shared.resilience.ResilienceConfig
 import io.eia.shared.resilience.ResilienceListener
 import io.eia.shared.resilience.RetrySuppression
 import io.eia.shared.resilience.SlidingWindow
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.shouldBe
@@ -360,6 +361,15 @@ class ClientCredentialsTokenProviderSpec :
                 provider(endpoint).token().error() shouldBe TokenEndpointUnavailable("connection")
             }
 
+            test("接続の失敗でない例外(プログラムの誤り)は捕まえずに伝え、Circuit Breaker に数えない") {
+                val endpoint = FakeTokenEndpoint({ error("bug") })
+                val resilience = retrying(circuitBreaker = CircuitBreakerConfig(window = SlidingWindow.Count(1), minimumCalls = 1))
+
+                shouldThrow<IllegalStateException> { provider(endpoint, resilience = resilience).token() }
+                endpoint.requests.size shouldBe 1
+                resilience.circuitBreaker?.state shouldBe CircuitState.CLOSED
+            }
+
             test("期限前の取り直しに失敗したら、期限内のトークンを返し、refreshRetryInterval(5 秒)の間は取り直さない") {
                 val endpoint =
                     FakeTokenEndpoint(
@@ -423,6 +433,10 @@ class ClientCredentialsTokenProviderSpec :
 
                 provider(FakeTokenEndpoint(FakeTokenEndpoint.status(HttpStatusCode.InternalServerError))).token().error() shouldBe
                     TokenEndpointUnavailable("server_error", 500)
+                // 503 以外の 5xx の Retry-After は使わない(INTEGRATION_STANDARDS §3)
+                val badGateway =
+                    FakeTokenEndpoint(FakeTokenEndpoint.status(HttpStatusCode.BadGateway, headers = mapOf("Retry-After" to "3")))
+                provider(badGateway).token().error() shouldBe TokenEndpointUnavailable("server_error", 502)
                 provider(FakeTokenEndpoint(FakeTokenEndpoint.status(HttpStatusCode.RequestTimeout))).token().error() shouldBe
                     TokenEndpointUnavailable("request_timeout", 408)
             }

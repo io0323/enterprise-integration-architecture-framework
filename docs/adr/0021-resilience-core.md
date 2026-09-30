@@ -129,6 +129,7 @@ HTTP の 500 は、INTEGRATION_STANDARDS §3 でリトライの対象外(NonRetr
 | `eia.resilience.fallbacks` | counter | なし |
 
 - 属性は依存先の名前と、上の決まった値だけにする(カーディナリティ対策)。エラーのメッセージ・URL・ステータスは入れない。依存先の名前には、依存先ごとに決まった値を使う。
+- `state` / `from` / `to` / `reason` / `kind` は名前空間を付けない。メトリクスの名前(`eia.resilience.*`)の中でだけ意味を持つ属性で、既存の `eia.security.jwt.rejections` の `reason` と揃える。ほかのメトリクスと共有する依存先の名前だけ、`eia.dependency.name` と名前空間を付ける。
 - gauge は、`ResilienceMetrics.register` で登録した `Resilience` の状態を、収集のたびに読む。リトライバジェットの残高を読むため、`Resilience` に読み取り専用の `retryBudgetTokens` を公開する(ロックを取らずに読む最新の値)。
 - **同じ名前の `Resilience` の 2 回目の登録は例外にする。** 依存先ごとに 1 つを使い回す約束を破って、呼び出しごとに作っている誤りを見つけるため。呼び出しごとに作ると、Circuit Breaker とリトライバジェットの状態が捨てられ、障害中も遮断されない。
 
@@ -162,6 +163,7 @@ Circuit Breaker のしきい値(既定 50%)を下回る失敗率が長く続く�
   - 構築時に受け取った(または既定で作った)**1 つの `Resilience` を、すべての取得で使う。** 既定は名前 `oauth-token-endpoint`、試行 5 秒・締め切り 10 秒、Retry・リトライバジェット・Circuit Breaker は既定値。
   - 1 回の取得のタイムアウトは `Resilience` の `attemptTimeout` で行う(`ClientCredentialsConfig.timeout` はなくした。Timeout を二重にしないため)。
   - Secret の取得は `Resilience` の外で、取得ごとに 1 回行う。Secret の失敗を IdP の失敗として Circuit Breaker に数えないため。
+  - 接続の失敗として扱う例外は `HttpCallClassifier` と同じ(`IOException`・名前解決の失敗・タイムアウト)。そのほかの例外は捕まえずに伝える(§3)。
   - 戻り値の型(`Result<AccessToken, TokenError>`)は変えない。`ResilienceError` は `TokenEndpointUnavailable` に写す(`timeout` / `deadline_exceeded` / `circuit_open` / `bulkhead_full`。`circuit_open` は Open が明けるまでの時間を `retryAfter` に持つ)。
   - IdP の 5xx(500 を含む)は、ADR-0019 §4 のとおり Retryable のままにする。トークンの取得は、依存先ごとに 500 を一時的な障害として扱う例(§3 と Consequences)にあたる。
   - Fallback は、既存の「期限前の取り直しに失敗したら、期限内のトークンを使い続ける」処理をそのまま使う(`Fallback` の型は使わない。キャッシュの状態と一体のため)。

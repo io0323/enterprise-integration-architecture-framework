@@ -14,6 +14,8 @@ internal data class PlatformDependency(
  * 依存は次の 2 つから集める。どちらも本番の依存だけを見る(テストのソースセットと `testImplementation` などは除く)。
  * - テスト以外のソースセットの import と、完全修飾名での参照(`io.eia.platform.<module>`)
  * - `platform/<module>/build.gradle.kts` の `api` / `implementation` / `compileOnly` / `runtimeOnly` の `project(":platform:<module>")`
+ *   (1 行で書いた宣言だけを見る。型安全アクセサ `projects.platform.x` はこのリポジトリでは使わない前提。
+ *   見逃した宣言も、コードで使えば import の検査で見つかる)
  *
  * platform/test-support は対象外にする(テストのソースセットからだけ参照する規則は [ArchitectureRules.testSupportOnlyFromTests])。
  */

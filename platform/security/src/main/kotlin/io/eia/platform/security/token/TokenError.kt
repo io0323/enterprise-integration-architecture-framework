@@ -32,7 +32,7 @@ public sealed interface TokenError {
  *
  * @param reason `timeout` / `connection` / `rate_limited` / `server_error` / `request_timeout`、
  *   回復性の部品が返したもの(`deadline_exceeded` / `circuit_open` / `bulkhead_full`。ADR-0021 §2)
- * @param retryAfter 429 / 503 の `Retry-After`(秒数または HTTP-date)。`circuit_open` では Open が明けるまでの残り時間。なければ null
+ * @param retryAfter 429 / 503 の `Retry-After`(秒数または HTTP-date。ほかの 5xx では使わない)。`circuit_open` では Open が明けるまでの残り時間。なければ null
  */
 public data class TokenEndpointUnavailable(
     public val reason: String,
