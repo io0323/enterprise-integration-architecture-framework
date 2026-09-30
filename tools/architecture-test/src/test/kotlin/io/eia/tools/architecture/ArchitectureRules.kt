@@ -186,7 +186,8 @@ internal object ArchitectureRules {
             "shared/kernel/" to listOf("kotlin", "$BASE_PACKAGE.shared.kernel"),
             "shared/canonical-model/" to
                 listOf("kotlin", "kotlinx.serialization", "$BASE_PACKAGE.shared.kernel", "$BASE_PACKAGE.shared.canonical"),
-            "shared/resilience/" to listOf("kotlin", "$BASE_PACKAGE.shared.kernel", "$BASE_PACKAGE.shared.resilience"),
+            "shared/resilience/" to
+                listOf("kotlin", "kotlinx.coroutines", "$BASE_PACKAGE.shared.kernel", "$BASE_PACKAGE.shared.resilience"),
         )
 
     /** shared の基盤モジュール(kernel / canonical-model / resilience)の commonMain は [SHARED_ALLOWED_IMPORTS] 以外を import しない。 */

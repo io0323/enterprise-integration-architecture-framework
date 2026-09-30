@@ -22,7 +22,7 @@ P00 で `tools/architecture-test` に Konsist のアーキテクチャテスト�
    コメントと文字列リテラルは検査の対象外とする。detekt(`ForbiddenImport`)も同時に使う。`ForbiddenMethodCall` は型解決付きのタスク(`detektJvmMain` など)でのみ有効なので、補助として扱う。
 5. 違反サンプル(`src/test/resources/fixtures/violations`)でルールが失敗すること、準拠サンプル(`fixtures/compliant`)で成功することを、ルールごとにテストする。
 6. **shared の許可リストと DomainError 分類の排他**(P01 で追加):
-   - `shared/kernel` の commonMain は `kotlin.*` と自身(`io.eia.shared.kernel.*`)だけを、`shared/canonical-model` の commonMain はそれに加えて `kotlinx.serialization.*` と `io.eia.shared.canonical.*` だけを import できる。禁止リスト(Decision 3・ADR-0004 §2)は既知のフレームワークしか検出できないため、基盤モジュールでは許可リストでフレームワーク依存ゼロを担保する。
+   - `shared/kernel` の commonMain は `kotlin.*` と自身(`io.eia.shared.kernel.*`)だけを、`shared/canonical-model` の commonMain はそれに加えて `kotlinx.serialization.*` と `io.eia.shared.canonical.*` だけを import できる。`shared/resilience` の commonMain は、`kotlin.*`・`kotlinx.coroutines.*`(ADR-0021 §10)・kernel・自身だけを import できる。禁止リスト(Decision 3・ADR-0004 §2)は既知のフレームワークしか検出できないため、基盤モジュールでは許可リストでフレームワーク依存ゼロを担保する。
    - `DomainError.Retryable` と `DomainError.NonRetryable` の両方を、間接的な継承も含めて実装する型を禁止する(ADR-0011 §6)。継承関係はコードベース内の型の単純名で辿る。
 
 ## Alternatives Considered
@@ -37,3 +37,4 @@ P00 で `tools/architecture-test` に Konsist のアーキテクチャテスト�
 
 ## 改訂履歴
 - 2026-09-25: Decision 6(shared の許可リスト、DomainError 分類の排他)を追加(P01)
+- 2026-09-30: Decision 6 に `shared/resilience` の許可リスト(`kotlinx.coroutines` を追加)を明記した(P04b。ADR-0021 §10)

@@ -69,7 +69,7 @@
 - **DoD**: 各部品に単体テストと Testcontainers 統合テストがある。改竄したレコードをハッシュチェーンの検証が検出する。不正な iss / aud / exp の JWT を拒否する。
 
 ## P04b Platform: Resilience
-- `shared/resilience`(KMP): Timeout / Retry / Circuit Breaker / Bulkhead / Fallback(coroutines ベース。kernel の RetryPolicy を利用し、Clock と Random をインジェクション)(ADR-0004)
+- `shared/resilience`(KMP): Timeout / Retry / Circuit Breaker / Bulkhead / Fallback(coroutines ベース。kernel の RetryPolicy を利用し、時間の源(単調な TimeSource)と Random をインジェクション)(ADR-0004・ADR-0021)
 - `platform/reliability`(JVM): Ktor Client への結線、メトリクス(OTel)出力
 - **DoD**: `shared/resilience` の commonTest が jvm / js / linuxX64 で成功する。Toxiproxy で Circuit Breaker の Closed → Open → Half-Open → Closed の遷移を統合テストで検証する。
 
