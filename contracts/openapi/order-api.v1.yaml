@@ -5,7 +5,8 @@ info:
   summary: 受注 API(INT-SALES-001)
   description: |
     注文の登録と参照。Gateway 公開パスは `/sales/v1/...`、サービス内部パスは `/v1/...`(ADR-0005)。
-    エラーは RFC 9457 Problem Details(`application/problem+json`)で返す。
+    エラーは RFC 9457 Problem Details(`application/problem+json`)で返す。`type` の一覧は INTEGRATION_STANDARDS §6(ADR-0022 §2)。
+    金額はすべて税抜(ADR-0011 §4)。税は請求(billing)で計算する。
     Rate Limit は Client ID 単位の Token Bucket(internal: 1000 rps)。超過時は `429` と `Retry-After` を返す(Framework 5.6)。
   contact:
     name: team-order
@@ -22,7 +23,12 @@ paths:
       tags: [orders]
       operationId: placeOrder
       summary: 注文を登録する
-      description: 同じ `Idempotency-Key` での再送には、最初の応答と同じ内容を返す(24 時間保持。Framework 5.4)。
+      description: |
+        同じ `Idempotency-Key` での再送には、最初の応答と同じ状態コード・ヘッダ(`Location` など)・本文を返し、
+        `Idempotent-Replayed: true` を付ける(24 時間保持。Framework 5.4・ADR-0022 §3)。キーの範囲はクライアントごと。
+        - 同じキーで内容(メソッド・パス・本文)の違う要求は 422(`idempotency-key-reused`)。
+        - 同じキーの要求を処理中なら 409(`idempotency-request-in-progress`。`Retry-After` 付き)。
+        - 5xx・429 は保存しない。同じキーで再試行できる。
       security:
         - oauth2: [sales.order:write]
       parameters:
@@ -40,9 +46,13 @@ paths:
           description: 登録した
           headers:
             Location:
-              description: 登録した注文の URL
+              description: |
+                登録した注文の URL。相対参照 `orders/{orderId}` で、リクエストの URL を基準に解決する
+                (Gateway 経由なら `/sales/v1/orders/{orderId}`、サービスの内部なら `/v1/orders/{orderId}`。ADR-0005)。
               schema:
                 type: string
+            Idempotent-Replayed:
+              $ref: "#/components/headers/IdempotentReplayed"
             X-Correlation-Id:
               $ref: "#/components/headers/CorrelationId"
           content:
@@ -142,6 +152,11 @@ components:
       description: 業務トランザクション ID
       schema:
         type: string
+    IdempotentReplayed:
+      description: 同じ `Idempotency-Key` の再送に、保存した応答を返したときに `true`(ADR-0022 §3)。初回の応答には付けない。
+      schema:
+        type: string
+        enum: ["true"]
     RetryAfter:
       description: 再試行までの秒数
       schema:
@@ -149,7 +164,11 @@ components:
         minimum: 0
   responses:
     BadRequest:
-      description: 構造が不正
+      description: |
+        構造が不正(`bad-request`)、または `Idempotency-Key` がない・形式が不正・複数ある(`idempotency-key-missing`)。
+      headers:
+        Idempotent-Replayed:
+          $ref: "#/components/headers/IdempotentReplayed"
       content:
         application/problem+json:
           schema:
@@ -173,13 +192,25 @@ components:
           schema:
             $ref: "#/components/schemas/Problem"
     Conflict:
-      description: 同じ Idempotency-Key で異なる内容のリクエストを受けた、または処理中
+      description: |
+        同じ `Idempotency-Key` の要求を処理中(`idempotency-request-in-progress`。`Retry-After` 付き)、
+        またはリソースの状態と矛盾する要求(`conflict`)。
+      headers:
+        Retry-After:
+          $ref: "#/components/headers/RetryAfter"
+        Idempotent-Replayed:
+          $ref: "#/components/headers/IdempotentReplayed"
       content:
         application/problem+json:
           schema:
             $ref: "#/components/schemas/Problem"
     UnprocessableContent:
-      description: 値域・業務整合の検証エラー
+      description: |
+        値域・業務整合の検証エラー(`validation-failed`。`errors` に項目と理由)、
+        または同じ `Idempotency-Key` で内容の違う要求(`idempotency-key-reused`)。
+      headers:
+        Idempotent-Replayed:
+          $ref: "#/components/headers/IdempotentReplayed"
       content:
         application/problem+json:
           schema:
@@ -209,8 +240,12 @@ components:
       required: [type, title, status]
       properties:
         type:
+          description: |
+            エラーの種類の識別子。`https://eiaf.example/problems/{slug}`(一覧は INTEGRATION_STANDARDS §6)か `about:blank`。
+            環境によって変わらない。
           type: string
           format: uri-reference
+          examples: ["https://eiaf.example/problems/validation-failed"]
         title:
           type: string
         status:
@@ -234,7 +269,7 @@ components:
               message:
                 type: string
     Money:
-      description: 金額。amount は通貨の小数桁数で表した 10 進文字列(ADR-0011 §1)。
+      description: 金額(税抜)。amount は通貨の小数桁数で表した 10 進文字列(ADR-0011 §1)。小数部が通貨の小数桁数を超える値は 422。
       type: object
       required: [amount, currency]
       properties:
