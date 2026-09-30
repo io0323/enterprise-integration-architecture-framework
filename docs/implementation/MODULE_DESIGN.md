@@ -101,7 +101,7 @@ services/order/
 | security | JWT の検証(JWKS)・スコープの認可(`eiaJwt` / `requireScopes`)・Client Credentials のトークン取得・`SecretProvider`(ADR-0008・ADR-0019)。Nimbus JOSE+JWT を使ってよいのはこのモジュールだけ(Konsist) | P04a |
 | audit | 監査記録: 追記専用のテーブル(アプリ用のロールは INSERT / SELECT だけ。トリガーでも拒否)とハッシュチェーン、S3 互換ストレージの Object Lock(COMPLIANCE)へのアンカー、チェーンとアンカーの検証(ADR-0017)。検査は `tools/audit-verify`(`make audit-verify`)。`java.time` と `java.sql` を使う JVM の部品なので、services の application に Port(例 `AuditTrail`)を置き、adapters で `AuditLog.appendAudit`(業務と同じ Exposed のトランザクション)に写す | P04a |
 | test-support | テスト専用。`infra/local/images.env` のイメージを Testcontainers で使う `InfraImages`(ADR-0016 §5)。test / integrationTest からだけ参照する(Konsist) | P04a |
-| api | REST の共通部品: Problem Details(RFC 9457。`installProblemDetails` / `respondError`。`type` の一覧は INTEGRATION_STANDARDS §6)と Idempotency-Key(P05 ②b)(ADR-0022) | P05 |
+| api | REST の共通部品: Problem Details(RFC 9457。`installProblemDetails` / `respondError`。`type` の一覧は INTEGRATION_STANDARDS §6)と Idempotency-Key(`respondIdempotently` / `IdempotencyHandler` / Port `IdempotencyStore`。PostgreSQL の実装は各サービスの adapters)(ADR-0022) | P05 |
 | reliability | `shared/resilience` の JVM 向けアダプタ: OTel のメトリクス(`ResilienceMetrics`)、Ktor Client の結果の Retryable / NonRetryable への分類(`HttpCallClassifier`)、`Retry-After` の解析(ADR-0021 §7・§11)。OTel は API だけを使う | P04b |
 | outbox | Outbox 挿入・削除・保持期間ジョブ | P06 |
 | messaging-kafka | Producer(P06)/ Consumer・DLQ・Replay(P07) | P06, P07 |
