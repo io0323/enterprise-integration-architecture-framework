@@ -71,3 +71,28 @@ lifecycle: active       # proposed | design | active | deprecated | retired
     - inventory.stock.cmd-reserve.v1
   ```
 - `contracts/` の OpenAPI / AsyncAPI は、どれかのカタログの `contract` に登録されていなければならない(カタログ未登録の連携の禁止。Framework 16.1)。
+
+## 6. エラー応答(Problem Details)
+REST のエラーは RFC 9457 の Problem Details(`application/problem+json`)で返す。部品は `platform/api` の `installProblemDetails` / `respondError` / `respondProblem`(ADR-0022 §2)。
+
+- 項目: `type`・`title`・`status`・`detail`(任意)・`correlationId`・`errors`(422 のみ。`field`・`message`)。`Cache-Control: no-store`。再試行の時期が分かれば `Retry-After`(秒)。
+- `title` と `detail` は種類ごとの固定の文。例外のメッセージ・スタックトレース・受け取った値は出さない。原因は `correlationId` を起点にログで追う。
+- `type` はクライアントがエラーの種類を判別する識別子で、環境ごとに変えない。変更は破壊的変更になる。基底 URI は `https://eiaf.example/problems/`(採用する組織が最初に 1 回だけ決める。ADR-0022 §2)。
+
+| type(基底 URI の後) | status | 使う場面 |
+|---|---|---|
+| `validation-failed` | 422 | 値域・業務整合の検証エラー(`errors` に項目と理由) |
+| `bad-request` | 400 | 本文を読めない(JSON の解析の失敗など) |
+| `idempotency-key-missing` | 400 | `Idempotency-Key` がない・形式が不正 |
+| `idempotency-key-reused` | 422 | 同じ `Idempotency-Key` で内容の違う要求 |
+| `idempotency-request-in-progress` | 409 | 同じ `Idempotency-Key` の要求を処理中(`Retry-After` 付き) |
+| `not-found` | 404 | リソースがない・どのルートにも当たらない |
+| `conflict` | 409 | リソースの状態と矛盾する要求 |
+| `rate-limited` | 429 | Rate Limit の超過(`Retry-After` 付き) |
+| `service-unavailable` | 503 | 依存先が一時的に使えない・締め切りを超えた(分かれば `Retry-After`) |
+| `internal-error` | 500 | 想定外のエラー |
+| `unauthorized` | 401 | トークンがない・不正(理由は返さない。ADR-0019 §5) |
+| `forbidden` | 403 | スコープが足りない |
+| `about:blank` | 405 / 413 / 415 | 状態コード以上の意味がない応答 |
+
+種類を追加するときは、`ProblemType`・この表・契約(OpenAPI)の説明を同時に更新する。
