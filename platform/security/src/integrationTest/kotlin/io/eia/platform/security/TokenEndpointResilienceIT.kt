@@ -44,7 +44,9 @@ private val clientSecret: String = newClientSecret()
 /**
  * テストの実行時間を抑えるため、Circuit Breaker の窓・Open の期間・試行の Timeout を短くする。
  * - 窓は直近 4 件、4 件そろったら判定し、失敗率 50% 以上で Open。Open は 2 秒。Half-Open で 1 件試す。
- * - 試行の Timeout は 1 秒(Keycloak のトークンの発行は数十ミリ秒。遅延の toxic は 3 秒)。
+ * - 試行の Timeout は 1.5 秒(温めた Keycloak のトークンの発行は数十ミリ秒。遅延の toxic は 3 秒)。
+ *   Keycloak の最初の発行は遅い(負荷が高いと 1 秒を超える)ため、beforeSpec で 1 回発行して温めておく。
+ *   温めずに測ると、最初の取得の試行がタイムアウトして窓に失敗が入り、Circuit Breaker の開く時点がずれる。
  * - リトライは 2 回まで(初回を含めて 3 回)、待ち時間は 50ms から。Jitter なし。
  */
 private const val WINDOW_SIZE = 4
@@ -57,6 +59,7 @@ private val CIRCUIT_BREAKER =
     )
 private val FAST_RETRY = RetryPolicy(initialDelay = 50.milliseconds, maxAttempts = 3, jitter = Jitter.NONE)
 private const val SLOW_RESPONSE_MS = 3_000L
+private val ATTEMPT_TIMEOUT = 1500.milliseconds
 
 /**
  * トークン取得の Retry・Circuit Breaker・締め切りを、Toxiproxy で遅延と切断を入れた実際の Keycloak で確かめる(ROADMAP P04b の DoD)。
@@ -79,6 +82,14 @@ class TokenEndpointResilienceIT :
             // バックチャネルは要求を受けた URL から決まる(KC_HOSTNAME_BACKCHANNEL_DYNAMIC)ので、Toxiproxy の URL で取得できる
             tokenEndpoint =
                 URI.create("http://${toxiproxy.host}:${toxiproxy.getMappedPort(PROXY_PORT)}/realms/eiaf/protocol/openid-connect/token")
+            // Keycloak を温める(測定に使う Resilience の外で、既定の Resilience で 1 回発行する)
+            CountingHttpClient().use { http ->
+                ClientCredentialsTokenProvider(
+                    ClientCredentialsConfig(tokenEndpoint, CLIENT_ID, SECRET_NAME),
+                    http.client,
+                    EnvSecretProvider(mapOf(SECRET_NAME.value to clientSecret)),
+                ).token().shouldBeInstanceOf<Result.Ok<AccessToken>>()
+            }
         }
         afterSpec {
             toxiproxy.stop()
@@ -114,7 +125,7 @@ class TokenEndpointResilienceIT :
                 )
             val config =
                 ResilienceConfig(
-                    attemptTimeout = 1.seconds,
+                    attemptTimeout = ATTEMPT_TIMEOUT,
                     deadline = 10.seconds,
                     retry = FAST_RETRY,
                     retryBudget = null,
@@ -141,7 +152,7 @@ class TokenEndpointResilienceIT :
                 val first = provider.token().shouldBeInstanceOf<Result.Ok<AccessToken>>().value
                 breaker.state shouldBe CircuitState.CLOSED
 
-                // 遅延(3 秒)> 試行の Timeout(1 秒)。1 回の取得で 3 回試してタイムアウトし、窓(成功 1・失敗 3)が埋まって Open になる
+                // 遅延(3 秒)> 試行の Timeout(1.5 秒)。1 回の取得で 3 回試してタイムアウトし、窓(成功 1・失敗 3)が埋まって Open になる
                 proxy.toxics().latency("slow", ToxicDirection.DOWNSTREAM, SLOW_RESPONSE_MS)
                 provider.invalidate(first)
                 val sentBeforeLatency = http.sent

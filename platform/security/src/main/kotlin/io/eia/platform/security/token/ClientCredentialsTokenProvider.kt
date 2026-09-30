@@ -1,5 +1,6 @@
 package io.eia.platform.security.token
 
+import io.eia.platform.reliability.HttpCallClassifier
 import io.eia.platform.reliability.RetryAfter
 import io.eia.platform.security.secret.Secret
 import io.eia.platform.security.secret.SecretProvider
@@ -25,12 +26,13 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.parameters
 import io.ktor.utils.io.readBuffer
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.io.readByteArray
 import org.slf4j.LoggerFactory
+import java.io.IOException
 import java.net.URLEncoder
+import java.nio.channels.UnresolvedAddressException
 import java.util.Base64
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.seconds
@@ -78,6 +80,7 @@ public class ClientCredentialsTokenProvider(
     private val resilience: Resilience = Resilience(DEFAULT_RESILIENCE_NAME, DEFAULT_RESILIENCE),
 ) {
     private val mutex = Mutex()
+    private val classifier = HttpCallClassifier(clock = clock)
 
     @Volatile
     private var cached: Cached? = null
@@ -194,25 +197,23 @@ public class ClientCredentialsTokenProvider(
         }
     }
 
-    /** 1 回の試行。タイムアウトは [resilience] の `withTimeoutOrNull` が行い、キャンセルはそのまま伝える。 */
+    /**
+     * 1 回の試行。タイムアウトは [resilience] の `withTimeoutOrNull` が行う。
+     * 接続の失敗とタイムアウト(Ktor の HttpTimeout など)だけを、HttpCallClassifier と同じ基準で `connection` / `timeout` にする。
+     * キャンセルとそのほかの例外(プログラムの誤り)は捕まえずに伝え、Circuit Breaker とリトライに数えない(ADR-0021 §3)。
+     */
     private suspend fun attempt(secret: Secret): Result<AccessToken, DomainError> {
         // 期限は要求を送る前の時刻から数える(受信までの時間の分だけ早めに見積もり、期限切れのトークンを使わない側に倒す)
         val requestedAt = clock.now()
-        val exchange =
-            try {
-                send(secret)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (
-                @Suppress("TooGenericExceptionCaught") e: Exception,
-            ) {
-                // 接続の失敗など。例外のメッセージは URL やヘッダを含みうるため、型の名前だけを残す
-                logger.debug("トークンエンドポイントに接続できません exception={}", e::class.qualifiedName)
-                return err(TokenEndpointUnavailable("connection"))
+        return try {
+            when (val result = interpret(send(secret), requestedAt)) {
+                is Result.Ok -> result
+                is Result.Err -> err(result.error.asDomainError())
             }
-        return when (val result = interpret(exchange, requestedAt)) {
-            is Result.Ok -> result
-            is Result.Err -> err(result.error.asDomainError())
+        } catch (e: IOException) {
+            err(unreachable(e, classifier))
+        } catch (e: UnresolvedAddressException) {
+            err(unreachable(e, classifier))
         }
     }
 
@@ -254,7 +255,10 @@ public class ClientCredentialsTokenProvider(
             }
 
             status >= 500 -> {
-                err(TokenEndpointUnavailable("server_error", status, RetryAfter.parse(exchange.retryAfter, clock.now())))
+                // Retry-After は 503 だけで使う(INTEGRATION_STANDARDS §3。429 は上)
+                val retryAfter =
+                    if (status == HttpStatusCode.ServiceUnavailable.value) RetryAfter.parse(exchange.retryAfter, clock.now()) else null
+                err(TokenEndpointUnavailable("server_error", status, retryAfter))
             }
 
             else -> {
@@ -328,3 +332,15 @@ private fun DomainError.toTokenError(): TokenError =
         // 試行は TokenError だけを、Resilience は上の ResilienceError だけを返す
         else -> error("想定外のエラーです: $code")
     }
+
+/** 接続の失敗を [TokenEndpointUnavailable] にする。例外のメッセージは URL やヘッダを含みうるため、型の名前だけをログに残す。 */
+private fun unreachable(
+    e: Exception,
+    classifier: HttpCallClassifier,
+): TokenEndpointUnavailable {
+    unreachableLogger.debug("トークンエンドポイントに接続できません exception={}", e::class.qualifiedName)
+    return TokenEndpointUnavailable(classifier.classify(e).reason)
+}
+
+// ログの出力元は ClientCredentialsTokenProvider のまま(運用で見るロガー名を変えない)
+private val unreachableLogger = LoggerFactory.getLogger(ClientCredentialsTokenProvider::class.java)

@@ -95,7 +95,7 @@ P04a ③ で `platform/security` を作る。Framework 12.1 は、受信側で�
   | タイムアウト・接続の失敗 | Retryable(`TokenEndpointUnavailable`) | 例外のメッセージは使わない |
   | 408 | Retryable | |
   | 429 | Retryable | `Retry-After`(秒数か HTTP-date)を `retryAfter` に入れる(kernel の `RetryPolicy` が使う) |
-  | 5xx | Retryable | 503 などの `Retry-After` も入れる |
+  | 5xx | Retryable | 503 の `Retry-After` も入れる(ほかの 5xx の `Retry-After` は使わない。INTEGRATION_STANDARDS §3。改訂履歴 2026-09-30) |
   | 400・401・403 などの 4xx | NonRetryable(`TokenRequestRejected`) | OAuth のエラーコード(`[a-z_]{1,64}` のときだけ)を持つ。Keycloak 26.7 は Secret の誤りに 401 `unauthorized_client` を返す(統合テストで確認) |
   | 応答の形式の不正 | NonRetryable(`InvalidTokenResponse`) | `access_token` がない・`token_type` が Bearer でない・`expires_in` が不正・JSON でない・64 KiB 超 |
   | Secret を取得できない | 設定の不備は NonRetryable、読み取りの一時的な失敗は Retryable(`ClientSecretUnavailable`) | 要求は送らない |
@@ -176,4 +176,4 @@ P04a ③ で `platform/security` を作る。Framework 12.1 は、受信側で�
 - ローカルの Keycloak は http(`sslRequired: none`)のため、トークンと Client Secret は平文で流れる(ADR-0008 の転送路の暗号化の縮退。#29)。本番の構成では https の `tokenEndpoint` と `jwksUri` を使う。
 
 ## 改訂履歴
-- 2026-09-30: §4 のトークンの取得に、`shared/resilience` の Retry・Circuit Breaker・締め切りを結線した(P04b ②。ADR-0021 §11)。1 回の取得のタイムアウトは `ClientCredentialsConfig.timeout` から `Resilience` の `attemptTimeout` に移した。`Retry-After` の解析は `platform/reliability` に移した。JWKS の取得を専用の dispatcher に分けるかの判断は、Bulkhead がスレッドを分けないため P05 に送った。
+- 2026-09-30: §4 のトークンの取得に、`shared/resilience` の Retry・Circuit Breaker・締め切りを結線した(P04b ②。ADR-0021 §11)。1 回の取得のタイムアウトは `ClientCredentialsConfig.timeout` から `Resilience` の `attemptTimeout` に移した。`Retry-After` の解析は `platform/reliability` に移した。RetryPolicy が `Retry-After` を優先して待つようになったため、5xx のうち `Retry-After` を使うのは 503 だけにした(INTEGRATION_STANDARDS §3)。接続の失敗として扱う例外は `IOException` と名前解決の失敗・タイムアウトに絞り、そのほかの例外(プログラムの誤り)は捕まえずに伝える(ADR-0021 §3。Circuit Breaker とリトライに数えないため)。JWKS の取得を専用の dispatcher に分けるかの判断は、Bulkhead がスレッドを分けないため P05 に送った。
