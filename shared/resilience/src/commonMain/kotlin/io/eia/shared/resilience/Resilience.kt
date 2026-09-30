@@ -46,6 +46,12 @@ public class Resilience(
     private val retryBudget: RetryBudget? = config.retryBudget?.let(::RetryBudget)
 
     /**
+     * リトライバジェットの残高(トークン数。設定がなければ `null`)。メトリクスの gauge に出すために公開する(ADR-0021 §7)。
+     * ロックを取らずに読む最新の値で、読んだ直後に変わりうる。
+     */
+    public val retryBudgetTokens: Double? get() = retryBudget?.remaining
+
+    /**
      * [block] を呼ぶ。
      *
      * @param deadline この呼び出しの締め切り(タイムバジェット)。既定は [ResilienceConfig.deadline]。

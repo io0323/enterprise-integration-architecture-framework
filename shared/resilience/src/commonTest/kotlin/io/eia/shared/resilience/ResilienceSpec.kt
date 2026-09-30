@@ -324,6 +324,15 @@ class ResilienceSpec :
                 script.calls shouldBe 3
                 listener.events shouldContainExactly listOf("suppressed:BUDGET_EXHAUSTED")
             }
+
+            test("残高を読める(設定がなければ null)") {
+                val config = BASE.copy(retryBudget = RetryBudgetConfig(maxTokens = 4, tokenRatio = 0.1))
+                val resilience = testScheduler.resilience(config)
+                resilience.retryBudgetTokens shouldBe 4.0
+                resilience.execute { failure() } // 失敗 2 回(2 回目のリトライは見送る)
+                resilience.retryBudgetTokens shouldBe 2.0
+                testScheduler.resilience().retryBudgetTokens shouldBe null
+            }
         }
 
         context("Bulkhead との組み合わせ") {
