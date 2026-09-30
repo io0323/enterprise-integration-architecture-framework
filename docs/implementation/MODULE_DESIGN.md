@@ -34,8 +34,8 @@ flowchart BT
   sdk[shared:integration-sdk<br/>KMP] --> res
   dom[services:x:domain<br/>KMP] --> kernel
   app[services:x:application<br/>KMP] --> dom
-  app --> canon
   adp[services:x:adapters<br/>JVM] --> app
+  adp --> canon
   adp --> plat[platform:*<br/>JVM]
   plat --> res
   boot[services:x:app<br/>JVM] --> adp
@@ -43,6 +43,7 @@ flowchart BT
   e2e[tests:e2e<br/>JVM] --> sdk
 ```
 - `platform:*` は `services:*` に依存しない。
+- `services:*:domain` と `services:*:application` は `shared:canonical-model` に依存しない。domain はサービス独自のモデルとし、Canonical Model との変換は adapters で行う(ADR-0010 Decision 7。Konsist の `canonicalModelOutsideDomainAndApplication`)。
 - `platform` のモジュール間の本番の依存(import・完全修飾名・`api` / `implementation` などの宣言)は、次の一覧だけを許可し、循環を禁止する(Konsist の `PlatformDependencyRules`)。テストのソースセットと `testImplementation` などの依存は対象外。一覧を変えるときは、`PlatformDependencyRules.ALLOWED` とこの表を同時に更新する。
 
   | 依存元 | 依存先 | 理由 |
@@ -61,7 +62,7 @@ flowchart BT
 ```
 services/order/
   domain/src/commonMain/kotlin/io/eia/order/domain/          # package io.eia.order.domain
-    Order.kt, OrderLine.kt, OrderStatus.kt, OrderEvent.kt, OrderPolicy.kt
+    Order.kt, OrderLine.kt, OrderStatus.kt, Identifiers.kt, ShippingAddress.kt   # 状態遷移は docs/architecture/order-state-machine.md
   application/src/commonMain/kotlin/io/eia/order/application/ # package io.eia.order.application
     port/inbound/PlaceOrderUseCase.kt          # `in` は Kotlin の予約語のため inbound / outbound とする
     port/outbound/OrderRepository.kt, OutboxPort.kt, TransactionRunner.kt   # IdempotencyStore は platform/api(ADR-0022 §1)
