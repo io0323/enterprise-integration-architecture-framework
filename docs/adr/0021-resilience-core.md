@@ -36,7 +36,7 @@ Fallback → 締め切り(deadline) → Retry → Circuit Breaker → Bulkhead �
 
 - **締め切り(タイムバジェット)を、試行とリトライの両方に効かせる。**
   - 締め切りは設定(`ResilienceConfig.deadline`)で決め、呼び出しごとに上書きできる(入口から配分された残り時間を渡すため)。
-  - 試行の Timeout は `min(attemptTimeout, 残り時間)` にする。残り時間で打ち切った試行は `DeadlineExceeded` を返し、Circuit Breaker とリトライバジェットの失敗に数える。数えないと、`attemptTimeout` より短い締め切りで呼ばれ続けたときに、ハングした依存先に対して Circuit Breaker が開かない。
+  - 試行の Timeout は `min(attemptTimeout, 残り時間)` にする。残り時間で打ち切った試行は `DeadlineExceeded` を返し、Circuit Breaker とリトライバジェットの失敗に数える。数えないと、`attemptTimeout` より短い締め切りで呼ばれ続けたときに、ハングした依存先に対して Circuit Breaker が開かない。ただし、呼び出し元の締め切り(§12 の `CallDeadline`)で打ち切った試行は数えない(§12)。
   - Bulkhead の空きを待つ時間も、残り時間までに縮める。
   - RetryPolicy が決めた待ち時間が残り時間以上なら、待たずにその時点のエラーを返す(`RetrySuppression.DEADLINE`)。
   - 残り時間が 0 以下で呼ばれたら、呼び出さずに `DeadlineExceeded` を返す。上流で予算を使い切るのは正常に起こりうることなので、例外(プログラムの誤り)にしない。この場合は依存先に送っていないので、Circuit Breaker には数えない。
@@ -58,7 +58,7 @@ Fallback → 締め切り(deadline) → Retry → Circuit Breaker → Bulkhead �
 | エラー | code | 意味 | Circuit Breaker | リトライ |
 |---|---|---|---|---|
 | `AttemptTimedOut` | `timeout` | 1 回の試行が `attemptTimeout` を超えた | 失敗に数える | する |
-| `DeadlineExceeded` | `deadline_exceeded` | 呼び出し全体が締め切り(タイムバジェット)を超えた | 試行を残り時間で打ち切ったときは失敗に数える。残り時間が 0 以下で呼び出さなかったときは数えない | しない |
+| `DeadlineExceeded` | `deadline_exceeded` | 呼び出し全体が締め切り(タイムバジェット)を超えた。`source` は予算を決めたもの(`OWN`: 自分の締め切り / `CALLER`: 呼び出し元の締め切り。§12) | `OWN` で試行を打ち切ったときは失敗に数える。`CALLER` で打ち切ったとき(§12)と、残り時間が 0 以下で呼び出さなかったときは数えない | しない |
 | `CircuitOpen` | `circuit_open` | 遮断中。`retryAfter` は Open が明けるまでの残り時間(Half-Open で枠が埋まっているときは `null`) | 数えない | しない |
 | `BulkheadFull` | `bulkhead_full` | 同時実行数の上限 | 数えない | しない |
 
@@ -72,7 +72,8 @@ Circuit Breaker とリトライバジェット(§8)は、1 回の試行の結果
 | 結果 | 数え方 | 理由 |
 |---|---|---|
 | Ok | 成功 | |
-| Retryable なエラー(`AttemptTimedOut` を含む) | 失敗 | 依存先の一時的な障害を表す |
+| Retryable なエラー(`AttemptTimedOut` と、自分の締め切りの `DeadlineExceeded` を含む) | 失敗 | 依存先の一時的な障害を表す |
+| 呼び出し元の締め切りで打ち切った `DeadlineExceeded`(`source = CALLER`) | 数えない | 依存先の状態ではなく、呼び出し元の残り時間を表す(§12) |
 | NonRetryable なエラー(4xx・業務エラー・契約違反) | 成功 | 依存先は応答している。呼び出し側の誤りで遮断すると、ほかの正しい呼び出しまで止まる |
 | `ResilienceRejection` | 数えない | 手元の判断で、依存先の状態を表さない |
 | 例外・キャンセル | 数えない | 呼び出しは `Result` で失敗を返す約束(境界の例外は `catching` で変換する)。例外は約束の外なので、依存先の失敗とみなさない。Half-Open の枠は返す |
@@ -125,7 +126,7 @@ HTTP の 500 は、INTEGRATION_STANDARDS §3 でリトライの対象外(NonRetr
 | `eia.resilience.retries.suppressed` | counter | `reason`(`deadline` / `circuit_open` / `budget_exhausted`) |
 | `eia.resilience.retry_budget.tokens` | gauge | なし。リトライバジェットの残高(`Resilience.retryBudgetTokens`) |
 | `eia.resilience.rejections` | counter | `kind`(`circuit_open` / `bulkhead_full`) |
-| `eia.resilience.timeouts` | counter | `kind`(`attempt` / `deadline`) |
+| `eia.resilience.timeouts` | counter | `kind`(`attempt` / `deadline` / `caller_deadline`)。`caller_deadline` は呼び出し元の締め切りで打ち切った試行(§12) |
 | `eia.resilience.fallbacks` | counter | なし |
 
 - 属性は依存先の名前と、上の決まった値だけにする(カーディナリティ対策)。エラーのメッセージ・URL・ステータスは入れない。依存先の名前には、依存先ごとに決まった値を使う。
@@ -184,13 +185,26 @@ Framework 13.1 のタイムバジェットは、入口に配分した時間を�
 - **`Resilience` は、試行の block に、その試行の残り時間を `CallDeadline` で渡す。** 残り時間は、試行の Timeout(`min(attemptTimeout, 締め切りの残り時間)`)。
   - これで、block の中の `Resilience` は、外側の試行が打ち切られる時刻を超えて待たない。
   - 内側のリトライの待ちが外側の残り時間を超えるなら、待たずに見送る(`RetrySuppression.DEADLINE`)。外側に打ち切られてキャンセルされるのを待たずに、エラーを外側に返せる。
-- **数え方は §1・§3 を変えない。**
-  - 呼び出し元の締め切りで打ち切った試行も、自分の締め切りで打ち切った試行と同じく、Circuit Breaker とリトライバジェットの失敗に数える。
-  - 内側の `DeadlineExceeded`(Retryable)が外側の block の結果として返った場合も、外側の失敗に数える。block 全体が外側の試行の時間内に終わらなかったことを表すため。外側で数えたくない場合は、block の中で別のエラーに写す(§3 の `ResilienceRejection` と同じ扱い)。
+- **呼び出し元の締め切りで、`attemptTimeout` より前に打ち切った試行は数えない。**
+  - `DeadlineExceeded.source` で、予算を決めたものを区別する。呼び出し元の `CallDeadline` の残り時間が自分の締め切りより短ければ `CALLER`、そうでなければ `OWN`(同じなら `OWN`)。
+  - 打ち切りの理由ごとの数え方:
+
+    | 打ち切りの理由 | エラー | Circuit Breaker・リトライバジェット |
+    |---|---|---|
+    | 試行が `attemptTimeout` に達した(呼び出し元の残り時間が `attemptTimeout` 以上だった場合を含む) | `AttemptTimedOut` | 失敗に数える |
+    | 自分の締め切り(設定の `deadline` か `execute` の引数)の残り時間で打ち切った | `DeadlineExceeded(source = OWN)` | 失敗に数える(§1) |
+    | 呼び出し元の締め切りの残り時間で打ち切った | `DeadlineExceeded(source = CALLER)` | 数えない(判定の窓に入れない。リトライバジェットも減らさない) |
+    | 呼び出す前に残り時間が 0 以下だった | `DeadlineExceeded`(どちらの `source` でも) | 数えない(§1) |
+
+  - **数えない理由**: 呼び出し元の残り時間は、依存先ではなく、呼び出し元の状態で決まる。高負荷で入口の待ちや上流の処理が長引くと、残り時間が減る。その残り時間で打ち切った試行を失敗に数えると、健全な依存先への回路まで開き、Retry を止め、負荷の上昇を障害に増幅する。依存先が本当に遅い(ハングしている)ことは、`attemptTimeout` に達した試行と、自分の締め切りで打ち切った試行で判断する。
+  - 残り時間が `attemptTimeout` 以上なら、打ち切りは `attemptTimeout` によるものとする。試行は依存先に与えた時間を使い切っているので、呼び出し元の予算が短かったことは理由にならない。
+  - **Half-Open**: 試す枠を取った試行が、呼び出し元の締め切りで打ち切られた場合は、ほかの数えない結果(例外・キャンセル)と同じく、枠を返して Half-Open のままにする(§4)。次の呼び出しが試す。成功とも失敗とも判断できない試行で、Closed にも Open にも遷移させないため。
+  - **メトリクス**: 数えない代わりに、`eia.resilience.timeouts` の `kind=caller_deadline` で数える(§7)。予算の配分が短すぎないかを、この件数で見る。
+  - **入れ子**: 内側の `Resilience` は、外側の試行の残り時間を `CallDeadline` として受け取る。そのため、外側の試行の時間が尽きると、内側は `CALLER` で打ち切られる。外側は、その結果を自分の試行の時間切れ(`attemptTimeout` か自分の締め切り。§1 のとおり数える)として扱う。外側と内側のタイムアウトは同じ時刻に来るので、どちらが先に返っても同じ結果にするため。外側の試行の時間が残っているのに内側が `CALLER` で打ち切られた場合(block の中で `withCallDeadline` で縮めた場合)は、外側でも数えない。
 - **`ClientCredentialsTokenProvider` での扱い**(ADR-0019 §4):
   - 取得の締め切りは、上の規則で呼び出し元の残り時間に縮む。
   - 取得中の呼び出しを待つ時間(`Mutex`)も、呼び出し元の残り時間までにする。待ちきれなければ `deadline_exceeded` を返す。ロックを取れたかは Bulkhead と同じく `withTimeoutOrNull` の戻り値で判断しない(§5)。
-  - 呼び出し元の締め切りで打ち切った取得の失敗(`DeadlineExceeded.deadline` が設定の締め切りより短い)は、待っていた呼び出しに共有しない。その失敗は、取得した呼び出しの予算によるもので、待っていた呼び出しは自分の残り時間で取り直せるため。
+  - 呼び出し元の締め切りで打ち切った取得の失敗(`DeadlineExceeded.source = CALLER`)は、待っていた呼び出しに共有しない。その失敗は、取得した呼び出しの予算によるもので、待っていた呼び出しは自分の残り時間で取り直せるため。
   - 設定の締め切りで打ち切った失敗と、そのほかの失敗は、これまでどおり共有する(IdP の障害中に「待ち数 × 締め切り」待たせない。ADR-0019 §4)。
 
 ## Alternatives Considered
@@ -203,7 +217,8 @@ Framework 13.1 のタイムバジェットは、入口に配分した時間を�
 - **リトライバジェットを入れない(Circuit Breaker と maxAttempts の上限で足りるとする)**: 増幅は最大 3 倍に抑えられるが、しきい値を下回る失敗率が続く状況では 3 倍の負荷が続く。不採用。
 - **締め切りを `execute` の引数で明示的に渡し続ける(§12 を入れない)**: 呼び出しの途中の層(トークンの取得のように、呼び出し元が `Resilience` を持っていることを知らない部品)まで、すべての関数に残り時間の引数が要る。渡し忘れると、その先は入口の予算を超えて待つ。不採用。
 - **`CallDeadline` を `withTimeout` で打ち切る要素にする**: 締め切りを置いただけで、置いた範囲の処理(DB の更新の後の応答など)が途中でキャンセルされる。打ち切りの場所は `Resilience` の試行に限り、`CallDeadline` は知らせるだけにした。不採用。
-- **呼び出し元の締め切りで打ち切った試行を Circuit Breaker に数えない**: 予算の短い呼び出しが続いても、依存先が遮断されにくくなる。一方、ハングした依存先に対して、予算の短い呼び出しだけが続くと遮断されない(§1 の理由と同じ)。§1 の数え方を保った。不採用。
+- **呼び出し元の締め切りで打ち切った試行も、Circuit Breaker の失敗に数える(§1 と同じ扱い)**: ハングした依存先に、予算の短い呼び出しだけが続く場合でも遮断できる。しかし、高負荷で残り時間が減ると、健全な依存先への回路まで開き、負荷を障害に増幅する。不採用。
+- **呼び出し元の締め切りで打ち切った試行を、成功として数える**: 窓の失敗率が下がり、本当に遅い依存先の遮断が遅れる。成功とも失敗とも判断できない試行なので、数えない。不採用。
 - **時間あたりのリトライの割合で上限を設ける(Finagle の RetryBudget)**: 時間の窓の管理が要る。gRPC の方式は時間に依存せず、状態も整数 1 つで済む。不採用。
 
 ## Consequences(トレードオフ)
@@ -213,9 +228,10 @@ Framework 13.1 のタイムバジェットは、入口に配分した時間を�
 - Open の期間が過ぎても、次の呼び出しまで `state` は OPEN のまま。メトリクスの gauge は、呼び出しがない間は Open を示し続ける。
 - 並行性は `Mutex` で守るので、呼び出しごとにロックを 2 回(許可と記録)取る。依存先への呼び出し(ミリ秒単位)に比べて小さいとみなす。
 - ADR-0004 §5 の「`Clock` をインジェクション」は、経過時間については `TimeSource` と読み替える(ADR-0004 の改訂履歴に記録する)。
-- 呼び出し元の締め切りを引き継ぐ(§12)ため、呼び出し元の予算が短いと、依存先が通常の応答時間で返せない試行も失敗に数える。予算が短い呼び出しが多い依存先では、Circuit Breaker が開きやすくなる。`minimumCalls` と `failureRateThreshold`(§4)で、予算の短い一部の呼び出しだけでは開かないようにしている。入口の予算は、依存先の通常の応答時間より十分長く配分する。
+- 呼び出し元の締め切りで打ち切った試行を数えない(§12)ため、依存先への呼び出しが、すべて予算の短い呼び出し(残り時間が `attemptTimeout` より短い)である状況では、ハングした依存先でも Circuit Breaker は開かない。この間、各呼び出しが待つのは自分の残り時間までで、待ちの上限は入口の予算で決まる。遮断の判断は、`attemptTimeout` に達した試行と自分の締め切りで打ち切った試行でだけ行う。予算の配分が短すぎないかは、`kind=caller_deadline` の件数で見る。
+- Half-Open の試行が呼び出し元の締め切りで打ち切られ続けると、Half-Open のまま(`halfOpenPermits` 件ずつ試す)になる。遮断は解けないが、依存先に送る同時の呼び出しは `halfOpenPermits` 件までに抑えられる。
 - `ClientCredentialsConfig.timeout` をなくしたため、トークンの取得の Timeout を変えるときは、`Resilience` を作って `ClientCredentialsTokenProvider` に渡す。
 
 ## 改訂履歴
 - 2026-09-30: ② の決定を追記した(§3 の分類の置き場所、§7 のメトリクスの一覧と `retryBudgetTokens`・重複登録の検出、§11 の結線)。
-- 2026-09-30: §12(呼び出し元の締め切りの引き継ぎ。`CallDeadline`)を追記した(P05 ①。Issue #48)。§11 と Consequences の「引き継がない」を改めた。
+- 2026-09-30: §12(呼び出し元の締め切りの引き継ぎ。`CallDeadline`)を追記した(P05 ①。Issue #48)。§11 と Consequences の「引き継がない」を改めた。呼び出し元の締め切りで打ち切った試行は Circuit Breaker とリトライバジェットに数えず(`DeadlineExceeded.source`)、メトリクスの `kind=caller_deadline` で数える(§1・§2・§3・§7 に反映した)。
