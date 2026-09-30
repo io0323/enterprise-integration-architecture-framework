@@ -1,10 +1,18 @@
 package io.eia.platform.security.token
 
+import io.eia.platform.reliability.RetryAfter
 import io.eia.platform.security.secret.Secret
 import io.eia.platform.security.secret.SecretProvider
+import io.eia.shared.kernel.DomainError
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.err
 import io.eia.shared.kernel.ok
+import io.eia.shared.resilience.AttemptTimedOut
+import io.eia.shared.resilience.BulkheadFull
+import io.eia.shared.resilience.CircuitOpen
+import io.eia.shared.resilience.DeadlineExceeded
+import io.eia.shared.resilience.Resilience
+import io.eia.shared.resilience.ResilienceConfig
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.expectSuccess
 import io.ktor.client.request.accept
@@ -20,12 +28,12 @@ import io.ktor.utils.io.readBuffer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.io.readByteArray
 import org.slf4j.LoggerFactory
 import java.net.URLEncoder
 import java.util.Base64
 import kotlin.time.Clock
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
@@ -36,11 +44,16 @@ import kotlin.time.Instant
  * - **同時の取得を 1 本にまとめる**: 取得は [Mutex] の中で 1 つだけ走らせる。待っていた呼び出しは、ロックを取った後に
  *   待っている間に終わった取得の結果を使う(成功ならキャッシュ、失敗ならその失敗)。同時に 100 回呼ばれても要求は 1 回になり、
  *   IdP の障害中に待ち行列の全員が順に取り直して待たされることもない。期限内のトークンがあれば、取得中の呼び出しを待たずに返す。
- * - **タイムアウト**: 1 回の取得(接続から本文の読み取りまで)を [ClientCredentialsConfig.timeout](既定 5 秒)で打ち切る。
- * - **失敗**: 失敗はキャッシュしない。期限前の取り直しに失敗し、期限内のトークンがあれば、それを返して WARN を残す。
- *   次の取り直しは [ClientCredentialsConfig.refreshRetryInterval] の後にする(失敗のたびに全呼び出しを待たせないため)。
- * - **Retry と Circuit Breaker は P04b で結線する**(`platform/reliability`)。ここでは 1 回だけ要求し、
- *   失敗を [TokenError] の Retryable / NonRetryable(429 / 503 は `Retry-After` を retryAfter に入れる)で返す。
+ * - **Timeout・Retry・Circuit Breaker**(Framework 13。ADR-0021): 1 回の取得を [resilience] の中で行う。
+ *   - 1 回の試行(接続から本文の読み取りまで)は `attemptTimeout`(既定 5 秒)、リトライを含む取得全体は `deadline`(既定 10 秒)で打ち切る。
+ *   - Retryable(タイムアウト・接続の失敗・408・429・5xx)はリトライし、429 / 503 の `Retry-After` を優先して待つ
+ *     (kernel の RetryPolicy。上限を超える Retry-After と、締め切りを超える待ちでは打ち切る)。
+ *   - NonRetryable(400・401 の `invalid_client` などの 4xx・応答の形式の不正)はリトライせず、Circuit Breaker の成功に数える。
+ *   - Circuit Breaker が開いている間は IdP に要求を送らず、`circuit_open` の [TokenEndpointUnavailable] を返す。
+ *   - Secret の取得は [resilience] の外で、取得ごとに 1 回だけ行う(Secret の失敗を IdP の失敗として数えないため)。
+ * - **Fallback**: 失敗はキャッシュしない。期限前の取り直しに失敗し、期限内のトークンがあれば、それを返して WARN を残す
+ *   (同期呼び出しの 4 点セットの Fallback)。次の取り直しは [ClientCredentialsConfig.refreshRetryInterval] の後にする
+ *   (失敗のたびに全呼び出しを待たせないため)。
  * - **クライアントの認証**: `client_secret_basic`。RFC 6749 §2.3.1 のとおり、ID と Secret を
  *   application/x-www-form-urlencoded でエンコードしてから Base64 にする。Secret は取得のたびに [SecretProvider] から読む。
  * - 応答の本文・Client Secret・トークンはログにも [TokenError] にも入れない。ログに残すのは、ステータスと、
@@ -49,13 +62,20 @@ import kotlin.time.Instant
  * [httpClient] は呼び出し側が用意する(`ClientObservability` で traceparent と Correlation ID を付けられる)。
  * リクエストやヘッダをログに出すプラグイン(Ktor の Logging など)は付けない(Authorization が漏れるため)。
  *
+ * **このクラスと [resilience] は、トークンエンドポイントごとに 1 つを作って使い回す。呼び出しごとに新しい [Resilience] を作らない。**
+ * Circuit Breaker とリトライバジェットは、複数回の取得にまたがる状態を持つ。取得のたびに作ると状態が捨てられ、
+ * IdP の障害中も遮断されずに要求を送り続ける。
+ *
  * @param clock 期限の判定に使う時刻(テストでは進められる時計を渡す)
+ * @param resilience トークンエンドポイントへの取得を包む [Resilience]。すべての取得で、この 1 つを使う。
+ *   メトリクスを出すときは、`ResilienceMetrics.resilience` で作ったものを渡す。既定は [DEFAULT_RESILIENCE_NAME] と [DEFAULT_RESILIENCE]
  */
 public class ClientCredentialsTokenProvider(
     private val config: ClientCredentialsConfig,
     private val httpClient: HttpClient,
     private val secrets: SecretProvider,
     private val clock: Clock = Clock.System,
+    private val resilience: Resilience = Resilience(DEFAULT_RESILIENCE_NAME, DEFAULT_RESILIENCE),
 ) {
     private val mutex = Mutex()
 
@@ -161,18 +181,26 @@ public class ClientCredentialsTokenProvider(
         return Cached(token, refreshAt = until - margin, validUntil = until)
     }
 
-    @Suppress("ReturnCount") // Secret の取得・送信・タイムアウトのそれぞれの失敗で返す
+    /** Secret を読み、[resilience] の中で要求する(リトライと Circuit Breaker は [resilience] が行う)。 */
     private suspend fun fetch(): Result<AccessToken, TokenError> {
         val secret =
             when (val result = secrets.get(config.clientSecret)) {
                 is Result.Ok -> result.value
                 is Result.Err -> return err(ClientSecretUnavailable.of(result.error))
             }
+        return when (val result = resilience.execute { attempt(secret) }) {
+            is Result.Ok -> result
+            is Result.Err -> err(result.error.toTokenError())
+        }
+    }
+
+    /** 1 回の試行。タイムアウトは [resilience] の `withTimeoutOrNull` が行い、キャンセルはそのまま伝える。 */
+    private suspend fun attempt(secret: Secret): Result<AccessToken, DomainError> {
         // 期限は要求を送る前の時刻から数える(受信までの時間の分だけ早めに見積もり、期限切れのトークンを使わない側に倒す)
         val requestedAt = clock.now()
         val exchange =
             try {
-                withTimeoutOrNull(config.timeout) { send(secret) }
+                send(secret)
             } catch (e: CancellationException) {
                 throw e
             } catch (
@@ -181,8 +209,11 @@ public class ClientCredentialsTokenProvider(
                 // 接続の失敗など。例外のメッセージは URL やヘッダを含みうるため、型の名前だけを残す
                 logger.debug("トークンエンドポイントに接続できません exception={}", e::class.qualifiedName)
                 return err(TokenEndpointUnavailable("connection"))
-            } ?: return err(TokenEndpointUnavailable("timeout"))
-        return interpret(exchange, requestedAt)
+            }
+        return when (val result = interpret(exchange, requestedAt)) {
+            is Result.Ok -> result
+            is Result.Err -> err(result.error.asDomainError())
+        }
     }
 
     private suspend fun send(secret: Secret): Exchange {
@@ -250,6 +281,15 @@ public class ClientCredentialsTokenProvider(
         /** 応答の本文の大きさの上限。これを超える応答は解析しない。 */
         public const val MAX_BODY_BYTES: Int = TokenResponse.MAX_BODY_BYTES
 
+        /** 既定の [Resilience] の名前(メトリクスの `eia.dependency.name`)。 */
+        public const val DEFAULT_RESILIENCE_NAME: String = "oauth-token-endpoint"
+
+        /**
+         * 既定の回復性の設定: 1 回の試行 5 秒、取得全体の締め切り 10 秒。Retry(`RetryPolicy.DEFAULT`)・リトライバジェット・
+         * Circuit Breaker は `shared/resilience` の既定値(ADR-0021 §4・§8)。
+         */
+        public val DEFAULT_RESILIENCE: ResilienceConfig = ResilienceConfig(attemptTimeout = 5.seconds, deadline = 10.seconds)
+
         private const val REFRESH_LIFETIME_DIVISOR = 10
         private val logger = LoggerFactory.getLogger(ClientCredentialsTokenProvider::class.java)
 
@@ -269,3 +309,22 @@ public class ClientCredentialsTokenProvider(
         private fun formEncode(value: String): String = URLEncoder.encode(value, Charsets.UTF_8)
     }
 }
+
+/**
+ * `Resilience` のエラーを [TokenError] に写す(`token()` の戻り値の型を変えないため)。`circuit_open` は Open が明けるまでの時間を持つ。
+ */
+private fun DomainError.toTokenError(): TokenError =
+    when (this) {
+        is TokenError -> this
+
+        is AttemptTimedOut -> TokenEndpointUnavailable("timeout")
+
+        is DeadlineExceeded -> TokenEndpointUnavailable("deadline_exceeded")
+
+        is CircuitOpen -> TokenEndpointUnavailable("circuit_open", retryAfter = retryAfter)
+
+        is BulkheadFull -> TokenEndpointUnavailable("bulkhead_full")
+
+        // 試行は TokenError だけを、Resilience は上の ResilienceError だけを返す
+        else -> error("想定外のエラーです: $code")
+    }

@@ -25,6 +25,7 @@ include(
     ":shared:canonical-model",
     ":platform:audit",
     ":platform:observability",
+    ":platform:reliability",
     ":platform:security",
     ":platform:test-support",
     ":services:order:domain",
