@@ -9,18 +9,30 @@ import kotlin.time.Duration
  * 応答の本文・Client Secret・トークンは入れない。
  *
  * 各実装は [DomainError.Retryable] か [DomainError.NonRetryable] のどちらか一方を実装する。
- * リトライ([DomainError.Retryable] と kernel の RetryPolicy)は P04b の `platform/reliability` で結線する。
+ * [ClientCredentialsTokenProvider] は、この分類で `shared/resilience` の Retry と Circuit Breaker を動かす(ADR-0021 §3)。
+ * Retryable はリトライし Circuit Breaker の失敗に数える。NonRetryable はリトライせず、Circuit Breaker の成功に数える。
  */
 public sealed interface TokenError {
     public val code: String
     public val message: String
+
+    /** `Result` の Err に入れる形(各実装は Retryable か NonRetryable のどちらかの [DomainError])。 */
+    public fun asDomainError(): DomainError =
+        when (this) {
+            is TokenEndpointUnavailable -> this
+            is TokenRequestRejected -> this
+            is InvalidTokenResponse -> this
+            is ClientSecretUnavailable.Permanent -> this
+            is ClientSecretUnavailable.Temporary -> this
+        }
 }
 
 /**
- * トークンエンドポイントが一時的に使えない(タイムアウト・接続の失敗・408・429・5xx)。
+ * トークンエンドポイントが一時的に使えない(タイムアウト・接続の失敗・408・429・5xx・遮断中)。
  *
- * @param reason `timeout` / `connection` / `rate_limited` / `server_error` / `request_timeout`
- * @param retryAfter 429 / 503 の `Retry-After`(秒数または HTTP-date)。なければ null
+ * @param reason `timeout` / `connection` / `rate_limited` / `server_error` / `request_timeout`、
+ *   回復性の部品が返したもの(`deadline_exceeded` / `circuit_open` / `bulkhead_full`。ADR-0021 §2)
+ * @param retryAfter 429 / 503 の `Retry-After`(秒数または HTTP-date)。`circuit_open` では Open が明けるまでの残り時間。なければ null
  */
 public data class TokenEndpointUnavailable(
     public val reason: String,

@@ -9,10 +9,20 @@ import io.eia.platform.security.secret.SecretNotFound
 import io.eia.platform.security.secret.SecretProvider
 import io.eia.platform.security.secret.SecretUnreadable
 import io.eia.shared.kernel.DomainError
+import io.eia.shared.kernel.Jitter
 import io.eia.shared.kernel.Result
+import io.eia.shared.kernel.RetryPolicy
 import io.eia.shared.kernel.err
 import io.eia.shared.kernel.ok
+import io.eia.shared.resilience.CircuitBreakerConfig
+import io.eia.shared.resilience.CircuitState
+import io.eia.shared.resilience.Resilience
+import io.eia.shared.resilience.ResilienceConfig
+import io.eia.shared.resilience.ResilienceListener
+import io.eia.shared.resilience.RetrySuppression
+import io.eia.shared.resilience.SlidingWindow
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import io.kotest.matchers.types.shouldBeSameInstanceAs
@@ -100,16 +110,70 @@ internal class FakeTokenEndpoint(
 
 internal fun tokenConfig(
     scopes: Set<String> = emptySet(),
-    timeout: Duration = ClientCredentialsConfig.DEFAULT_TIMEOUT,
     clientId: String = CLIENT_ID,
-): ClientCredentialsConfig = ClientCredentialsConfig(TOKEN_ENDPOINT, clientId, SECRET_NAME, scopes = scopes, timeout = timeout)
+): ClientCredentialsConfig = ClientCredentialsConfig(TOKEN_ENDPOINT, clientId, SECRET_NAME, scopes = scopes)
+
+/**
+ * 1 回だけ試行する [Resilience](リトライ・Circuit Breaker・リトライバジェットなし)。
+ * キャッシュ・分類・要求の形式のテストで、要求の回数をリトライに左右されないようにする。
+ */
+internal fun singleAttempt(attemptTimeout: Duration = 5.seconds): Resilience =
+    Resilience(
+        ClientCredentialsTokenProvider.DEFAULT_RESILIENCE_NAME,
+        ResilienceConfig(attemptTimeout = attemptTimeout, retry = null, retryBudget = null, circuitBreaker = null),
+    )
 
 internal fun provider(
     endpoint: FakeTokenEndpoint,
     clock: MutableClock = MutableClock(),
     secrets: SecretProvider = SecretProvider { ok(Secret(CLIENT_SECRET)) },
     config: ClientCredentialsConfig = tokenConfig(),
-): ClientCredentialsTokenProvider = ClientCredentialsTokenProvider(config, endpoint.client, secrets, clock)
+    resilience: Resilience = singleAttempt(),
+): ClientCredentialsTokenProvider = ClientCredentialsTokenProvider(config, endpoint.client, secrets, clock, resilience)
+
+/** 待ち時間を固定した RetryPolicy(10ms → 20ms)。Retry-After があればそれを優先する。 */
+private val FAST_RETRY = RetryPolicy(initialDelay = 10.milliseconds, maxAttempts = 3, jitter = Jitter.NONE)
+
+/** リトライと見送りを記録する。 */
+private class RecordingListener : ResilienceListener {
+    val retryDelays = CopyOnWriteArrayList<Duration>()
+    val suppressions = CopyOnWriteArrayList<RetrySuppression>()
+
+    override fun onRetry(
+        name: String,
+        attempt: Int,
+        delay: Duration,
+        error: DomainError,
+    ) {
+        retryDelays += delay
+    }
+
+    override fun onRetrySuppressed(
+        name: String,
+        reason: RetrySuppression,
+    ) {
+        suppressions += reason
+    }
+}
+
+private fun retrying(
+    listener: ResilienceListener = ResilienceListener.NONE,
+    deadline: Duration? = 10.seconds,
+    circuitBreaker: CircuitBreakerConfig? = null,
+    retry: RetryPolicy? = FAST_RETRY,
+    attemptTimeout: Duration = 5.seconds,
+): Resilience =
+    Resilience(
+        ClientCredentialsTokenProvider.DEFAULT_RESILIENCE_NAME,
+        ResilienceConfig(
+            attemptTimeout = attemptTimeout,
+            deadline = deadline,
+            retry = retry,
+            retryBudget = null,
+            circuitBreaker = circuitBreaker,
+        ),
+        listener = listener,
+    )
 
 private fun Result<AccessToken, TokenError>.token(): String = shouldBeInstanceOf<Result.Ok<AccessToken>>().value.reveal()
 
@@ -283,7 +347,7 @@ class ClientCredentialsTokenProviderSpec :
                         delay(5.seconds)
                         respond(tokenJson(), HttpStatusCode.OK)
                     })
-                val provider = provider(endpoint, config = tokenConfig(timeout = 200.milliseconds))
+                val provider = provider(endpoint, resilience = singleAttempt(attemptTimeout = 200.milliseconds))
 
                 val error = provider.token().error()
                 error shouldBe TokenEndpointUnavailable("timeout")
@@ -377,6 +441,116 @@ class ClientCredentialsTokenProviderSpec :
                     FakeTokenEndpoint(FakeTokenEndpoint.status(HttpStatusCode.BadRequest, """{"error":"Bad <script> $CLIENT_SECRET"}"""))
 
                 provider(endpoint).token().error() shouldBe TokenRequestRejected(400, null)
+            }
+        }
+
+        context("Retry と Circuit Breaker(ADR-0021)") {
+            test("429 は Retry-After の時間だけ待ってからリトライする(バックオフより優先)") {
+                val endpoint =
+                    FakeTokenEndpoint(
+                        FakeTokenEndpoint.status(HttpStatusCode.TooManyRequests, headers = mapOf("Retry-After" to "1")),
+                        FakeTokenEndpoint.ok(tokenJson("at-1")),
+                    )
+                val listener = RecordingListener()
+                val provider = provider(endpoint, resilience = retrying(listener, retry = RetryPolicy.DEFAULT))
+
+                provider.token().token() shouldBe "at-1"
+                endpoint.requests.size shouldBe 2
+                listener.retryDelays shouldContainExactly listOf(1.seconds)
+            }
+
+            test("Retry-After が RetryPolicy の上限(maxDelay)を超えるなら、待たずに打ち切る") {
+                val endpoint =
+                    FakeTokenEndpoint(FakeTokenEndpoint.status(HttpStatusCode.TooManyRequests, headers = mapOf("Retry-After" to "60")))
+                val provider = provider(endpoint, resilience = retrying(retry = RetryPolicy.DEFAULT))
+
+                provider.token().error() shouldBe TokenEndpointUnavailable("rate_limited", 429, 60.seconds)
+                endpoint.requests.size shouldBe 1
+            }
+
+            test("Retry-After が締め切りの残り時間を超えるなら、待たずに打ち切る") {
+                val endpoint =
+                    FakeTokenEndpoint(FakeTokenEndpoint.status(HttpStatusCode.ServiceUnavailable, headers = mapOf("Retry-After" to "5")))
+                val listener = RecordingListener()
+                val provider = provider(endpoint, resilience = retrying(listener, deadline = 2.seconds))
+
+                provider.token().error() shouldBe TokenEndpointUnavailable("server_error", 503, 5.seconds)
+                endpoint.requests.size shouldBe 1
+                listener.suppressions shouldContainExactly listOf(RetrySuppression.DEADLINE)
+            }
+
+            test("503・タイムアウト・接続の失敗はリトライする") {
+                val endpoint =
+                    FakeTokenEndpoint(
+                        FakeTokenEndpoint.status(HttpStatusCode.ServiceUnavailable),
+                        {
+                            delay(5.seconds)
+                            respond(tokenJson(), HttpStatusCode.OK)
+                        },
+                        { throw IOException("reset") },
+                        FakeTokenEndpoint.ok(tokenJson("at-1")),
+                    )
+                val provider =
+                    provider(endpoint, resilience = retrying(retry = FAST_RETRY.copy(maxAttempts = 4), attemptTimeout = 200.milliseconds))
+
+                provider.token().token() shouldBe "at-1"
+                endpoint.requests.size shouldBe 4
+            }
+
+            test("400・401(invalid_client など)はリトライせず、Circuit Breaker の失敗にも数えない") {
+                val circuitBreaker = CircuitBreakerConfig(window = SlidingWindow.Count(2), minimumCalls = 2)
+                listOf(
+                    HttpStatusCode.Unauthorized to """{"error":"invalid_client"}""",
+                    HttpStatusCode.BadRequest to """{"error":"invalid_scope"}""",
+                ).forEach { (status, body) ->
+                    val endpoint = FakeTokenEndpoint(FakeTokenEndpoint.status(status, body))
+                    val resilience = retrying(circuitBreaker = circuitBreaker)
+                    val provider = provider(endpoint, resilience = resilience)
+
+                    repeat(3) { provider.token().error().shouldBeInstanceOf<TokenRequestRejected>() }
+                    endpoint.requests.size shouldBe 3
+                    resilience.circuitBreaker?.state shouldBe CircuitState.CLOSED
+                }
+            }
+
+            test("1 つの Resilience を使い回し、複数回の取得にまたがって Circuit Breaker が開く。開いている間は IdP に要求を送らない") {
+                val endpoint = FakeTokenEndpoint(FakeTokenEndpoint.status(HttpStatusCode.ServiceUnavailable))
+                val resilience =
+                    retrying(
+                        retry = null,
+                        circuitBreaker = CircuitBreakerConfig(window = SlidingWindow.Count(4), minimumCalls = 4, openDuration = 30.seconds),
+                    )
+                val provider = provider(endpoint, resilience = resilience)
+
+                // 1 回の取得は 1 回の失敗。4 回の取得で窓が埋まり、失敗率 100% で開く
+                repeat(4) { provider.token().error() shouldBe TokenEndpointUnavailable("server_error", 503) }
+                resilience.circuitBreaker?.state shouldBe CircuitState.OPEN
+
+                val rejected = provider.token().error().shouldBeInstanceOf<TokenEndpointUnavailable>()
+                rejected.reason shouldBe "circuit_open"
+                (rejected.retryAfter ?: Duration.ZERO).isPositive() shouldBe true
+                endpoint.requests.size shouldBe 4
+            }
+
+            test("締め切りで打ち切った取得は deadline_exceeded で、リトライしない") {
+                val endpoint =
+                    FakeTokenEndpoint({
+                        delay(5.seconds)
+                        respond(tokenJson(), HttpStatusCode.OK)
+                    })
+                val provider = provider(endpoint, resilience = retrying(deadline = 300.milliseconds, attemptTimeout = 1.seconds))
+
+                provider.token().error() shouldBe TokenEndpointUnavailable("deadline_exceeded")
+                endpoint.requests.size shouldBe 1
+            }
+
+            test("既定の Resilience は、試行 5 秒・締め切り 10 秒・既定の RetryPolicy と Circuit Breaker") {
+                with(ClientCredentialsTokenProvider.DEFAULT_RESILIENCE) {
+                    attemptTimeout shouldBe 5.seconds
+                    deadline shouldBe 10.seconds
+                    retry shouldBe RetryPolicy.DEFAULT
+                    circuitBreaker shouldBe CircuitBreakerConfig()
+                }
             }
         }
 
