@@ -43,6 +43,10 @@ Fallback → 締め切り(deadline) → Retry → Circuit Breaker → Bulkhead �
 - **Circuit Breaker が開いたら、リトライせずにすぐ返す。**
   - リトライの待機の前に状態を見て、Open なら待たずに返す(`RetrySuppression.CIRCUIT_OPEN`)。
   - Circuit Breaker が断った呼び出し(`CircuitOpen`)と、Bulkhead が断った呼び出し(`BulkheadFull`)は、リトライしない。どちらも手元の判断で、待っても依存先の状態は分からないため。
+  - **Bulkhead の拒否は、Circuit Breaker の失敗にもリトライバジェットにも数えず、リトライもしない。** 拒否は自分の側の混雑(同時実行数の上限)で、依存先の障害ではない。
+    - 失敗に数えると、依存先が健全でも、呼び出し側の混雑だけで遮断してしまう。
+    - リトライすると、混雑している自分の側に、待ちの呼び出しをさらに積むことになる。リトライバジェットの範囲内でだけリトライする案もあるが、バジェットは依存先の失敗率に合わせて減るもので、自分の側の混雑では減らない。混雑している間はリトライが続いてしまうため採らない。
+    - 待ってもよい場合は、Bulkhead の `maxWait`(締め切りの残り時間までに縮める)で待つ。拒否は呼び出し元にすぐ返し、Fallback(`whenUnavailable` の対象)か、上位の判断に任せる。
 - **リトライの待ち時間と回数は、kernel の `RetryPolicy.decide` をそのまま使う。** 同じ計算を `shared/resilience` に作らない。Jitter の乱数(`Random`)は `Resilience` に注入する。
 - **RetryPolicy は呼び出しごとに上書きできる**(`execute(retry = ...)`)。冪等でない呼び出しは `null` を渡してリトライを止める。依存先ごとの `Resilience` を分けずに済むので、Circuit Breaker とリトライバジェットの状態は同じ依存先で 1 つのまま保てる。
 - **リトライする呼び出しは冪等にする**(Framework 5.5・13.1「冪等前提」)。タイムアウトは `withTimeoutOrNull` で行うので、呼び出しが期限の直前に成功して戻っても、期限切れとして扱われてリトライされることがある。POST は `Idempotency-Key` を付ける。

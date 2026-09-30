@@ -327,25 +327,62 @@ class ResilienceSpec :
         }
 
         context("Bulkhead との組み合わせ") {
-            test("Bulkhead の拒否はリトライしない") {
+            test("Bulkhead の拒否はリトライせず、待たずにすぐ返す") {
+                val listener = RecordingListener()
                 val config = BASE.copy(bulkhead = BulkheadConfig(maxConcurrentCalls = 1))
-                val resilience = testScheduler.resilience(config)
+                val resilience = testScheduler.resilience(config, listener)
                 coroutineScope {
                     launch {
+                        // 枠を押さえる呼び出し。attemptTimeout(1 秒)より短くし、タイムアウトの失敗を混ぜない
                         resilience.execute {
-                            delay(1.seconds)
+                            delay(500.milliseconds)
                             success()
                         }
                     }
                     testScheduler.runCurrent()
-                    var called = false
+                    val start = testScheduler.timeSource.markNow()
+                    var calls = 0
                     resilience
                         .execute {
-                            called = true
+                            calls++
                             success()
                         }.errorOrFail() shouldBe BulkheadFull("inventory")
-                    called shouldBe false
+                    calls shouldBe 0
+                    start.elapsedNow() shouldBe Duration.ZERO
+                    listener.events shouldContainExactly listOf("rejected:bulkhead_full")
                 }
+            }
+
+            test("Bulkhead の拒否は Circuit Breaker の失敗にもリトライバジェットにも数えない") {
+                // 拒否を失敗に数えていれば、2 件で失敗率 100% になり開く
+                val breaker =
+                    CircuitBreakerConfig(window = SlidingWindow.Count(2), minimumCalls = 2, failureRateThreshold = 1.0, halfOpenPermits = 1)
+                val config =
+                    BASE.copy(
+                        bulkhead = BulkheadConfig(maxConcurrentCalls = 1),
+                        circuitBreaker = breaker,
+                        retryBudget = RetryBudgetConfig(maxTokens = 3, tokenRatio = 0.1),
+                    )
+                val listener = RecordingListener()
+                val resilience = testScheduler.resilience(config, listener)
+                coroutineScope {
+                    launch {
+                        // 枠を押さえる呼び出し。attemptTimeout(1 秒)より短くし、タイムアウトの失敗を混ぜない
+                        resilience.execute {
+                            delay(500.milliseconds)
+                            success()
+                        }
+                    }
+                    testScheduler.runCurrent()
+                    repeat(10) { resilience.execute { success() }.errorOrFail() shouldBe BulkheadFull("inventory") }
+                }
+                resilience.circuitBreaker?.state shouldBe CircuitState.CLOSED
+                listener.transitions shouldBe emptyList()
+                // バジェットが減っていなければ、失敗 1 回の後も残高 2(> 1.5)でリトライできる。拒否 10 件で減っていれば残高 0 で見送る
+                listener.events.clear()
+                val script = Script(failure(), success())
+                resilience.execute { script.next() } shouldBe ok("ok")
+                listener.events shouldContainExactly listOf("retry:1")
             }
         }
 
