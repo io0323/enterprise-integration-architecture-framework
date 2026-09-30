@@ -4,6 +4,7 @@ import io.eia.shared.kernel.DomainError
 import io.eia.shared.resilience.AttemptTimedOut
 import io.eia.shared.resilience.CircuitState
 import io.eia.shared.resilience.DeadlineExceeded
+import io.eia.shared.resilience.DeadlineSource
 import io.eia.shared.resilience.Resilience
 import io.eia.shared.resilience.ResilienceConfig
 import io.eia.shared.resilience.ResilienceError
@@ -30,7 +31,7 @@ import kotlin.time.TimeSource
  * | `eia.resilience.retries.suppressed` | counter | `reason`(`deadline` / `circuit_open` / `budget_exhausted`) |
  * | `eia.resilience.retry_budget.tokens` | gauge | なし。リトライバジェットの残高 |
  * | `eia.resilience.rejections` | counter | `kind`(`circuit_open` / `bulkhead_full`) |
- * | `eia.resilience.timeouts` | counter | `kind`(`attempt` / `deadline`) |
+ * | `eia.resilience.timeouts` | counter | `kind`(`attempt` / `deadline` / `caller_deadline`) |
  * | `eia.resilience.fallbacks` | counter | なし |
  *
  * 属性は、依存先の名前と、上の決まった値だけにする(カーディナリティ対策)。エラーのメッセージ・URL・ステータスは入れない。
@@ -133,7 +134,10 @@ public class ResilienceMetrics(
         val kind =
             when (error) {
                 is AttemptTimedOut -> "attempt"
-                is DeadlineExceeded -> "deadline"
+
+                // 呼び出し元の締め切りで打ち切った試行は、Circuit Breaker に数えないため別の kind で数える(ADR-0021 §12)
+                is DeadlineExceeded -> if (error.source == DeadlineSource.CALLER) "caller_deadline" else "deadline"
+
                 is ResilienceRejection -> return
             }
         timeouts.add(1, attributes(error.name, KIND, kind))
