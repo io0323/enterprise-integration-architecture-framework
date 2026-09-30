@@ -8,6 +8,8 @@ dependencies {
     api(project(":shared:kernel"))
     // トークン取得の Retry と Circuit Breaker、Retry-After の解析(ADR-0019 §4・ADR-0021)。platform 間の依存は Konsist で許可した一覧だけ
     api(project(":platform:reliability"))
+    // 401 / 403 / 503 を Problem Details で返す(ADR-0019 §5・ADR-0022 §2)
+    implementation(project(":platform:api"))
     api(libs.ktor.server.auth)
     api(libs.ktor.client.core)
     api(libs.opentelemetry.api)

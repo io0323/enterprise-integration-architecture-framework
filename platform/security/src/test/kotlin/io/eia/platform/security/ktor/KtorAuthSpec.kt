@@ -4,6 +4,11 @@ import com.nimbusds.jose.JWSAlgorithm
 import com.nimbusds.jose.KeySourceException
 import com.nimbusds.jose.jwk.source.JWKSource
 import com.nimbusds.jose.proc.SecurityContext
+import io.eia.platform.observability.Observability
+import io.eia.platform.observability.ObservabilityConfig
+import io.eia.platform.observability.TelemetrySinks
+import io.eia.platform.observability.context.CorrelationHeaders
+import io.eia.platform.observability.ktor.server.ServerObservability
 import io.eia.platform.security.jwt.JwtVerifier
 import io.eia.platform.security.jwt.NOW
 import io.eia.platform.security.jwt.TestKeys
@@ -16,9 +21,12 @@ import io.eia.platform.security.jwt.tamperSignature
 import io.eia.platform.security.jwt.unsigned
 import io.eia.platform.security.jwt.validClaims
 import io.eia.platform.security.jwt.verifier
+import io.eia.shared.kernel.Result
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.types.shouldBeInstanceOf
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
@@ -41,7 +49,16 @@ import kotlin.time.Duration.Companion.minutes
 private const val WRITE = "sales.order:write"
 private const val READ = "sales.order:read"
 
-private fun ApplicationTestBuilder.orderApi(verifier: JwtVerifier = verifier()) {
+private fun ApplicationTestBuilder.orderApi(
+    verifier: JwtVerifier = verifier(),
+    observability: Boolean = false,
+) {
+    if (observability) {
+        install(ServerObservability) {
+            val config = ObservabilityConfig.of("security-test").shouldBeInstanceOf<Result.Ok<ObservabilityConfig>>().value
+            runtime = Observability.init(config, TelemetrySinks(), installLogAppender = false)
+        }
+    }
     install(Authentication) {
         eiaJwt {
             this.verifier = verifier
@@ -85,7 +102,8 @@ class KtorAuthSpec :
                 response.headers[HttpHeaders.WWWAuthenticate] shouldBe """Bearer realm="eiaf""""
                 response.headers[HttpHeaders.CacheControl] shouldBe "no-store"
                 response.headers[HttpHeaders.ContentType] shouldBe "application/problem+json"
-                response.bodyAsText() shouldBe """{"type":"about:blank","title":"Unauthorized","status":401}"""
+                response.bodyAsText() shouldBe
+                    """{"type":"https://eiaf.example/problems/unauthorized","title":"Unauthorized","status":401}"""
             }
         }
 
@@ -124,7 +142,8 @@ class KtorAuthSpec :
                         val response = post(token)
                         response.status shouldBe HttpStatusCode.Unauthorized
                         response.headers[HttpHeaders.WWWAuthenticate] shouldBe """Bearer realm="eiaf", error="invalid_token""""
-                        response.bodyAsText() shouldBe """{"type":"about:blank","title":"Unauthorized","status":401}"""
+                        response.bodyAsText() shouldBe
+                            """{"type":"https://eiaf.example/problems/unauthorized","title":"Unauthorized","status":401}"""
                     }
                 }
             }
@@ -164,7 +183,7 @@ class KtorAuthSpec :
                 response.status shouldBe HttpStatusCode.Forbidden
                 response.headers[HttpHeaders.WWWAuthenticate] shouldBe
                     """Bearer realm="eiaf", error="insufficient_scope", scope="sales.order:write""""
-                response.bodyAsText() shouldBe """{"type":"about:blank","title":"Forbidden","status":403}"""
+                response.bodyAsText() shouldBe """{"type":"https://eiaf.example/problems/forbidden","title":"Forbidden","status":403}"""
             }
         }
 
@@ -199,6 +218,17 @@ class KtorAuthSpec :
 
                 response.status shouldBe HttpStatusCode.ServiceUnavailable
                 response.headers[HttpHeaders.WWWAuthenticate] shouldBe null
+                response.bodyAsText() shouldContain "\"type\":\"https://eiaf.example/problems/service-unavailable\""
+            }
+        }
+
+        test("401 / 403 の Problem Details には、その処理の correlationId を入れる(ADR-0022 §2)") {
+            testApplication {
+                orderApi(observability = true)
+                listOf(post(null), post(readOnly)).forEach { response ->
+                    val correlationId = response.headers[CorrelationHeaders.X_CORRELATION_ID]
+                    response.bodyAsText() shouldContain "\"correlationId\":\"$correlationId\""
+                }
             }
         }
 
