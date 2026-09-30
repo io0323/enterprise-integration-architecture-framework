@@ -19,6 +19,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestCoroutineScheduler
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
@@ -92,6 +93,21 @@ class CircuitBreakerSpec :
                 breaker.state shouldBe CircuitState.CLOSED
                 breaker.fail(1) // 6 件中 3 件 = 50%
                 breaker.state shouldBe CircuitState.OPEN
+            }
+
+            test("時間の窓は、ちょうど窓の長さだけ経った区間を外す") {
+                val config = CONFIG.copy(window = SlidingWindow.Time(10.seconds, buckets = 10))
+                val breaker = testScheduler.breaker(RecordingListener(), config)
+                breaker.fail(3) // 区間 0
+                delay(9.seconds)
+                breaker.fail(1) // 区間 9。区間 0 はまだ窓の中(4 件中 4 件)
+                breaker.state shouldBe CircuitState.OPEN
+
+                val other = testScheduler.breaker(RecordingListener(), config)
+                other.fail(3) // 区間 n
+                delay(10.seconds)
+                other.fail(1) // 区間 n + 10。区間 n は窓の外(1 件)
+                other.state shouldBe CircuitState.CLOSED
             }
 
             test("例外で終わった呼び出しは数えず、例外はそのまま伝える") {
@@ -170,6 +186,29 @@ class CircuitBreakerSpec :
                 breaker.fail(4)
                 delay(10.seconds)
                 repeat(2) { breaker.execute { failure(INVALID) } }
+                breaker.state shouldBe CircuitState.CLOSED
+            }
+
+            test("遷移を知らせるリスナーが例外を投げても、Half-Open の枠は返す") {
+                val throwing =
+                    object : ResilienceListener {
+                        var armed = false
+
+                        override fun onStateTransition(
+                            name: String,
+                            from: CircuitState,
+                            to: CircuitState,
+                        ) {
+                            if (armed && to == CircuitState.HALF_OPEN) throw Boom()
+                        }
+                    }
+                val breaker = testScheduler.breaker(throwing)
+                breaker.fail(4)
+                delay(10.seconds)
+                throwing.armed = true
+                shouldThrow<Boom> { breaker.execute { success() } }
+                throwing.armed = false
+                breaker.succeed(2)
                 breaker.state shouldBe CircuitState.CLOSED
             }
 
@@ -285,6 +324,7 @@ class CircuitBreakerSpec :
                     CircuitBreakerConfig(window = SlidingWindow.Count(5), minimumCalls = 6)
                 }
                 shouldThrow<IllegalArgumentException> { SlidingWindow.Time(1.seconds, buckets = 0) }
+                shouldThrow<IllegalArgumentException> { SlidingWindow.Time(Duration.INFINITE) }
                 CircuitBreakerConfig().window.shouldBeInstanceOf<SlidingWindow.Count>()
             }
         }

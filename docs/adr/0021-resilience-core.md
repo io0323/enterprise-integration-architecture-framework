@@ -34,11 +34,19 @@ Fallback → 締め切り(deadline) → Retry → Circuit Breaker → Bulkhead �
 | 締め切りは Retry の外側 | リトライを含む呼び出し全体の時間の予算(Framework 13.1 のタイムバジェット)を表すため |
 | Fallback は最も外側 | 締め切りを過ぎたときや遮断中も、代替動作を使えるようにするため |
 
-- **締め切りの残り時間を超えて待つリトライはしない。** RetryPolicy が決めた待ち時間が残り時間以上なら、待たずにその時点のエラーを返す(`RetrySuppression.DEADLINE`)。締め切りは設定(`ResilienceConfig.deadline`)で決め、呼び出しごとに上書きできる(入口から配分された残り時間を渡すため)。
+- **締め切り(タイムバジェット)を、試行とリトライの両方に効かせる。**
+  - 締め切りは設定(`ResilienceConfig.deadline`)で決め、呼び出しごとに上書きできる(入口から配分された残り時間を渡すため)。
+  - 試行の Timeout は `min(attemptTimeout, 残り時間)` にする。残り時間で打ち切った試行は `DeadlineExceeded` を返し、Circuit Breaker とリトライバジェットの失敗に数える。数えないと、`attemptTimeout` より短い締め切りで呼ばれ続けたときに、ハングした依存先に対して Circuit Breaker が開かない。
+  - Bulkhead の空きを待つ時間も、残り時間までに縮める。
+  - RetryPolicy が決めた待ち時間が残り時間以上なら、待たずにその時点のエラーを返す(`RetrySuppression.DEADLINE`)。
+  - 残り時間が 0 以下で呼ばれたら、呼び出さずに `DeadlineExceeded` を返す。上流で予算を使い切るのは正常に起こりうることなので、例外(プログラムの誤り)にしない。この場合は依存先に送っていないので、Circuit Breaker には数えない。
 - **Circuit Breaker が開いたら、リトライせずにすぐ返す。**
   - リトライの待機の前に状態を見て、Open なら待たずに返す(`RetrySuppression.CIRCUIT_OPEN`)。
   - Circuit Breaker が断った呼び出し(`CircuitOpen`)と、Bulkhead が断った呼び出し(`BulkheadFull`)は、リトライしない。どちらも手元の判断で、待っても依存先の状態は分からないため。
 - **リトライの待ち時間と回数は、kernel の `RetryPolicy.decide` をそのまま使う。** 同じ計算を `shared/resilience` に作らない。Jitter の乱数(`Random`)は `Resilience` に注入する。
+- **RetryPolicy は呼び出しごとに上書きできる**(`execute(retry = ...)`)。冪等でない呼び出しは `null` を渡してリトライを止める。依存先ごとの `Resilience` を分けずに済むので、Circuit Breaker とリトライバジェットの状態は同じ依存先で 1 つのまま保てる。
+- **リトライする呼び出しは冪等にする**(Framework 5.5・13.1「冪等前提」)。タイムアウトは `withTimeoutOrNull` で行うので、呼び出しが期限の直前に成功して戻っても、期限切れとして扱われてリトライされることがある。POST は `Idempotency-Key` を付ける。
+- リトライを見送る判定は、Circuit Breaker の `state` が OPEN かどうかだけを見る。Half-Open で試す枠が埋まっている場合は見送らず、待った後に `CircuitOpen` で断られる(待ち時間が無駄になるが、Half-Open は短い)。Open の期間が過ぎた後、次の呼び出しまでは OPEN のままなので、そのときもリトライを見送る。
 
 ### 2. エラー
 部品が返すエラーは `ResilienceError`(`DomainError.Retryable`)にまとめる。メッセージには依存先の名前と設定値だけを入れる。
@@ -46,11 +54,13 @@ Fallback → 締め切り(deadline) → Retry → Circuit Breaker → Bulkhead �
 | エラー | code | 意味 | Circuit Breaker | リトライ |
 |---|---|---|---|---|
 | `AttemptTimedOut` | `timeout` | 1 回の試行が `attemptTimeout` を超えた | 失敗に数える | する |
-| `DeadlineExceeded` | `deadline_exceeded` | 呼び出し全体が締め切りを超えた | (試行は中断され、数えない) | しない(最も外側) |
+| `DeadlineExceeded` | `deadline_exceeded` | 呼び出し全体が締め切り(タイムバジェット)を超えた | 試行を残り時間で打ち切ったときは失敗に数える。残り時間が 0 以下で呼び出さなかったときは数えない | しない |
 | `CircuitOpen` | `circuit_open` | 遮断中。`retryAfter` は Open が明けるまでの残り時間(Half-Open で枠が埋まっているときは `null`) | 数えない | しない |
 | `BulkheadFull` | `bulkhead_full` | 同時実行数の上限 | 数えない | しない |
 
 `CircuitOpen` と `BulkheadFull` は `ResilienceRejection`(依存先に送らずに断った呼び出し)とする。
+
+`DeadlineExceeded` も Retryable にする。依存先が一時的に遅いことを表し、入口では 503 などに写すため。同じ要求の予算は使い切っているので、その `Resilience` の中ではリトライしない。上位(別の `Resilience` やメッセージの消費側)がリトライするかは、上位の予算で判断する。
 
 ### 3. 失敗として数える範囲
 Circuit Breaker とリトライバジェット(§8)は、1 回の試行の結果を次のとおり数える。
@@ -62,6 +72,8 @@ Circuit Breaker とリトライバジェット(§8)は、1 回の試行の結果
 | NonRetryable なエラー(4xx・業務エラー・契約違反) | 成功 | 依存先は応答している。呼び出し側の誤りで遮断すると、ほかの正しい呼び出しまで止まる |
 | `ResilienceRejection` | 数えない | 手元の判断で、依存先の状態を表さない |
 | 例外・キャンセル | 数えない | 呼び出しは `Result` で失敗を返す約束(境界の例外は `catching` で変換する)。例外は約束の外なので、依存先の失敗とみなさない。Half-Open の枠は返す |
+
+呼び出し([block])の中で別の `Resilience` を使っていて、その `ResilienceRejection`(内側の依存先の遮断など)がそのまま返ってきた場合も、外側では数えず、リトライもしない。外側の依存先の状態ではないため。外側で別の扱いにしたいときは、呼び出しの中で別のエラーに写す。
 
 HTTP の 500 は、INTEGRATION_STANDARDS §3 でリトライの対象外(NonRetryable)なので、Circuit Breaker の失敗にも数えない。502 / 503 / 504・接続エラー・タイムアウトは Retryable なので数える。HTTP の応答の分類は ② の `platform/reliability` で行う。
 
@@ -78,7 +90,7 @@ HTTP の 500 は、INTEGRATION_STANDARDS §3 でリトライの対象外(NonRetr
 - **並行性**: 状態は `Mutex` で守る。遷移のたびに世代を進め、前の世代で許可した呼び出しの結果は数えない。Open の前に始まり、Half-Open の後に返った遅い呼び出しで、Half-Open の判定が狂わないようにするため。
 - **Half-Open の枠**: 同時に `halfOpenPermits` 件までを通し、それを超える呼び出しは `CircuitOpen(retryAfter = null)` で断る。例外やキャンセルで終わった試行は、枠を返す。
 - 枠の返却はキャンセルされた後でも行う(`NonCancellable`)。
-- 状態の遷移はリスナー(§7)に知らせる。リスナーはロックの外で呼ぶ。
+- 状態の遷移はリスナー(§7)に知らせる。リスナーはロックの外で呼ぶ。Open から Half-Open への遷移は、枠を取った後に `try` の中で知らせる。リスナーが例外を投げても、`finally` で枠を返せるようにするため(返さないと、Half-Open のまま抜けられなくなる)。
 
 ### 5. Timeout と Bulkhead
 - **Timeout** は coroutines のタイムアウト(`withTimeoutOrNull`)で行う。
@@ -87,12 +99,15 @@ HTTP の 500 は、INTEGRATION_STANDARDS §3 でリトライの対象外(NonRetr
   - `attemptTimeout` は必須(Framework 13.1: 全呼出しに明示設定)。
 - **Bulkhead** は `Semaphore` で同時実行数の上限を持つ。空きを待つ時間の上限 `maxWait` の既定は 0(待たずに `BulkheadFull`)で、正の値のときはその間だけ待つ。既定では付けない(`bulkhead = null`)。多くの依存先を持つサービスが、依存先ごとに設定する。
 
+- Bulkhead の空き待ちでは、許可を取れたかを `withTimeoutOrNull` の戻り値で判断しない。`acquire()` が許可を取って戻った直後に期限が来ると、`withTimeoutOrNull` は `null` を返し、取った許可が返されずに漏れるため(kotlinx.coroutines のドキュメント "Asynchronous timeout and resources")。`acquire()` の直後に、中断しない代入で取得を記録する。
+
 ### 6. 時間は単調な `TimeSource` で測る
 - 締め切りと Circuit Breaker の Open の期間は、注入した `TimeSource.WithComparableMarks`(既定は `TimeSource.Monotonic`)で測る。
 - ADR-0004 §5 は「`Clock` をインジェクションする」としているが、壁時計(`kotlin.time.Clock`)は NTP の補正や手動の変更で巻き戻りうる。巻き戻ると Open が長引き、進むとすぐ明けてしまう。経過時間を測る部品には単調な時刻が適している。
 - 業務の時刻(記録の時刻・期限の判定)は、これまでどおり `Clock` を使う(ADR-0011)。
 - テストでは、kotest の `coroutineTestScope` の仮想時間の `testScheduler.timeSource` を渡す。`delay` と `withTimeoutOrNull` も同じ仮想時間で進むので、実時間の sleep に頼らずに、jvm / js / linuxX64 / macosArm64 で同じテストを動かせる。
 - 同じ `context` の中のテストは仮想時間を共有するため、時刻は各テストの開始からの経過で比べる。
+- 仮想時間のテストはシングルスレッドで動き、競合を再現しない。そのため、jvmTest に実際のスレッド(`Dispatchers.Default`)で並列に呼ぶテスト(`ConcurrencyStressSpec`)を置く。
 
 ### 7. 出来事はリスナーで外へ知らせる
 `ResilienceListener` で、リトライ・リトライの見送り(理由つき)・Circuit Breaker の遷移・拒否・タイムアウト・Fallback を知らせる。
@@ -110,6 +125,7 @@ Circuit Breaker のしきい値(既定 50%)を下回る失敗率が長く続く�
 - 残高が `maxTokens` の半分以下の間は、リトライしない(`RetrySuppression.BUDGET_EXHAUSTED`)。初回の試行はいつも行う。
 - 失敗が続くと、リトライの割合はおよそ `tokenRatio` まで下がる。障害がないときは、残高は上限に張り付いていて何もしない。
 - 数え方は Circuit Breaker と同じ(§3)。
+- `tokenRatio` は小数 3 桁までの精度で扱う(gRFC A6 と同じ)。
 - 既定で有効にする。無効にするときは `retryBudget = null` を明示する。
 
 ### 9. Fallback は呼び出し側が明示的に渡す

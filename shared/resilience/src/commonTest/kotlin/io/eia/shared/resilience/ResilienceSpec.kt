@@ -21,7 +21,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.withTimeout
 import kotlin.random.Random
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
 /** 待ち時間を固定した RetryPolicy(100ms → 200ms → 400ms ...)。 */
@@ -92,6 +95,15 @@ class ResilienceSpec :
             test("maxAttempts(初回を含む)に達したら、最後のエラーを返す") {
                 val script = Script(failure())
                 testScheduler.resilience().execute { script.next() }.errorOrFail() shouldBe UNAVAILABLE
+                script.calls shouldBe 3
+            }
+
+            test("呼び出しごとに RetryPolicy を上書きできる(冪等でない呼び出しは null でリトライを止める)") {
+                val script = Script(failure())
+                val resilience = testScheduler.resilience()
+                resilience.execute(retry = null) { script.next() }
+                script.calls shouldBe 1
+                resilience.execute(retry = FIXED.copy(maxAttempts = 2)) { script.next() }
                 script.calls shouldBe 3
             }
 
@@ -178,6 +190,63 @@ class ResilienceSpec :
                 result.errorOrFail() shouldBe DeadlineExceeded("inventory", 1.seconds)
                 start.elapsedNow() shouldBe 1_000.milliseconds
                 listener.events shouldContainExactly listOf("timeout:deadline_exceeded")
+            }
+
+            test("残り時間が 0 以下なら、呼び出さずに DeadlineExceeded を返す(例外にしない)") {
+                var called = false
+                val result =
+                    testScheduler.resilience().execute(deadline = Duration.ZERO) {
+                        called = true
+                        success()
+                    }
+                result.errorOrFail() shouldBe DeadlineExceeded("inventory", Duration.ZERO)
+                called shouldBe false
+            }
+
+            test("試行の Timeout を締め切りの残り時間まで縮め、締め切りで打ち切った試行も Circuit Breaker の失敗に数える") {
+                val breaker = CircuitBreakerConfig(window = SlidingWindow.Count(2), minimumCalls = 2, halfOpenPermits = 1)
+                val config = BASE.copy(attemptTimeout = 5.seconds, circuitBreaker = breaker)
+                val resilience = testScheduler.resilience(config)
+                repeat(2) {
+                    val result =
+                        resilience.execute(deadline = 2.seconds) {
+                            delay(1.hours) // ハングした依存先
+                            success()
+                        }
+                    result.errorOrFail() shouldBe DeadlineExceeded("inventory", 2.seconds)
+                }
+                resilience.circuitBreaker?.state shouldBe CircuitState.OPEN
+            }
+
+            test("残り時間でリトライの待ちと試行を打ち切る(試行の途中で残り時間を使い切る)") {
+                val start = testScheduler.timeSource.markNow()
+                var calls = 0
+                val config = BASE.copy(attemptTimeout = 5.seconds, deadline = 1.seconds)
+                val result =
+                    testScheduler.resilience(config).execute {
+                        calls++
+                        if (calls == 1) failure() else delay(10.seconds).let { success() }
+                    }
+                result.errorOrFail() shouldBe DeadlineExceeded("inventory", 1.seconds)
+                calls shouldBe 2
+                start.elapsedNow() shouldBe 1.seconds
+            }
+
+            test("Bulkhead の空きを待つ時間も、締め切りの残り時間までに縮める") {
+                val config = BASE.copy(bulkhead = BulkheadConfig(maxConcurrentCalls = 1, maxWait = 10.seconds))
+                val resilience = testScheduler.resilience(config)
+                coroutineScope {
+                    launch {
+                        resilience.execute {
+                            delay(1.minutes)
+                            success()
+                        }
+                    }
+                    testScheduler.runCurrent()
+                    val start = testScheduler.timeSource.markNow()
+                    resilience.execute(deadline = 500.milliseconds) { success() }.errorOrFail() shouldBe BulkheadFull("inventory")
+                    start.elapsedNow() shouldBe 500.milliseconds
+                }
             }
 
             test("呼び出しごとの締め切りで、設定の締め切りを上書きできる") {
@@ -307,8 +376,5 @@ class ResilienceSpec :
         test("不正な設定は拒否する") {
             shouldThrow<IllegalArgumentException> { ResilienceConfig(attemptTimeout = 0.seconds) }
             shouldThrow<IllegalArgumentException> { ResilienceConfig(attemptTimeout = 1.seconds, deadline = 0.seconds) }
-            shouldThrow<IllegalArgumentException> {
-                testScheduler.resilience().execute(deadline = (-1).seconds) { success() }
-            }
         }
     })

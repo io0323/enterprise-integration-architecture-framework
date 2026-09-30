@@ -44,7 +44,7 @@ ADR-0001 で domain / application / shared を KMP(commonMain)とした。一方
 | Konsist | `tools/architecture-test` |
 
 ### 5. 回復性の中核を KMP に置く
-- `shared/resilience`(KMP、新設)に置くもの: Retry(`kernel.RetryPolicy` を利用)、Timeout、Circuit Breaker の状態機械、Bulkhead(Semaphore)、Fallback 合成。すべて coroutines ベースで作り、`Clock` と `Random` をインジェクションする。W3C traceparent の生成・解析もここに置く(`io.eia.shared.resilience.trace`)。Correlation ID は `shared/kernel` の `CorrelationId` を使う(resilience は kernel に依存するため、SDK からも両方を使える。改訂履歴 2026-09-26)。
+- `shared/resilience`(KMP、新設)に置くもの: Retry(`kernel.RetryPolicy` を利用)、Timeout、Circuit Breaker の状態機械、Bulkhead(Semaphore)、Fallback 合成。すべて coroutines ベースで作り、`Clock` と `Random` をインジェクションする(経過時間は単調な `TimeSource`。改訂履歴 2026-09-30・ADR-0021 §6)。W3C traceparent の生成・解析もここに置く(`io.eia.shared.resilience.trace`)。Correlation ID は `shared/kernel` の `CorrelationId` を使う(resilience は kernel に依存するため、SDK からも両方を使える。改訂履歴 2026-09-26)。
 - `platform/reliability` と `platform/observability` は、これを Ktor / Kafka / OTel に結線する JVM アダプタとする。
 - traceparent の trace-flags は、W3C Trace Context Level 2(Candidate Recommendation Draft 2024-03-28)に従って扱う。
   - 版 00 の受信では sampled(0x01。§3.2.2.5.1)と random(0x02。§3.2.2.5.2)だけを残す。それ以外のビットは §3.2.2.5.3 Other Flags の「Vendors MUST set those to zero」に従って 0 にする。

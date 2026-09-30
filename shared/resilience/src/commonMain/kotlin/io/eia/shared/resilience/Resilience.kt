@@ -3,6 +3,7 @@ package io.eia.shared.resilience
 import io.eia.shared.kernel.DomainError
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.RetryDecision
+import io.eia.shared.kernel.RetryPolicy
 import io.eia.shared.kernel.err
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
@@ -20,10 +21,13 @@ import kotlin.time.TimeSource
  * Fallback → 締め切り(deadline) → Retry → Circuit Breaker → Bulkhead → 1 回の Timeout → block
  * ```
  * - Retry の待ち時間と回数は kernel の [io.eia.shared.kernel.RetryPolicy] で決める(Retry-After の優先を含む)。
- * - 締め切りまでの残り時間を超えて待つリトライはしない。Circuit Breaker が開いたら、待たずに返す。
+ * - 締め切りまでの残り時間を超えて待つリトライはしない。試行の Timeout も残り時間までに縮める。
+ *   Circuit Breaker が開いたら、待たずに返す。
  * - 手元で断った呼び出し([ResilienceRejection])はリトライしない。
  * - タイムアウトは coroutines のタイムアウトで行い、呼び出し側のキャンセル(`CancellationException`)は捕まえずに伝える。
  * - [block] は例外ではなく `Result` で失敗を返す(境界の例外は `catching` で変換しておく)。[block] の例外はそのまま伝える。
+ * - 期限の直前に [block] が成功しても、期限切れとして扱われてリトライされることがある。
+ *   リトライする呼び出しは冪等にする(POST は `Idempotency-Key` 必須。Framework 5.5・13.1)。冪等でなければ `retry = null` を渡す。
  *
  * @param timeSource 締め切りと Circuit Breaker の Open の期間を測る単調な時刻。テストでは仮想時間を渡す
  * @param random リトライの Jitter に使う乱数。テストでは固定の種を渡す
@@ -44,28 +48,25 @@ public class Resilience(
     /**
      * [block] を呼ぶ。
      *
-     * @param deadline この呼び出しの締め切り。既定は [ResilienceConfig.deadline]
+     * @param deadline この呼び出しの締め切り(タイムバジェット)。既定は [ResilienceConfig.deadline]。
+     *   入口から配分された残り時間を渡してよい。0 以下なら [block] を呼ばずに [DeadlineExceeded] を返す
+     * @param retry この呼び出しの RetryPolicy。既定は [ResilienceConfig.retry]。冪等でない呼び出しは `null` を渡して
+     *   リトライを止める(Circuit Breaker とリトライバジェットは、同じ依存先の状態を共有したまま使う)
      */
     public suspend fun <T> execute(
         deadline: Duration? = config.deadline,
+        retry: RetryPolicy? = config.retry,
         block: suspend () -> Result<T, DomainError>,
-    ): Result<T, DomainError> {
-        if (deadline == null) return retrying(deadlineAt = null, block)
-        require(deadline.isPositive()) { "deadline は正の値です: $deadline" }
-        return withTimeoutOrNull(deadline) { retrying(timeSource.markNow() + deadline, block) }
-            ?: DeadlineExceeded(name, deadline).let { error ->
-                listener.onTimeout(error)
-                err(error)
-            }
-    }
+    ): Result<T, DomainError> = retrying(deadline?.let { Deadline(it, timeSource.markNow() + it) }, retry, block)
 
     /** [execute] の最終的なエラーが [fallback] の対象なら、代替動作の結果を返す。 */
     public suspend fun <T> execute(
         fallback: Fallback<T>,
         deadline: Duration? = config.deadline,
+        retry: RetryPolicy? = config.retry,
         block: suspend () -> Result<T, DomainError>,
     ): Result<T, DomainError> {
-        val result = execute(deadline, block)
+        val result = execute(deadline, retry, block)
         if (result !is Result.Err || !fallback.appliesTo(result.error)) return result
         listener.onFallback(name, result.error)
         return fallback.handler(result.error)
@@ -73,19 +74,19 @@ public class Resilience(
 
     @Suppress("ReturnCount") // リトライを見送る理由ごとに、その時点の結果を返す
     private suspend fun <T> retrying(
-        deadlineAt: ComparableTimeMark?,
+        deadline: Deadline?,
+        policy: RetryPolicy?,
         block: suspend () -> Result<T, DomainError>,
     ): Result<T, DomainError> {
-        val policy = config.retry
         var attempt = 1
         while (true) {
-            val result = attemptOnce(block)
+            val result = attemptOnce(deadline, block)
             val error = (result as? Result.Err)?.error ?: return result
-            if (policy == null || error is ResilienceRejection) return result
+            if (policy == null || error is ResilienceRejection || error is DeadlineExceeded) return result
             val decision = policy.decide(attempt, error, random) as? RetryDecision.Retry ?: return result
             val suppression =
                 when {
-                    deadlineAt != null && decision.delay >= -deadlineAt.elapsedNow() -> RetrySuppression.DEADLINE
+                    deadline != null && decision.delay >= deadline.remaining() -> RetrySuppression.DEADLINE
                     circuitBreaker?.state == CircuitState.OPEN -> RetrySuppression.CIRCUIT_OPEN
                     retryBudget?.allowsRetry() == false -> RetrySuppression.BUDGET_EXHAUSTED
                     else -> null
@@ -100,22 +101,45 @@ public class Resilience(
         }
     }
 
-    private suspend fun <T> attemptOnce(block: suspend () -> Result<T, DomainError>): Result<T, DomainError> {
-        val timed: suspend () -> Result<T, DomainError> = { withAttemptTimeout(block) }
-        val isolated: suspend () -> Result<T, DomainError> = { bulkhead?.execute(timed) ?: timed() }
+    /**
+     * 1 回の試行。締め切りがあれば、試行の Timeout と Bulkhead の待ち時間を残り時間までに縮める(ADR-0021 §1)。
+     * 締め切りで打ち切った試行も、依存先が期限内に応答しなかった失敗として Circuit Breaker に数える
+     * (数えないと、ハングした依存先に対して Circuit Breaker が開かない)。
+     */
+    private suspend fun <T> attemptOnce(
+        deadline: Deadline?,
+        block: suspend () -> Result<T, DomainError>,
+    ): Result<T, DomainError> {
+        val remaining = deadline?.remaining()
+        if (deadline != null && remaining != null && !remaining.isPositive()) return timedOut(DeadlineExceeded(name, deadline.budget))
+        val timeout = if (remaining != null && remaining < config.attemptTimeout) remaining else config.attemptTimeout
+        val onTimeout: ResilienceError =
+            if (deadline != null && timeout == remaining) {
+                DeadlineExceeded(name, deadline.budget)
+            } else {
+                AttemptTimedOut(name, config.attemptTimeout)
+            }
+        val timed: suspend () -> Result<T, DomainError> = { withTimeoutOrNull(timeout) { block() } ?: timedOut(onTimeout) }
+        val isolated: suspend () -> Result<T, DomainError> = { bulkhead?.execute(remaining, timed) ?: timed() }
         val result = circuitBreaker?.execute(isolated) ?: isolated()
         retryBudget?.record(Outcome.of(result))
         return result
     }
 
     /**
-     * 1 回の試行を [ResilienceConfig.attemptTimeout] で打ち切る。`withTimeoutOrNull` は自分の期限切れだけを `null` にし、
-     * 呼び出し側のキャンセルや [block] の中の別のタイムアウトはそのまま伝える。
+     * タイムアウトを知らせて Err にする。タイムアウトは `withTimeoutOrNull` で行う。`withTimeoutOrNull` は自分の期限切れだけを
+     * `null` にし、呼び出し側のキャンセルや [block] の中の別のタイムアウトは、捕まえずにそのまま伝える。
      */
-    private suspend fun <T> withAttemptTimeout(block: suspend () -> Result<T, DomainError>): Result<T, DomainError> =
-        withTimeoutOrNull(config.attemptTimeout) { block() }
-            ?: AttemptTimedOut(name, config.attemptTimeout).let { error ->
-                listener.onTimeout(error)
-                err(error)
-            }
+    private fun timedOut(error: ResilienceError): Result<Nothing, DomainError> {
+        listener.onTimeout(error)
+        return err(error)
+    }
+
+    /** 締め切り。[budget] は渡された予算、[at] は期限の時刻。 */
+    private class Deadline(
+        val budget: Duration,
+        private val at: ComparableTimeMark,
+    ) {
+        fun remaining(): Duration = -at.elapsedNow()
+    }
 }
