@@ -2,6 +2,7 @@ package io.eia.shared.resilience
 
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlin.concurrent.Volatile
 
 /**
  * リトライバジェットの設定(ADR-0021 §8)。gRPC の retry throttling(gRFC A6)と同じ方式のトークンバケット。
@@ -35,7 +36,12 @@ internal class RetryBudget(
     private val max = config.maxTokens * MILLI
     private val ratio = (config.tokenRatio * MILLI).toInt().coerceAtLeast(1)
     private val mutex = Mutex()
+
+    @Volatile
     private var tokens = max
+
+    /** 残高(トークン数)。ロックを取らずに読む最新の値で、メトリクスの gauge に使う。 */
+    val remaining: Double get() = tokens.toDouble() / MILLI
 
     suspend fun record(outcome: Outcome) {
         mutex.withLock {

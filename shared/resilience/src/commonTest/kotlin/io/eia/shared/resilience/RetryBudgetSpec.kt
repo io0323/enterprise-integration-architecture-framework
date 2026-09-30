@@ -28,6 +28,14 @@ class RetryBudgetSpec :
             budget.allowsRetry() shouldBe true // 0 で止まっていたので 2 に戻る
         }
 
+        test("残高を小数で読める") {
+            val budget = RetryBudget(RetryBudgetConfig(maxTokens = 10, tokenRatio = 0.25))
+            budget.remaining shouldBe 10.0
+            repeat(3) { budget.record(Outcome.FAILURE) }
+            budget.record(Outcome.SUCCESS)
+            budget.remaining shouldBe 7.25
+        }
+
         test("不正な設定は拒否する") {
             shouldThrow<IllegalArgumentException> { RetryBudgetConfig(maxTokens = 0) }
             shouldThrow<IllegalArgumentException> { RetryBudgetConfig(tokenRatio = 0.0) }
