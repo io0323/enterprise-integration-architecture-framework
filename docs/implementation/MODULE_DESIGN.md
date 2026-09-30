@@ -70,7 +70,8 @@ services/order/
   adapters/src/main/kotlin/io/eia/order/adapters/             # package io.eia.order.adapters
     in/rest/OrderRoutes.kt, OrderDtoMapper.kt
     out/persistence/ExposedOrderRepository.kt, ExposedTransactionRunner.kt, OrderSchema.kt(order と監査のマイグレーション),
-                    UuidV7OrderIdGenerator.kt, ExposedOutbox.kt(P06)
+                    UuidV7OrderIdGenerator.kt, PostgresIdempotencyStore.kt, ExposedTransactionBoundary.kt(冪等。ADR-0022 §3),
+                    ExposedOutbox.kt(P06)
   adapters/src/main/resources/db/order/                       # Flyway(所有者のロールで適用。アプリのロールには必要な権限だけを付ける)
   app/src/main/kotlin/io/eia/order/app/                       # package io.eia.order.app
     Main.kt, Modules.kt(Koin), Config.kt
