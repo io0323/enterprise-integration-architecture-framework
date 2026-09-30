@@ -33,6 +33,14 @@ class ArchitectureSpec :
             ArchitectureRules.platformIndependentOfServices(codeBase).assertNone()
         }
 
+        test("platform 間の本番の依存は許可した一覧だけ(MODULE_DESIGN §2)") {
+            PlatformDependencyRules.unexpectedDependencies(codeBase).assertNone()
+        }
+
+        test("platform 間の依存に循環がない") {
+            PlatformDependencyRules.cycles(codeBase).assertNone()
+        }
+
         test("commonMain は ADR-0004 の禁止 import を含まない") {
             ArchitectureRules.commonMainPurity(codeBase).assertNone()
         }

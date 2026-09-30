@@ -13,6 +13,8 @@ tasks.test {
         .files(
             fileTree(repositoryRoot) {
                 include("**/*.kt")
+                // platform 間の依存の規則は platform/*/build.gradle.kts も読む
+                include("platform/*/build.gradle.kts")
                 exclude("**/build/**", ".gradle/**", "**/.kotlin/**", "**/node_modules/**")
             },
         ).withPathSensitivity(PathSensitivity.RELATIVE)

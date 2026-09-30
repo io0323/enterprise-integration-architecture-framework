@@ -45,6 +45,28 @@ class ArchitectureRulesSpec :
                     listOf("PlatformDependsOnService.kt")
             }
 
+            test("許可していない platform 間の依存(import・完全修飾名・build.gradle.kts。テストの依存は除く)") {
+                val found = PlatformDependencyRules.unexpectedDependencies(violations)
+                found.map { it.path } shouldContainExactlyInAnyOrder
+                    listOf(
+                        "platform/observability/src/main/kotlin/io/eia/platform/observability/DependsOnSecurity.kt",
+                        "platform/reliability/src/main/kotlin/io/eia/platform/reliability/QualifiedAudit.kt",
+                        "platform/security/build.gradle.kts",
+                    )
+                found.map { it.detail.substringBefore('(') } shouldContainExactlyInAnyOrder
+                    listOf("observability → security", "reliability → audit", "security → observability")
+            }
+
+            test("platform 間の循環") {
+                PlatformDependencyRules.cycles(violations).map { it.detail } shouldBe
+                    listOf("observability → security → observability")
+            }
+
+            test("循環を 1 回ずつ、名前が最小のモジュールから列挙する") {
+                val graph = mapOf("c" to setOf("a"), "a" to setOf("b"), "b" to setOf("c", "d"), "d" to setOf("d"))
+                PlatformDependencyRules.findCycles(graph) shouldContainExactlyInAnyOrder listOf(listOf("a", "b", "c"), listOf("d"))
+            }
+
             test("commonMain の禁止 import(integration-sdk の io.ktor.client は許可)") {
                 val found = ArchitectureRules.commonMainPurity(violations)
                 found.map { it.detail.substringAfter("import ").substringBefore('(') } shouldContainExactlyInAnyOrder
@@ -123,6 +145,17 @@ class ArchitectureRulesSpec :
                 ArchitectureRules.domainErrorKindIsExclusive(compliant).shouldBeEmpty()
                 ArchitectureRules.otelSdkOnlyInAllowedModules(compliant).shouldBeEmpty()
                 ArchitectureRules.nimbusOnlyInSecurity(compliant).shouldBeEmpty()
+            }
+
+            test("platform 間の依存は許可した一覧だけで、循環がない(テストの依存とコメントは数えない)") {
+                PlatformDependencyRules.unexpectedDependencies(compliant).shouldBeEmpty()
+                PlatformDependencyRules.cycles(compliant).shouldBeEmpty()
+                PlatformDependencyRules.dependencies(compliant).map { it.from to it.to }.toSet() shouldBe
+                    setOf("security" to "reliability")
+            }
+
+            test("許可した一覧そのものに循環がない") {
+                PlatformDependencyRules.findCycles(PlatformDependencyRules.ALLOWED).shouldBeEmpty()
             }
         }
 
