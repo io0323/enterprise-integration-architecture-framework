@@ -8,6 +8,7 @@ import kotlinx.coroutines.sync.withLock
  *
  * - 残高は [maxTokens] から始まる。Retryable な失敗のたびに 1 減らし、成功のたびに [tokenRatio] 増やす([maxTokens] が上限)。
  * - 残高が [maxTokens] の半分以下の間は、リトライしない(初回の試行はいつも行う)。
+ * - [tokenRatio] は小数 3 桁までの精度で扱う(gRFC A6 と同じ。0.001 未満は 0.001 に切り上げ、それより細かい端数は切り捨てる)。
  *
  * 失敗が続くと、リトライの割合がおよそ [tokenRatio] まで下がる。Circuit Breaker のしきい値を下回る失敗率が長く続くときに、
  * リトライで依存先の負荷を増やし続けること(Retry Storm)を防ぐ。

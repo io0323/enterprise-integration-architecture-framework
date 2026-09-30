@@ -69,6 +69,8 @@ public class CircuitBreaker(
             }
         var outcome = Outcome.IGNORED
         try {
+            // 遷移の通知は枠を取った後に try の中で行う。リスナーが例外を投げても、finally で枠を返せるように
+            permit.transition?.publish()
             return block().also { outcome = Outcome.of(it) }
         } finally {
             // キャンセルされても枠を返せるように、キャンセルできない文脈で記録する
@@ -76,33 +78,31 @@ public class CircuitBreaker(
         }
     }
 
-    private suspend fun acquire(): Acquisition {
-        var transition: Transition? = null
-        val acquisition =
-            mutex.withLock {
-                when (state) {
-                    CircuitState.CLOSED -> {
-                        Acquisition.Permit(generation)
-                    }
+    private suspend fun acquire(): Acquisition =
+        mutex.withLock {
+            when (state) {
+                CircuitState.CLOSED -> {
+                    Acquisition.Permit(generation)
+                }
 
-                    CircuitState.OPEN -> {
-                        val remaining = config.openDuration - openedAt.elapsedNow()
-                        if (remaining.isPositive()) {
-                            Acquisition.Rejected(CircuitOpen(name, remaining))
-                        } else {
-                            transition = moveTo(CircuitState.HALF_OPEN)
-                            issueHalfOpen()
+                CircuitState.OPEN -> {
+                    val remaining = config.openDuration - openedAt.elapsedNow()
+                    if (remaining.isPositive()) {
+                        Acquisition.Rejected(CircuitOpen(name, remaining))
+                    } else {
+                        val transition = moveTo(CircuitState.HALF_OPEN)
+                        when (val issued = issueHalfOpen()) {
+                            is Acquisition.Permit -> issued.copy(transition = transition)
+                            is Acquisition.Rejected -> issued
                         }
                     }
+                }
 
-                    CircuitState.HALF_OPEN -> {
-                        issueHalfOpen()
-                    }
+                CircuitState.HALF_OPEN -> {
+                    issueHalfOpen()
                 }
             }
-        transition?.publish()
-        return acquisition
-    }
+        }
 
     private fun issueHalfOpen(): Acquisition =
         if (halfOpenIssued < config.halfOpenPermits) {
@@ -186,8 +186,10 @@ public class CircuitBreaker(
     }
 
     private sealed interface Acquisition {
+        /** [transition] は、この許可を出すときに起きた遷移(Open → Half-Open)。 */
         data class Permit(
             val generation: Long,
+            val transition: Transition? = null,
         ) : Acquisition
 
         data class Rejected(

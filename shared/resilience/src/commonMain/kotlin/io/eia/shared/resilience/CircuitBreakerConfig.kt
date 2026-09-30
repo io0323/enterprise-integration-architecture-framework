@@ -59,7 +59,7 @@ public sealed interface SlidingWindow {
         public val buckets: Int = DEFAULT_BUCKETS,
     ) : SlidingWindow {
         init {
-            require(duration.isPositive()) { "duration は正の値です: $duration" }
+            require(duration.isPositive() && duration.isFinite()) { "duration は有限の正の値です: $duration" }
             require(buckets >= 1) { "buckets は 1 以上です: $buckets" }
             require((duration / buckets).isPositive()) { "区間の幅が 0 になります: $duration / $buckets" }
         }

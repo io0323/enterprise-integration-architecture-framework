@@ -35,8 +35,15 @@ public class Bulkhead(
     private val semaphore = Semaphore(config.maxConcurrentCalls)
 
     /** [block] を呼ぶ。上限に達していて [BulkheadConfig.maxWait] の間に空かなければ、呼ばずに [BulkheadFull] を返す。 */
-    public suspend fun <T> execute(block: suspend () -> Result<T, DomainError>): Result<T, DomainError> {
-        if (!acquire()) {
+    public suspend fun <T> execute(block: suspend () -> Result<T, DomainError>): Result<T, DomainError> = execute(null, block)
+
+    /** [limit] があれば、空きを待つ時間を [limit] までに縮める(締め切りの残り時間。ADR-0021 §1)。 */
+    internal suspend fun <T> execute(
+        limit: Duration?,
+        block: suspend () -> Result<T, DomainError>,
+    ): Result<T, DomainError> {
+        val maxWait = if (limit != null && limit < config.maxWait) limit else config.maxWait
+        if (!acquire(maxWait)) {
             val rejection = BulkheadFull(name)
             listener.onRejected(rejection)
             return err(rejection)
@@ -48,7 +55,19 @@ public class Bulkhead(
         }
     }
 
-    private suspend fun acquire(): Boolean =
-        semaphore.tryAcquire() ||
-            (config.maxWait.isPositive() && withTimeoutOrNull(config.maxWait) { semaphore.acquire() } != null)
+    /**
+     * 許可を取れたかを返す。`withTimeoutOrNull` の戻り値では判断しない。`acquire()` が許可を取って戻った直後に期限が来ると、
+     * `withTimeoutOrNull` は `null` を返し、取った許可が返されずに漏れるため。`acquire()` の直後の代入は中断しないので、
+     * `acquired` は取得の成否を正しく表す(許可を取る前にキャンセルされたら、`acquire()` は許可を取らずに終わる)。
+     */
+    private suspend fun acquire(maxWait: Duration): Boolean {
+        var acquired = semaphore.tryAcquire()
+        if (!acquired && maxWait.isPositive()) {
+            withTimeoutOrNull(maxWait) {
+                semaphore.acquire()
+                acquired = true
+            }
+        }
+        return acquired
+    }
 }
