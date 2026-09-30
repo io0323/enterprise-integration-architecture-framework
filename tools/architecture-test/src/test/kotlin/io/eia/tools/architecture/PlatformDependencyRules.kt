@@ -25,11 +25,14 @@ internal object PlatformDependencyRules {
      * - audit → security: S3 の資格情報を SecretProvider から取る(ADR-0008・ADR-0019 §6)
      * - audit → observability: details の値のマスキング(ADR-0018 §3)
      * - security → reliability: トークン取得の Retry と Circuit Breaker、Retry-After の解析(ADR-0019 §4・ADR-0021)
+     * - security → api: 401 / 403 / 503 を Problem Details で返す(ADR-0019 §5・ADR-0022 §2)
+     * - api → observability: Problem Details の correlationId(ADR-0022 §2)
      */
     val ALLOWED: Map<String, Set<String>> =
         mapOf(
+            "api" to setOf("observability"),
             "audit" to setOf("security", "observability"),
-            "security" to setOf("reliability"),
+            "security" to setOf("reliability", "api"),
         )
 
     private const val PLATFORM_PACKAGE = "io.eia.platform"
