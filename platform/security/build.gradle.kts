@@ -24,4 +24,5 @@ dependencies {
 
     integrationTestImplementation(project(":platform:test-support"))
     integrationTestImplementation(libs.ktor.client.cio)
+    integrationTestImplementation(libs.testcontainers.toxiproxy)
 }
