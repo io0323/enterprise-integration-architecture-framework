@@ -84,7 +84,7 @@ P04a ③ で `platform/security` を作る。Framework 12.1 は、受信側で�
   - 取得は `Mutex` の中で 1 つだけ走らせる。同時に 100 回呼ばれても要求は 1 回になる。
   - ロックを待っていた呼び出しは、待っている間に終わった取得の結果を使う(成功ならキャッシュ、失敗ならその失敗)。IdP の障害中に、待ち行列の全員が順に取り直して「待ち数 × タイムアウト」待たされることを防ぐ。
   - 期限前の取り直しの最中は、ほかの呼び出しを待たせずに期限内のトークンを返す。
-- **タイムアウト**: 1 回の取得(接続から本文の読み取りまで)を既定 **5 秒**で打ち切る(`withTimeoutOrNull`)。
+- **タイムアウト**: 1 回の取得(接続から本文の読み取りまで)を既定 **5 秒**で打ち切る。P04b ② から、`Resilience` の `attemptTimeout` で行う(ADR-0021 §11。改訂履歴 2026-09-30)。
 - **失敗時の挙動**:
   - 失敗はキャッシュしない。
   - 期限前の取り直しに失敗し、期限内のトークンがあれば、それを返して WARN を残す。次の取り直しは `refreshRetryInterval`(既定 5 秒)の後にする。
@@ -100,7 +100,12 @@ P04a ③ で `platform/security` を作る。Framework 12.1 は、受信側で�
   | 応答の形式の不正 | NonRetryable(`InvalidTokenResponse`) | `access_token` がない・`token_type` が Bearer でない・`expires_in` が不正・JSON でない・64 KiB 超 |
   | Secret を取得できない | 設定の不備は NonRetryable、読み取りの一時的な失敗は Retryable(`ClientSecretUnavailable`) | 要求は送らない |
 
-- **Retry と Circuit Breaker は P04b で結線する**(`platform/reliability`)。ここでは 1 回だけ要求し、上の分類で返す。同期呼び出しの 4 点セット(Framework 13)のうち、Timeout はここで、Retry・Circuit Breaker・Fallback(期限内のトークンを使い続けること)の結線は P04b で行う。
+- **Retry と Circuit Breaker は `shared/resilience` の `Resilience` で行う**(P04b ②。ADR-0021 §11。改訂履歴 2026-09-30)。
+  - 構築時に受け取った(または既定で作った)1 つの `Resilience` を、すべての取得で使う。呼び出しごとに新しい `Resilience` を作らない(Circuit Breaker とリトライバジェットが複数回の取得にまたがる状態を持つため)。
+  - 既定: 試行 5 秒・締め切り 10 秒・`RetryPolicy.DEFAULT`・リトライバジェットと Circuit Breaker は既定値。
+  - 上の表の Retryable はリトライし、429 / 503 の `Retry-After` を優先して待つ(上限を超える Retry-After と、締め切りを超える待ちでは打ち切る)。NonRetryable(400・401 の `invalid_client` / `unauthorized_client` など)はリトライせず、Circuit Breaker の成功に数える。
+  - Circuit Breaker が開いている間は IdP に要求を送らず、`TokenEndpointUnavailable("circuit_open")` を返す。
+  - 同期呼び出しの 4 点セット(Framework 13)の Fallback は、期限内のトークンを使い続けること。
 - **クライアントの認証(`client_secret_basic`)**: RFC 6749 §2.3.1 のとおり、クライアント ID と Secret を application/x-www-form-urlencoded でエンコードしてから `id:secret` を Base64 にする。Secret に `:` を含んでも区切りと混同されない。記号(`: + / %` 空白 `~ *` `= &`)を含む Secret で、単体テスト(エンコードの結果)と統合テスト(実際の Keycloak で認証が通ること)の両方を確かめている。
 - **Secret は取得のたびに `SecretProvider` から読む**(ローテーションに追従するため)。
 - **invalidate**: 下流が 401 を返したときに呼ぶ。キャッシュが別のトークンに替わっていれば何もしない(取り直したばかりのトークンを捨てないため)。
@@ -153,7 +158,7 @@ P04a ③ で `platform/security` を作る。Framework 12.1 は、受信側で�
 - **leeway を Nimbus の既定(60 秒)にする**: 期限切れのトークンを受け入れる時間が長くなる。30 秒で足りるため不採用。
 - **`outageTolerance` を使わない(IdP が止まったら、キャッシュの期限で 503 にする)**: 鍵の漏洩への耐性は上がるが、IdP の 5 分を超える障害で全 API が止まる。§3 のとおり可用性を優先する。高機密の連携は設定で短くする。
 - **`outageTolerance` を無期限にする**: IdP の長い障害にも耐えるが、差し替えた鍵がいつまでも受け入れられうる。不採用。
-- **トークンの取得の失敗をしばらくキャッシュする(ネガティブキャッシュ)**: IdP への負荷は減るが、復旧してもすぐには取得できない。同時の取得をまとめることと、期限内のトークンを使い続けることで足りるため不採用。Retry と Circuit Breaker は P04b で結線する。
+- **トークンの取得の失敗をしばらくキャッシュする(ネガティブキャッシュ)**: IdP への負荷は減るが、復旧してもすぐには取得できない。同時の取得をまとめることと、期限内のトークンを使い続けることで足りるため不採用。IdP の障害中の要求は、Circuit Breaker(P04b ②)で止める。
 - **`client_secret_post`(Secret をフォームの本文で送る)**: RFC 6749 §2.3.1 は Basic 認証をサポートすることを求め、本文での送信は推奨していない(NOT RECOMMENDED)。本文をログに出すプラグインがあると漏れやすいため不採用。
 - **Secret の値を起動時に 1 回だけ読んでキャッシュする**: ファイルの差し替えによるローテーションに追従できないため不採用。
 - **realm の既定のクライアントスコープに `sales.order:*` を入れる**: §8 のとおり不採用。
@@ -163,9 +168,12 @@ P04a ③ で `platform/security` を作る。Framework 12.1 は、受信側で�
 - JWKS の取得は Nimbus の `DefaultResourceRetriever`(`HttpURLConnection`)で行う。サービスの Ktor Client(`ClientObservability` の traceparent・Correlation ID)を通らないため、JWKS の取得はトレースに出ない。
 - `outageTolerance`(既定 15 分)の間、差し替えた鍵が受け入れられうる(§3)。
 - 拒否した理由を応答に含めないため、クライアントの開発者は、サーバのログかメトリクスで理由を確かめる必要がある。
-- トークンの取得は 1 回だけ要求し、リトライしない。P04b の結線までは、呼び出し側が `Retryable` を見て判断する。
+- トークンの取得のリトライは、同時の取得をまとめるロックの中で行う。IdP の障害中は、期限内のトークンがない呼び出しが、締め切り(既定 10 秒)まで待たされうる。
 - `EnvSecretProvider` はファイルを毎回読むため、呼び出しの多い経路でキャッシュせずに使うと I/O が増える。トークンの取得はトークンのキャッシュの外側でしか Secret を読まないため、問題にならない。
-- `JwtVerifier.verify` は、共有の `Dispatchers.IO` で動く。JWKS の取得(接続 2 秒 + 読み取り 2 秒)と取り直しの待ち(最長 15 秒)の間、IO のスレッドを占有する。IdP が遅いときに負荷が高いと、同じ IO のスレッドを使うほかの処理(DB など)が待たされうる。P04b の Bulkhead(依存先ごとのスレッドの分離)で、専用の dispatcher に分けるかを判断する。
+- `JwtVerifier.verify` は、共有の `Dispatchers.IO` で動く。JWKS の取得(接続 2 秒 + 読み取り 2 秒)と取り直しの待ち(最長 15 秒)の間、IO のスレッドを占有する。IdP が遅いときに負荷が高いと、同じ IO のスレッドを使うほかの処理(DB など)が待たされうる。P04b の Bulkhead(ADR-0021 §5)は同時実行数の上限(`Semaphore`)で、スレッドは分けない。専用の dispatcher に分けるかは、`JwtVerifier` を使う最初のサービス(P05)で、負荷を見て判断する(改訂履歴 2026-09-30)。
 - `scope` のクレームは文字列(空白区切り)だけを受け付ける。配列の `scope`(または `scp`)を出す IdP を足すときは、`TokenClaims` と、この ADR を改訂する。
 - 認証・認可の拒否は、DEBUG ログとメトリクスにだけ残す。B2B や高機密の連携で「誰が・いつ・何を」の監査(Framework 14.1)が要る場合は、`platform/audit` への記録の経路を、その連携のフェーズで追加する。
 - ローカルの Keycloak は http(`sslRequired: none`)のため、トークンと Client Secret は平文で流れる(ADR-0008 の転送路の暗号化の縮退。#29)。本番の構成では https の `tokenEndpoint` と `jwksUri` を使う。
+
+## 改訂履歴
+- 2026-09-30: §4 のトークンの取得に、`shared/resilience` の Retry・Circuit Breaker・締め切りを結線した(P04b ②。ADR-0021 §11)。1 回の取得のタイムアウトは `ClientCredentialsConfig.timeout` から `Resilience` の `attemptTimeout` に移した。`Retry-After` の解析は `platform/reliability` に移した。JWKS の取得を専用の dispatcher に分けるかの判断は、Bulkhead がスレッドを分けないため P05 に送った。

@@ -79,7 +79,7 @@ Circuit Breaker とリトライバジェット(§8)は、1 回の試行の結果
 
 呼び出し([block])の中で別の `Resilience` を使っていて、その `ResilienceRejection`(内側の依存先の遮断など)がそのまま返ってきた場合も、外側では数えず、リトライもしない。外側の依存先の状態ではないため。外側で別の扱いにしたいときは、呼び出しの中で別のエラーに写す。
 
-HTTP の 500 は、INTEGRATION_STANDARDS §3 でリトライの対象外(NonRetryable)なので、Circuit Breaker の失敗にも数えない。502 / 503 / 504・接続エラー・タイムアウトは Retryable なので数える。HTTP の応答の分類は ② の `platform/reliability` で行う。
+HTTP の 500 は、INTEGRATION_STANDARDS §3 でリトライの対象外(NonRetryable)なので、Circuit Breaker の失敗にも数えない。502 / 503 / 504・接続エラー・タイムアウトは Retryable なので数える。HTTP の応答の分類は ② の `platform/reliability` の `HttpCallClassifier` で行う(§11)。
 
 ### 4. Circuit Breaker
 | 設定 | 既定値 | 意味 |
@@ -115,12 +115,22 @@ HTTP の 500 は、INTEGRATION_STANDARDS §3 でリトライの対象外(NonRetr
 
 ### 7. 出来事はリスナーで外へ知らせる
 `ResilienceListener` で、リトライ・リトライの見送り(理由つき)・Circuit Breaker の遷移・拒否・タイムアウト・Fallback を知らせる。
-`shared/resilience` は OTel に依存しない(ADR-0004 §4)。② の `platform/reliability` がリスナーを OTel のメトリクスに写す。
-- Circuit Breaker の状態(gauge)
-- リトライの回数
-- Bulkhead で拒否した件数
+`shared/resilience` は OTel に依存しない(ADR-0004 §4)。② の `platform/reliability` の `ResilienceMetrics` がリスナーを OTel のメトリクスに写す。
 
-属性は依存先の名前など、数が限られるものだけにする(カーディナリティ対策)。
+| メトリクス | 種類 | 属性(依存先の名前 `eia.dependency.name` のほか) |
+|---|---|---|
+| `eia.resilience.circuit_breaker.state` | gauge | `state`(`closed` / `open` / `half_open`)。現在の状態だけ 1、ほかは 0 |
+| `eia.resilience.circuit_breaker.transitions` | counter | `from`・`to` |
+| `eia.resilience.retries` | counter | なし |
+| `eia.resilience.retries.suppressed` | counter | `reason`(`deadline` / `circuit_open` / `budget_exhausted`) |
+| `eia.resilience.retry_budget.tokens` | gauge | なし。リトライバジェットの残高(`Resilience.retryBudgetTokens`) |
+| `eia.resilience.rejections` | counter | `kind`(`circuit_open` / `bulkhead_full`) |
+| `eia.resilience.timeouts` | counter | `kind`(`attempt` / `deadline`) |
+| `eia.resilience.fallbacks` | counter | なし |
+
+- 属性は依存先の名前と、上の決まった値だけにする(カーディナリティ対策)。エラーのメッセージ・URL・ステータスは入れない。依存先の名前には、依存先ごとに決まった値を使う。
+- gauge は、`ResilienceMetrics.register` で登録した `Resilience` の状態を、収集のたびに読む。リトライバジェットの残高を読むため、`Resilience` に読み取り専用の `retryBudgetTokens` を公開する(ロックを取らずに読む最新の値)。
+- **同じ名前の `Resilience` の 2 回目の登録は例外にする。** 依存先ごとに 1 つを使い回す約束を破って、呼び出しごとに作っている誤りを見つけるため。呼び出しごとに作ると、Circuit Breaker とリトライバジェットの状態が捨てられ、障害中も遮断されない。
 
 ### 8. リトライバジェットを入れ、既定で有効にする
 Circuit Breaker のしきい値(既定 50%)を下回る失敗率が長く続くと、Circuit Breaker は開かないまま、リトライで依存先への要求が最大 maxAttempts 倍(既定 3 倍)に増え続ける(Retry Storm。Framework 13.3 のアンチパターン)。これを防ぐため、gRPC の retry throttling(gRFC A6)と同じトークンバケットを入れる。
@@ -140,6 +150,24 @@ Circuit Breaker のしきい値(既定 50%)を下回る失敗率が長く続く�
 - `shared/resilience` の commonMain に `kotlinx-coroutines-core` を追加する。ADR-0010 Decision 6 の許可リストに、`shared/resilience` だけ `kotlinx.coroutines` を加える(kernel と canonical-model は変えない)。
 - commonTest に `kotlinx-coroutines-test` を追加する(版は coroutines と同じ 1.11.0)。
 
+### 11. ② の結線(`platform/reliability` と トークンの取得)
+- **`HttpCallClassifier`**(INTEGRATION_STANDARDS §3): Ktor Client の結果を分類する。
+  - 408・429・502・503・504 と、接続の失敗(`IOException`・名前解決の失敗)・タイムアウト(Ktor の HttpTimeout・接続と読み取りのタイムアウト)は Retryable(`HttpCallUnavailable`)。
+  - 429 と 503 は `Retry-After`(秒数か HTTP-date)を `retryAfter` に入れる。
+  - それ以外の 4xx・5xx(500 を含む)は NonRetryable(`HttpCallRejected`)。500 を Retryable にしたい依存先は `retryableStatuses` に加える。
+  - キャンセルとそのほかの例外は捕まえずに伝える(§3: 例外は依存先の失敗とみなさない)。Ktor 3 の `HttpRequestTimeoutException` はキャンセルではないことを、実際の接続のテストで確かめた。
+  - 本文の読み取りまでを 1 回の試行に含める(試行の Timeout が本文の読み取りに効くように)。
+  - `Retry-After` の解析(`RetryAfter`)は `platform/security` から移し、両方で使う。
+- **`ClientCredentialsTokenProvider`**(ADR-0019 §4):
+  - 構築時に受け取った(または既定で作った)**1 つの `Resilience` を、すべての取得で使う。** 既定は名前 `oauth-token-endpoint`、試行 5 秒・締め切り 10 秒、Retry・リトライバジェット・Circuit Breaker は既定値。
+  - 1 回の取得のタイムアウトは `Resilience` の `attemptTimeout` で行う(`ClientCredentialsConfig.timeout` はなくした。Timeout を二重にしないため)。
+  - Secret の取得は `Resilience` の外で、取得ごとに 1 回行う。Secret の失敗を IdP の失敗として Circuit Breaker に数えないため。
+  - 戻り値の型(`Result<AccessToken, TokenError>`)は変えない。`ResilienceError` は `TokenEndpointUnavailable` に写す(`timeout` / `deadline_exceeded` / `circuit_open` / `bulkhead_full`。`circuit_open` は Open が明けるまでの時間を `retryAfter` に持つ)。
+  - IdP の 5xx(500 を含む)は、ADR-0019 §4 のとおり Retryable のままにする。トークンの取得は、依存先ごとに 500 を一時的な障害として扱う例(§3 と Consequences)にあたる。
+  - Fallback は、既存の「期限前の取り直しに失敗したら、期限内のトークンを使い続ける」処理をそのまま使う(`Fallback` の型は使わない。キャッシュの状態と一体のため)。
+- **呼び出し元の締め切りの引き継ぎはしない。** `Resilience.execute` は `deadline` を引数で受け取るだけで、coroutine のコンテキストなどで呼び出し元の残り時間を引き継ぐ仕組みを持たない。入れ子の `Resilience`(API の処理の途中のトークンの取得など)は、それぞれ自分の締め切りで動く。仕組みは P05 で入れる(Issue #48)。
+- **platform のモジュール間の依存は、許可した一覧だけにする**(Konsist の `PlatformDependencyRules`。MODULE_DESIGN §2)。`platform/security` → `platform/reliability` を加える。
+
 ## Alternatives Considered
 - **Resilience4j を使う / Arrow(arrow-resilience)を使う**: ADR-0004 で不採用(native / js で使えない。`Either` と kernel の `Result` が併存する)。
 - **重ねる順序を利用者に組ませる(デコレータを自由に重ねる)**: 柔軟だが、Retry の外側に Circuit Breaker を置く(リトライの失敗が 1 件にしか数えられない)などの誤りを防げない。全社のテンプレートとしては、順序を固定して設定だけを選ばせるほうがよい。不採用。
@@ -157,3 +185,8 @@ Circuit Breaker のしきい値(既定 50%)を下回る失敗率が長く続く�
 - Open の期間が過ぎても、次の呼び出しまで `state` は OPEN のまま。メトリクスの gauge は、呼び出しがない間は Open を示し続ける。
 - 並行性は `Mutex` で守るので、呼び出しごとにロックを 2 回(許可と記録)取る。依存先への呼び出し(ミリ秒単位)に比べて小さいとみなす。
 - ADR-0004 §5 の「`Clock` をインジェクション」は、経過時間については `TimeSource` と読み替える(ADR-0004 の改訂履歴に記録する)。
+- 呼び出し元の締め切りを引き継がないため、P05 までは、入れ子の `Resilience` が入口の予算を超えて待ちうる(Issue #48)。
+- `ClientCredentialsConfig.timeout` をなくしたため、トークンの取得の Timeout を変えるときは、`Resilience` を作って `ClientCredentialsTokenProvider` に渡す。
+
+## 改訂履歴
+- 2026-09-30: ② の決定を追記した(§3 の分類の置き場所、§7 のメトリクスの一覧と `retryBudgetTokens`・重複登録の検出、§11 の結線)。

@@ -43,6 +43,13 @@ flowchart BT
   e2e[tests:e2e<br/>JVM] --> sdk
 ```
 - `platform:*` は `services:*` に依存しない。
+- `platform` のモジュール間の本番の依存(import・完全修飾名・`api` / `implementation` などの宣言)は、次の一覧だけを許可し、循環を禁止する(Konsist の `PlatformDependencyRules`)。テストのソースセットと `testImplementation` などの依存は対象外。一覧を変えるときは、`PlatformDependencyRules.ALLOWED` とこの表を同時に更新する。
+
+  | 依存元 | 依存先 | 理由 |
+  |---|---|---|
+  | `platform:audit` | `platform:security` | S3 の資格情報を `SecretProvider` から取る(ADR-0008・ADR-0019 §6) |
+  | `platform:audit` | `platform:observability` | details の値のマスキング(ADR-0018 §3) |
+  | `platform:security` | `platform:reliability` | トークンの取得の Retry・Circuit Breaker、`Retry-After` の解析(ADR-0019 §4・ADR-0021 §11) |
 - `platform:test-support` はテストのソースセット(`test` / `integrationTest` など)からだけ参照する。
 - `services` 間のコード依存は禁止(連携は契約経由のみ)。契約モデルは contracts から生成するか `adapters` 内で定義する。
 - `tests:e2e` は `services:*` にコード依存しない(契約・SDK・公開エンドポイント経由のみで検証する)。
@@ -92,7 +99,7 @@ services/order/
 | security | JWT の検証(JWKS)・スコープの認可(`eiaJwt` / `requireScopes`)・Client Credentials のトークン取得・`SecretProvider`(ADR-0008・ADR-0019)。Nimbus JOSE+JWT を使ってよいのはこのモジュールだけ(Konsist) | P04a |
 | audit | 監査記録: 追記専用のテーブル(アプリ用のロールは INSERT / SELECT だけ。トリガーでも拒否)とハッシュチェーン、S3 互換ストレージの Object Lock(COMPLIANCE)へのアンカー、チェーンとアンカーの検証(ADR-0017)。検査は `tools/audit-verify`(`make audit-verify`)。`java.time` と `java.sql` を使う JVM の部品なので、services の application に Port(例 `AuditTrail`)を置き、adapters で `AuditLog.appendAudit`(業務と同じ Exposed のトランザクション)に写す | P04a |
 | test-support | テスト専用。`infra/local/images.env` のイメージを Testcontainers で使う `InfraImages`(ADR-0016 §5)。test / integrationTest からだけ参照する(Konsist) | P04a |
-| reliability | `shared/resilience` の Ktor / OTel への結線 | P04b |
+| reliability | `shared/resilience` の JVM 向けアダプタ: OTel のメトリクス(`ResilienceMetrics`)、Ktor Client の結果の Retryable / NonRetryable への分類(`HttpCallClassifier`)、`Retry-After` の解析(ADR-0021 §7・§11)。OTel は API だけを使う | P04b |
 | outbox | Outbox 挿入・削除・保持期間ジョブ | P06 |
 | messaging-kafka | Producer(P06)/ Consumer・DLQ・Replay(P07) | P06, P07 |
 | batch | 軽量 DAG ランナー・Checkpoint・SLA メトリクス | P08 |
