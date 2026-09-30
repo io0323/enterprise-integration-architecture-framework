@@ -21,6 +21,7 @@ import io.eia.shared.resilience.ResilienceConfig
 import io.eia.shared.resilience.ResilienceListener
 import io.eia.shared.resilience.RetrySuppression
 import io.eia.shared.resilience.SlidingWindow
+import io.eia.shared.resilience.withCallDeadline
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactly
@@ -53,6 +54,7 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 import kotlin.time.toJavaInstant
 
 internal const val CLIENT_ID = "eiaf-e2e"
@@ -338,6 +340,79 @@ class ClientCredentialsTokenProviderSpec :
                     release.complete(Unit)
                     refreshing.await().token() shouldBe "at-2"
                 }
+            }
+        }
+
+        context("呼び出し元の締め切り(ADR-0021 §12)") {
+            test("取得は、呼び出し元の締め切りの残り時間で打ち切る(設定の締め切りより短ければ)") {
+                val endpoint =
+                    FakeTokenEndpoint({
+                        delay(5.seconds)
+                        respond(tokenJson(), HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                    })
+                val provider = provider(endpoint, resilience = retrying(deadline = 10.seconds))
+                val start = TimeSource.Monotonic.markNow()
+
+                withCallDeadline(200.milliseconds) { provider.token() }.error() shouldBe TokenEndpointUnavailable("deadline_exceeded")
+                (start.elapsedNow() < 2.seconds) shouldBe true
+            }
+
+            test("取得中の呼び出しを待つ時間も、残り時間までにする。待ちきれなかった後もロックは残らない") {
+                val release = CompletableDeferred<Unit>()
+                val endpoint =
+                    FakeTokenEndpoint({
+                        release.await()
+                        respond(tokenJson(), HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                    })
+                val provider = provider(endpoint)
+
+                coroutineScope {
+                    val leader = async { provider.token() }
+                    delay(50)
+                    val start = TimeSource.Monotonic.markNow()
+                    withCallDeadline(100.milliseconds) { provider.token() }.error() shouldBe TokenEndpointUnavailable("deadline_exceeded")
+                    (start.elapsedNow() < 2.seconds) shouldBe true
+
+                    release.complete(Unit)
+                    leader.await().token() shouldBe "at-1"
+                }
+                provider.token().token() shouldBe "at-1"
+                endpoint.requests.size shouldBe 1
+            }
+
+            test("呼び出し元の締め切りで打ち切った失敗は、待っていた呼び出しに共有しない(自分の残り時間で取り直す)") {
+                val endpoint =
+                    FakeTokenEndpoint(
+                        {
+                            delay(5.seconds)
+                            respond(tokenJson("at-1"), HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                        },
+                        FakeTokenEndpoint.ok(tokenJson("at-2")),
+                    )
+                val provider = provider(endpoint)
+
+                coroutineScope {
+                    val leader = async { withCallDeadline(200.milliseconds) { provider.token() } }
+                    delay(50)
+                    val waiter = async { provider.token() }
+                    leader.await().error() shouldBe TokenEndpointUnavailable("deadline_exceeded")
+                    waiter.await().token() shouldBe "at-2"
+                }
+                endpoint.requests.size shouldBe 2
+            }
+
+            test("設定の締め切りで打ち切った失敗は、これまでどおり待っていた呼び出しに共有する(1 つずつ取り直して待たされない)") {
+                val endpoint =
+                    FakeTokenEndpoint({
+                        delay(5.seconds)
+                        respond(tokenJson(), HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                    })
+                val provider = provider(endpoint, resilience = retrying(deadline = 200.milliseconds, retry = null))
+
+                val results = coroutineScope { (1..5).map { async { provider.token() } }.awaitAll() }
+
+                results.forEach { it.error() shouldBe TokenEndpointUnavailable("deadline_exceeded") }
+                endpoint.requests.size shouldBe 1
             }
         }
 

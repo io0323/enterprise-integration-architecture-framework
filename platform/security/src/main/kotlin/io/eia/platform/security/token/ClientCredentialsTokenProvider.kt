@@ -10,6 +10,7 @@ import io.eia.shared.kernel.err
 import io.eia.shared.kernel.ok
 import io.eia.shared.resilience.AttemptTimedOut
 import io.eia.shared.resilience.BulkheadFull
+import io.eia.shared.resilience.CallDeadline
 import io.eia.shared.resilience.CircuitOpen
 import io.eia.shared.resilience.DeadlineExceeded
 import io.eia.shared.resilience.Resilience
@@ -28,6 +29,7 @@ import io.ktor.http.parameters
 import io.ktor.utils.io.readBuffer
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.io.readByteArray
 import org.slf4j.LoggerFactory
 import java.io.IOException
@@ -35,6 +37,7 @@ import java.net.URLEncoder
 import java.nio.channels.UnresolvedAddressException
 import java.util.Base64
 import kotlin.time.Clock
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
@@ -53,6 +56,10 @@ import kotlin.time.Instant
  *   - NonRetryable(400・401 の `invalid_client` などの 4xx・応答の形式の不正)はリトライせず、Circuit Breaker の成功に数える。
  *   - Circuit Breaker が開いている間は IdP に要求を送らず、`circuit_open` の [TokenEndpointUnavailable] を返す。
  *   - Secret の取得は [resilience] の外で、取得ごとに 1 回だけ行う(Secret の失敗を IdP の失敗として数えないため)。
+ * - **呼び出し元の締め切り**(ADR-0021 §12): 呼び出し元のコンテキストに [CallDeadline] があれば、取得の締め切りは
+ *   `deadline` とその残り時間の短い方になる([resilience] が引き継ぐ)。取得中の呼び出しを待つ時間も、その残り時間までにする
+ *   (待ちきれなければ `deadline_exceeded`)。呼び出し元の締め切りで打ち切った取得の失敗は、待っていた呼び出しに共有しない。
+ *   その失敗は取得した呼び出しの予算によるもので、待っていた呼び出しは自分の残り時間で取り直せるため。
  * - **Fallback**: 失敗はキャッシュしない。期限前の取り直しに失敗し、期限内のトークンがあれば、それを返して WARN を残す
  *   (同期呼び出しの 4 点セットの Fallback)。次の取り直しは [ClientCredentialsConfig.refreshRetryInterval] の後にする
  *   (失敗のたびに全呼び出しを待たせないため)。
@@ -104,7 +111,12 @@ public class ClientCredentialsTokenProvider(
             if (current.isValidAt(now) && (mutex.isLocked || isRetryDeferred(now))) return ok(current.token)
         }
         val seen = completedFetches
-        return mutex.withLock { if (completedFetches != seen) coalesced() ?: refreshLocked() else refreshLocked() }
+        if (!mutex.lockWithin(CallDeadline.current()?.remaining())) return err(TokenEndpointUnavailable(DEADLINE_EXCEEDED))
+        return try {
+            if (completedFetches != seen) coalesced() ?: refreshLocked() else refreshLocked()
+        } finally {
+            mutex.unlock()
+        }
     }
 
     /**
@@ -137,9 +149,9 @@ public class ClientCredentialsTokenProvider(
         if (current != null && now < current.refreshAt) return ok(current.token)
         if (current != null && current.isValidAt(now) && isRetryDeferred(now)) return ok(current.token)
 
-        val fetched = fetch()
+        val (fetched, shareable) = fetch()
         completedFetches++
-        lastFailure = (fetched as? Result.Err)?.error
+        lastFailure = (fetched as? Result.Err)?.error?.takeIf { shareable }
         return when (fetched) {
             is Result.Ok -> {
                 val token = fetched.value
@@ -184,16 +196,27 @@ public class ClientCredentialsTokenProvider(
         return Cached(token, refreshAt = until - margin, validUntil = until)
     }
 
-    /** Secret を読み、[resilience] の中で要求する(リトライと Circuit Breaker は [resilience] が行う)。 */
-    private suspend fun fetch(): Result<AccessToken, TokenError> {
+    /**
+     * Secret を読み、[resilience] の中で要求する(リトライと Circuit Breaker は [resilience] が行う)。
+     * 失敗を待っていた呼び出しに共有してよいかも返す。呼び出し元の締め切り([CallDeadline])で打ち切った失敗は共有しない。
+     */
+    private suspend fun fetch(): Fetched {
         val secret =
             when (val result = secrets.get(config.clientSecret)) {
                 is Result.Ok -> result.value
-                is Result.Err -> return err(ClientSecretUnavailable.of(result.error))
+                is Result.Err -> return Fetched(err(ClientSecretUnavailable.of(result.error)))
             }
         return when (val result = resilience.execute { attempt(secret) }) {
-            is Result.Ok -> result
-            is Result.Err -> err(result.error.toTokenError())
+            is Result.Ok -> {
+                Fetched(result)
+            }
+
+            is Result.Err -> {
+                Fetched(
+                    err(result.error.toTokenError()),
+                    shareable = !result.error.isCallerDeadline(resilience.config.deadline),
+                )
+            }
         }
     }
 
@@ -275,6 +298,11 @@ public class ClientCredentialsTokenProvider(
         fun isValidAt(now: Instant): Boolean = now < validUntil
     }
 
+    private data class Fetched(
+        val result: Result<AccessToken, TokenError>,
+        val shareable: Boolean = true,
+    )
+
     private class Exchange(
         val status: HttpStatusCode,
         val retryAfter: String?,
@@ -314,6 +342,9 @@ public class ClientCredentialsTokenProvider(
     }
 }
 
+/** 締め切りで打ち切った取得の理由(`TokenEndpointUnavailable.reason`)。 */
+private const val DEADLINE_EXCEEDED = "deadline_exceeded"
+
 /**
  * `Resilience` のエラーを [TokenError] に写す(`token()` の戻り値の型を変えないため)。`circuit_open` は Open が明けるまでの時間を持つ。
  */
@@ -323,7 +354,7 @@ private fun DomainError.toTokenError(): TokenError =
 
         is AttemptTimedOut -> TokenEndpointUnavailable("timeout")
 
-        is DeadlineExceeded -> TokenEndpointUnavailable("deadline_exceeded")
+        is DeadlineExceeded -> TokenEndpointUnavailable(DEADLINE_EXCEEDED)
 
         is CircuitOpen -> TokenEndpointUnavailable("circuit_open", retryAfter = retryAfter)
 
@@ -332,6 +363,29 @@ private fun DomainError.toTokenError(): TokenError =
         // 試行は TokenError だけを、Resilience は上の ResilienceError だけを返す
         else -> error("想定外のエラーです: $code")
     }
+
+/**
+ * ロックを取れたかを返す。[limit](呼び出し元の締め切りの残り時間)があれば、待つのはその間だけにする。
+ * Bulkhead と同じく、取れたかを `withTimeoutOrNull` の戻り値では判断しない(ADR-0021 §5)。`lock()` が戻った直後に期限が来ると
+ * `withTimeoutOrNull` は `null` を返すが、ロックは取れているため。`lock()` の直後の代入は中断しないので、`acquired` は取得の成否を表す。
+ */
+private suspend fun Mutex.lockWithin(limit: Duration?): Boolean {
+    if (limit == null) {
+        lock()
+        return true
+    }
+    var acquired = tryLock()
+    if (!acquired && limit.isPositive()) {
+        withTimeoutOrNull(limit) {
+            lock()
+            acquired = true
+        }
+    }
+    return acquired
+}
+
+/** 設定の締め切り [own] より短い予算(呼び出し元の締め切りの残り時間。ADR-0021 §12)で打ち切られた結果か。 */
+private fun DomainError.isCallerDeadline(own: Duration?): Boolean = this is DeadlineExceeded && (own == null || deadline < own)
 
 /** 接続の失敗を [TokenEndpointUnavailable] にする。例外のメッセージは URL やヘッダを含みうるため、型の名前だけをログに残す。 */
 private fun unreachable(
