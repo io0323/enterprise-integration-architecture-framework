@@ -11,24 +11,22 @@ internal enum class Outcome {
     /** Retryable なエラー(タイムアウトを含む)。 */
     FAILURE,
 
-    /** 数えない。手元で断った呼び出し([ResilienceRejection])と、例外・キャンセルで終わった呼び出し。 */
+    /**
+     * 数えない。手元で断った呼び出し([ResilienceRejection])、呼び出し元の締め切りで打ち切った試行
+     * ([DeadlineSource.CALLER]。ADR-0021 §12)、例外・キャンセルで終わった呼び出し。
+     */
     IGNORED,
     ;
 
     companion object {
-        fun of(result: Result<*, DomainError>): Outcome =
-            when (result) {
-                is Result.Ok -> {
-                    SUCCESS
-                }
-
-                is Result.Err -> {
-                    when (result.error) {
-                        is ResilienceRejection -> IGNORED
-                        is DomainError.Retryable -> FAILURE
-                        is DomainError.NonRetryable -> SUCCESS
-                    }
-                }
+        fun of(result: Result<*, DomainError>): Outcome {
+            val error = (result as? Result.Err)?.error ?: return SUCCESS
+            return when {
+                error is ResilienceRejection -> IGNORED
+                error is DeadlineExceeded && error.source == DeadlineSource.CALLER -> IGNORED
+                error is DomainError.Retryable -> FAILURE
+                else -> SUCCESS // NonRetryable: 依存先は応答している
             }
+        }
     }
 }

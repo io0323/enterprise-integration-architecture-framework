@@ -13,6 +13,7 @@ import io.eia.shared.resilience.BulkheadFull
 import io.eia.shared.resilience.CallDeadline
 import io.eia.shared.resilience.CircuitOpen
 import io.eia.shared.resilience.DeadlineExceeded
+import io.eia.shared.resilience.DeadlineSource
 import io.eia.shared.resilience.Resilience
 import io.eia.shared.resilience.ResilienceConfig
 import io.ktor.client.HttpClient
@@ -214,7 +215,7 @@ public class ClientCredentialsTokenProvider(
             is Result.Err -> {
                 Fetched(
                     err(result.error.toTokenError()),
-                    shareable = !result.error.isCallerDeadline(resilience.config.deadline),
+                    shareable = !result.error.isCallerDeadline(),
                 )
             }
         }
@@ -384,8 +385,8 @@ private suspend fun Mutex.lockWithin(limit: Duration?): Boolean {
     return acquired
 }
 
-/** 設定の締め切り [own] より短い予算(呼び出し元の締め切りの残り時間。ADR-0021 §12)で打ち切られた結果か。 */
-private fun DomainError.isCallerDeadline(own: Duration?): Boolean = this is DeadlineExceeded && (own == null || deadline < own)
+/** 呼び出し元の締め切り(ADR-0021 §12)で打ち切られた結果か。 */
+private fun DomainError.isCallerDeadline(): Boolean = this is DeadlineExceeded && source == DeadlineSource.CALLER
 
 /** 接続の失敗を [TokenEndpointUnavailable] にする。例外のメッセージは URL やヘッダを含みうるため、型の名前だけをログに残す。 */
 private fun unreachable(

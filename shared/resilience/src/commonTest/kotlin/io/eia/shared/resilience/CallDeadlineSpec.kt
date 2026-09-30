@@ -85,7 +85,7 @@ class CallDeadlineSpec :
                             success()
                         }
                     }
-                result.errorOrFail() shouldBe DeadlineExceeded("inventory", 500.milliseconds)
+                result.errorOrFail() shouldBe DeadlineExceeded("inventory", 500.milliseconds, DeadlineSource.CALLER)
                 start.elapsedNow() shouldBe 500.milliseconds
             }
 
@@ -106,7 +106,7 @@ class CallDeadlineSpec :
                             success()
                         }
                     }
-                shorterCaller.errorOrFail() shouldBe DeadlineExceeded("inventory", 300.milliseconds)
+                shorterCaller.errorOrFail() shouldBe DeadlineExceeded("inventory", 300.milliseconds, DeadlineSource.CALLER)
             }
 
             test("呼び出し元の締め切りを過ぎていたら、呼び出さずに DeadlineExceeded(予算 0)を返し、Circuit Breaker に数えない") {
@@ -121,7 +121,7 @@ class CallDeadlineSpec :
                             success()
                         }
                     }
-                result.errorOrFail() shouldBe DeadlineExceeded("inventory", Duration.ZERO)
+                result.errorOrFail() shouldBe DeadlineExceeded("inventory", Duration.ZERO, DeadlineSource.CALLER)
                 called shouldBe false
                 resilience.circuitBreaker?.state shouldBe CircuitState.CLOSED
             }
@@ -182,6 +182,128 @@ class CallDeadlineSpec :
                     }
                 }
                 seen shouldBe 1_500.milliseconds
+            }
+        }
+
+        context("呼び出し元の予算で打ち切った試行の数え方") {
+            val breaker = CircuitBreakerConfig(window = SlidingWindow.Count(10), minimumCalls = 5, halfOpenPermits = 1)
+
+            test("残り時間の短い呼び出しを大量に流しても、Circuit Breaker は開かず、リトライバジェットも減らない") {
+                val listener = RecordingListener()
+                val config = BASE.copy(attemptTimeout = 1.seconds, retryBudget = RetryBudgetConfig(), circuitBreaker = breaker)
+                val resilience = testScheduler.resilience(config = config, listener = listener)
+                val tokens = resilience.retryBudgetTokens
+                repeat(100) {
+                    val result =
+                        withCallDeadline(50.milliseconds, testScheduler.timeSource) {
+                            resilience.execute {
+                                delay(200.milliseconds) // 健全だが、呼び出し元の残り時間より遅い
+                                success()
+                            }
+                        }
+                    result.errorOrFail() shouldBe DeadlineExceeded("inventory", 50.milliseconds, DeadlineSource.CALLER)
+                }
+                resilience.circuitBreaker?.state shouldBe CircuitState.CLOSED
+                resilience.retryBudgetTokens shouldBe tokens
+                listener.transitions shouldBe emptyList()
+            }
+
+            test("attemptTimeout を超える遅延では、呼び出し元の締め切りがあっても開く") {
+                val resilience =
+                    testScheduler.resilience(
+                        config = BASE.copy(attemptTimeout = 1.seconds, retry = null, circuitBreaker = breaker),
+                    )
+                repeat(5) {
+                    val result =
+                        withCallDeadline(5.seconds, testScheduler.timeSource) {
+                            resilience.execute {
+                                delay(1.hours) // ハングした依存先
+                                success()
+                            }
+                        }
+                    result.errorOrFail() shouldBe AttemptTimedOut("inventory", 1.seconds)
+                }
+                resilience.circuitBreaker?.state shouldBe CircuitState.OPEN
+            }
+
+            test("呼び出し元の残り時間がちょうど attemptTimeout なら、attemptTimeout に達した失敗として数える") {
+                val resilience =
+                    testScheduler.resilience(
+                        config = BASE.copy(attemptTimeout = 1.seconds, retry = null, circuitBreaker = breaker),
+                    )
+                repeat(5) {
+                    withCallDeadline(1.seconds, testScheduler.timeSource) {
+                        resilience.execute {
+                            delay(1.hours)
+                            success()
+                        }
+                    }.errorOrFail() shouldBe AttemptTimedOut("inventory", 1.seconds)
+                }
+                resilience.circuitBreaker?.state shouldBe CircuitState.OPEN
+            }
+
+            test("自分の締め切りで打ち切った試行は、これまでどおり失敗に数える(ADR-0021 §1)") {
+                val resilience =
+                    testScheduler.resilience(
+                        config = BASE.copy(attemptTimeout = 5.seconds, retry = null, circuitBreaker = breaker),
+                    )
+                repeat(5) {
+                    resilience
+                        .execute(deadline = 1.seconds) {
+                            delay(1.hours)
+                            success()
+                        }.errorOrFail() shouldBe DeadlineExceeded("inventory", 1.seconds, DeadlineSource.OWN)
+                }
+                resilience.circuitBreaker?.state shouldBe CircuitState.OPEN
+            }
+
+            test("Half-Open の試行が呼び出し元の予算で打ち切られたら、枠を返して Half-Open のまま次の呼び出しに試させる") {
+                val start = testScheduler.timeSource.markNow()
+                val config = BASE.copy(attemptTimeout = 1.seconds, retry = null, circuitBreaker = breaker)
+                val listener = RecordingListener()
+                val resilience = testScheduler.resilience(config = config, listener = listener)
+                repeat(5) { resilience.execute { failure() } }
+                resilience.circuitBreaker?.state shouldBe CircuitState.OPEN
+                delay(breaker.openDuration - start.elapsedNow())
+
+                val probe =
+                    withCallDeadline(50.milliseconds, testScheduler.timeSource) {
+                        resilience.execute {
+                            delay(200.milliseconds)
+                            success()
+                        }
+                    }
+                probe.errorOrFail() shouldBe DeadlineExceeded("inventory", 50.milliseconds, DeadlineSource.CALLER)
+                resilience.circuitBreaker?.state shouldBe CircuitState.HALF_OPEN
+
+                // 枠(halfOpenPermits = 1)が返っているので、次の呼び出しが試せる。成功すれば Closed
+                resilience.execute { success() } shouldBe success()
+                resilience.circuitBreaker?.state shouldBe CircuitState.CLOSED
+                listener.transitions shouldContainExactly
+                    listOf(
+                        CircuitState.CLOSED to CircuitState.OPEN,
+                        CircuitState.OPEN to CircuitState.HALF_OPEN,
+                        CircuitState.HALF_OPEN to CircuitState.CLOSED,
+                    )
+            }
+
+            test("入れ子: 外側の試行の時間切れで内側が打ち切られても、外側は自分の attemptTimeout の失敗として数える") {
+                val outer =
+                    testScheduler.resilience(
+                        "downstream",
+                        BASE.copy(attemptTimeout = 1.seconds, retry = null, circuitBreaker = breaker),
+                    )
+                val inner = testScheduler.resilience("oauth-token-endpoint", BASE.copy(deadline = 10.seconds, retry = null))
+                repeat(5) {
+                    outer
+                        .execute {
+                            inner.execute {
+                                delay(1.hours)
+                                success()
+                            }
+                        }.errorOrFail() shouldBe AttemptTimedOut("downstream", 1.seconds)
+                }
+                outer.circuitBreaker?.state shouldBe CircuitState.OPEN
             }
         }
     })

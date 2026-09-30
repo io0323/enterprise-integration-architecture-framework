@@ -26,6 +26,7 @@ import kotlin.time.TimeSource
  *   Circuit Breaker が開いたら、待たずに返す。
  * - 呼び出し元の締め切り([CallDeadline])があれば、自分の締め切りとの短い方を使う。[block] には試行の残り時間を
  *   [CallDeadline] で渡すので、[block] の中の [Resilience](入れ子)もそれを超えて待たない(ADR-0021 §12)。
+ *   呼び出し元の締め切りで `attemptTimeout` より前に打ち切った試行は、Circuit Breaker にもリトライバジェットにも数えない。
  * - 手元で断った呼び出し([ResilienceRejection])はリトライしない。
  * - タイムアウトは coroutines のタイムアウトで行い、呼び出し側のキャンセル(`CancellationException`)は捕まえずに伝える。
  * - [block] は例外ではなく `Result` で失敗を返す(境界の例外は `catching` で変換しておく)。[block] の例外はそのまま伝える。
@@ -84,12 +85,16 @@ public class Resilience(
 
     /**
      * 自分の締め切り [own] と、呼び出し元の締め切り([CallDeadline])の残り時間の短い方。どちらもなければ `null`。
-     * 呼び出し元の期限を過ぎていれば 0 にする([DeadlineExceeded] の予算に負の値を入れない)。
+     * 同じなら自分の締め切りとする(数える側に倒す)。呼び出し元の期限を過ぎていれば 0 にする([DeadlineExceeded] の予算に負の値を入れない)。
      */
     private suspend fun effectiveDeadline(own: Duration?): Deadline? {
         val inherited = CallDeadline.current()?.remaining()?.coerceAtLeast(Duration.ZERO)
-        val budget = if (own == null || (inherited != null && inherited < own)) inherited else own
-        return budget?.let { Deadline(it, timeSource.markNow() + it) }
+        val now = timeSource.markNow()
+        return when {
+            inherited != null && (own == null || inherited < own) -> Deadline(inherited, now + inherited, DeadlineSource.CALLER)
+            own != null -> Deadline(own, now + own, DeadlineSource.OWN)
+            else -> null
+        }
     }
 
     @Suppress("ReturnCount") // リトライを見送る理由ごとに、その時点の結果を返す
@@ -125,23 +130,27 @@ public class Resilience(
      * 1 回の試行。締め切りがあれば、試行の Timeout と Bulkhead の待ち時間を残り時間までに縮める(ADR-0021 §1)。
      * 締め切りで打ち切った試行も、依存先が期限内に応答しなかった失敗として Circuit Breaker に数える
      * (数えないと、ハングした依存先に対して Circuit Breaker が開かない)。
-     * [block] には、この試行の Timeout を [CallDeadline] として渡す(入れ子の [Resilience] に引き継ぐ。ADR-0021 §12)。
+     * ただし、呼び出し元の締め切り([DeadlineSource.CALLER])で打ち切った試行は数えない([Outcome.of]。ADR-0021 §12)。
+     * 残り時間が `attemptTimeout` 以上なら、`attemptTimeout` に達して打ち切った試行([AttemptTimedOut])として数える。
+     *
+     * [block] には、この試行の Timeout を [CallDeadline] として渡す(入れ子の [Resilience] に引き継ぐ)。[block] が、その
+     * [CallDeadline] で打ち切られた内側の [DeadlineExceeded] を返した場合は、この試行が自分の Timeout で打ち切られたものとして扱う
+     * (外側と内側のタイムアウトは同じ時刻に来るため、どちらが先に返っても同じ結果にする)。
      */
     private suspend fun <T> attemptOnce(
         deadline: Deadline?,
         block: suspend () -> Result<T, DomainError>,
     ): Result<T, DomainError> {
         val remaining = deadline?.remaining()
-        if (deadline != null && remaining != null && !remaining.isPositive()) return timedOut(DeadlineExceeded(name, deadline.budget))
-        val timeout = if (remaining != null && remaining < config.attemptTimeout) remaining else config.attemptTimeout
-        val onTimeout: ResilienceError =
-            if (deadline != null && timeout == remaining) {
-                DeadlineExceeded(name, deadline.budget)
-            } else {
-                AttemptTimedOut(name, config.attemptTimeout)
-            }
+        if (deadline != null && remaining != null && !remaining.isPositive()) return timedOut(deadline.exceeded(name))
+        // 締め切りの残り時間が attemptTimeout より短いときだけ、締め切りで打ち切る
+        val cutBy = deadline?.takeIf { remaining != null && remaining < config.attemptTimeout }
+        val timeout = if (cutBy != null && remaining != null) remaining else config.attemptTimeout
+        val onTimeout: ResilienceError = cutBy?.exceeded(name) ?: AttemptTimedOut(name, config.attemptTimeout)
         val timed: suspend () -> Result<T, DomainError> = {
-            withTimeoutOrNull(timeout) { withContext(CallDeadline.after(timeout, timeSource)) { block() } } ?: timedOut(onTimeout)
+            val attemptDeadline = CallDeadline.after(timeout, timeSource)
+            val result = withTimeoutOrNull(timeout) { withContext(attemptDeadline) { block() } }
+            if (result == null || result.isCutBy(attemptDeadline)) timedOut(onTimeout) else result
         }
         val isolated: suspend () -> Result<T, DomainError> = { bulkhead?.execute(remaining, timed) ?: timed() }
         val result = circuitBreaker?.execute(isolated) ?: isolated()
@@ -158,11 +167,23 @@ public class Resilience(
         return err(error)
     }
 
-    /** 締め切り。[budget] はこの呼び出しの予算(自分の締め切りと呼び出し元の残り時間の短い方)、[at] は期限の時刻。 */
+    /**
+     * 締め切り。[budget] はこの呼び出しの予算(自分の締め切りと呼び出し元の残り時間の短い方)、[at] は期限の時刻、
+     * [source] は予算を決めたもの。
+     */
     private class Deadline(
         val budget: Duration,
         private val at: ComparableTimeMark,
+        private val source: DeadlineSource,
     ) {
         fun remaining(): Duration = -at.elapsedNow()
+
+        fun exceeded(name: String): DeadlineExceeded = DeadlineExceeded(name, budget, source)
+    }
+
+    /** 内側の [Resilience] が、この試行の [attemptDeadline] で打ち切られた結果か(期限を過ぎていて、内側が呼び出し元の締め切りで打ち切った)。 */
+    private fun Result<*, DomainError>.isCutBy(attemptDeadline: CallDeadline): Boolean {
+        val error = (this as? Result.Err)?.error
+        return error is DeadlineExceeded && error.source == DeadlineSource.CALLER && !attemptDeadline.remaining().isPositive()
     }
 }
