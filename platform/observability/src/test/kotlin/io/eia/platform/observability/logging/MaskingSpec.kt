@@ -1,6 +1,8 @@
 package io.eia.platform.observability.logging
 
+import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.doubles.shouldBeLessThan
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
@@ -112,21 +114,33 @@ class MaskingSpec :
                 }
             }
 
-            test("PEM: 入力を 4 倍にしても時間は 4 倍程度(入力長の 2 乗なら 16 倍)") {
-                fun minTime(input: String) =
-                    (1..10).minOf {
-                        kotlin.time
-                            .measureTime { Masking.mask(input) }
-                            .inWholeMicroseconds
-                            .coerceAtLeast(1)
-                    }
+            // PEM の走査([PemBlocks])で入力長の 2 乗の時間がかかる不具合(見出しごとに入力の末尾まで走査し直すなど)の再発を防ぐ。
+            // 同じ文字数を処理する時間で比べる: 1/16 の長さの入力を 16 回処理する時間と、全長の入力を 1 回処理する時間(それぞれ rounds 回繰り返す)。
+            // 入力長に比例するなら比は約 1、2 乗なら約 16 になる。しきい値はその幾何平均の 4 にし、どちらの側にも 4 倍の余裕を持たせる。
+            // - PemBlocks を直接測る。Masking.mask 全体で測ると、ほかの規則の(入力長に比例する)時間で差が薄まるため
+            // - 並列ビルドの負荷に強くするため、両方の計測を同じ長さにして分母のぶれを小さくし、小さい入力と大きい入力を交互に測り
+            //   (負荷の変化が両方に同じように効く)、最小値で比べる
+            test("PEM: 同じ文字数なら、短い入力を繰り返しても長い入力 1 回でも時間は同程度(入力長の 2 乗なら 16 倍)") {
+                val factor = 16
+                val rounds = 8 // 1 回の計測をミリ秒単位にして、計測のぶれ(割り込み・GC)の影響を小さくする
                 listOf("-----BEGIN a", "-----BEGIN A-----x-----END a").forEach { unit ->
-                    val small = unit.repeat(Masking.MAX_INPUT_LENGTH / 4 / unit.length)
-                    val large = unit.repeat(Masking.MAX_INPUT_LENGTH / unit.length)
-                    repeat(3) { Masking.mask(large) } // JIT のウォームアップ
-                    val ratio = minTime(large).toDouble() / minTime(small)
+                    val small = unit.repeat(Masking.MAX_INPUT_LENGTH / factor / unit.length)
+                    val large = small.repeat(factor)
+                    repeat(3) { PemBlocks.mask(large, "***") } // JIT のウォームアップ
+                    val smallTimes = mutableListOf<Long>()
+                    val largeTimes = mutableListOf<Long>()
+                    repeat(15) {
+                        smallTimes +=
+                            kotlin.time.measureTime { repeat(rounds * factor) { PemBlocks.mask(small, "***") } }.inWholeMicroseconds
+                        largeTimes += kotlin.time.measureTime { repeat(rounds) { PemBlocks.mask(large, "***") } }.inWholeMicroseconds
+                    }
+                    val ratio = largeTimes.min().coerceAtLeast(1).toDouble() / smallTimes.min().coerceAtLeast(1)
 
-                    (ratio < 10.0) shouldBe true
+                    withClue(
+                        "単位 '$unit': 比 $ratio(長い入力 $rounds 回 ${largeTimes.min()}µs / 短い入力 ${rounds * factor} 回 ${smallTimes.min()}µs)",
+                    ) {
+                        ratio shouldBeLessThan 4.0
+                    }
                 }
             }
 
