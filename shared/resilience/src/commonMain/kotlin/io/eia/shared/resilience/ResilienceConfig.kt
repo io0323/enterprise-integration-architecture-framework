@@ -9,7 +9,8 @@ import kotlin.time.Duration
  *
  * @property attemptTimeout 1 回の試行の上限。必須(Framework 13.1: 全呼出しに明示設定)
  * @property deadline リトライを含む呼び出し全体の締め切り(タイムバジェット)。`null` は締め切りなし。
- *   呼び出しごとに [Resilience.execute] の引数で上書きできる(入口から配分された残り時間を渡すため)
+ *   呼び出しごとに [Resilience.execute] の引数で上書きできる。呼び出し元の締め切り([CallDeadline])の残り時間の方が
+ *   短ければ、そちらを使う(ADR-0021 §12)
  * @property retry 待ち時間と回数の規則。kernel の [RetryPolicy] をそのまま使う。`null` はリトライしない
  * @property retryBudget リトライの割合の上限。`null` は上限なし
  * @property circuitBreaker `null` は Circuit Breaker なし

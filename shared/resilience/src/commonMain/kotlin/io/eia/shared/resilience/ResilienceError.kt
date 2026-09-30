@@ -51,7 +51,11 @@ public data class AttemptTimedOut(
     override val message: String get() = "$name の呼び出しが $timeout でタイムアウトしました"
 }
 
-/** リトライを含む呼び出し全体が締め切り(タイムバジェット。Framework 13.1)を超えた。 */
+/**
+ * リトライを含む呼び出し全体が締め切り(タイムバジェット。Framework 13.1)を超えた。
+ *
+ * @property deadline この呼び出しの予算。自分の締め切りと、呼び出し元の締め切り([CallDeadline])の残り時間の短い方(ADR-0021 §12)。
+ */
 public data class DeadlineExceeded(
     override val name: String,
     public val deadline: Duration,
