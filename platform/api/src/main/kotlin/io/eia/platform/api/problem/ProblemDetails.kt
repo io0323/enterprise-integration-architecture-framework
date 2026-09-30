@@ -61,7 +61,7 @@ public fun Application.installProblemDetails(configure: ProblemDetailsConfig.() 
 }
 
 private suspend fun ApplicationCall.respondIfNotWritten(problem: Problem) {
-    if (!attributes.contains(ProblemWritten)) respondProblem(problem)
+    if (!attributes.contains(ResponseWritten)) respondProblem(problem)
 }
 
 @Suppress("MagicNumber") // HTTP の状態コード

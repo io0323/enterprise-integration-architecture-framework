@@ -1,5 +1,6 @@
 package io.eia.platform.api.problem
 
+import io.eia.platform.api.idempotency.HttpSnapshot
 import io.eia.platform.observability.context.CorrelationHeaders
 import io.eia.platform.observability.context.ObservabilityContext
 import io.eia.shared.kernel.DomainError
@@ -29,11 +30,26 @@ public val ProblemJson: ContentType = ContentType("application", "problem+json")
  * - [Problem.retryAfter] があれば `Retry-After`(秒。切り上げ)を付ける。
  */
 public suspend fun ApplicationCall.respondProblem(problem: Problem) {
-    attributes.put(ProblemWritten, Unit)
+    attributes.put(ResponseWritten, Unit)
     response.header(HttpHeaders.CacheControl, "no-store")
     problem.retryAfter?.let { response.header(HttpHeaders.RetryAfter, retryAfterSeconds(it)) }
     respondText(problemJson(problem, correlationId()), ProblemJson, HttpStatusCode.fromValue(problem.status))
 }
+
+/**
+ * [problem] を [HttpSnapshot] にする。冪等の処理([io.eia.platform.api.idempotency.IdempotencyHandler])の中で、エラーを
+ * 応答として返すときに使う(422 などの 4xx は保存され、再送にも同じ本文を返す)。ヘッダと本文は [respondProblem] と同じ。
+ */
+public suspend fun ApplicationCall.problemSnapshot(problem: Problem): HttpSnapshot =
+    HttpSnapshot(
+        problem.status,
+        listOfNotNull(
+            HttpHeaders.ContentType to ProblemJson.toString(),
+            HttpHeaders.CacheControl to "no-store",
+            problem.retryAfter?.let { HttpHeaders.RetryAfter to retryAfterSeconds(it) },
+        ),
+        problemJson(problem, correlationId()).toByteArray(Charsets.UTF_8),
+    )
 
 /** [error] を、[installProblemDetails] の写し方(既定は [Problem.of])で Problem Details にして返す。 */
 public suspend fun ApplicationCall.respondError(error: DomainError) {
@@ -41,8 +57,11 @@ public suspend fun ApplicationCall.respondError(error: DomainError) {
     respondProblem(mapper?.invoke(error) ?: Problem.of(error))
 }
 
-/** この応答が [respondProblem] で書かれたことの印(StatusPages の 404 / 405 の処理が上書きしないようにする)。 */
-internal val ProblemWritten: AttributeKey<Unit> = AttributeKey("eia.api.problem-written")
+/**
+ * この応答を platform/api の部品([respondProblem]・[io.eia.platform.api.idempotency.respondIdempotently])が書いたことの印
+ * (StatusPages の 404 / 405 の処理が上書きしないようにする)。
+ */
+internal val ResponseWritten: AttributeKey<Unit> = AttributeKey("eia.api.response-written")
 
 internal val ProblemDetailsConfigKey: AttributeKey<ProblemDetailsConfig> = AttributeKey("eia.api.problem-details-config")
 
