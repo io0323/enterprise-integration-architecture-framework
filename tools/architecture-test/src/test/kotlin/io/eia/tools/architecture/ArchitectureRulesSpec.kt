@@ -116,6 +116,12 @@ class ArchitectureRulesSpec :
                     listOf("UsesNimbus.kt", "UsesNimbusQualified.kt")
             }
 
+            test("services の domain と application(テストを含む)で Canonical Model を import・完全修飾名で参照する") {
+                val found = ArchitectureRules.canonicalModelOutsideDomainAndApplication(violations)
+                found.fileNames() shouldContainExactlyInAnyOrder
+                    listOf("UsesCanonicalModel.kt", "UsesCanonicalModel.kt", "CanonicalInTest.kt")
+            }
+
             test("Retryable と NonRetryable の両方を直接・間接に実装する型") {
                 ArchitectureRules
                     .domainErrorKindIsExclusive(
@@ -145,6 +151,7 @@ class ArchitectureRulesSpec :
                 ArchitectureRules.domainErrorKindIsExclusive(compliant).shouldBeEmpty()
                 ArchitectureRules.otelSdkOnlyInAllowedModules(compliant).shouldBeEmpty()
                 ArchitectureRules.nimbusOnlyInSecurity(compliant).shouldBeEmpty()
+                ArchitectureRules.canonicalModelOutsideDomainAndApplication(compliant).shouldBeEmpty()
             }
 
             test("platform 間の依存は許可した一覧だけで、循環がない(テストの依存とコメントは数えない)") {
