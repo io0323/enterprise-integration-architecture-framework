@@ -121,7 +121,7 @@ P04a ③ で `platform/security` を作る。Framework 12.1 は、受信側で�
 - 本文は RFC 9457 の Problem Details の最小形(`{"type":"about:blank","title":"...","status":...}`、`application/problem+json`)にし、`Cache-Control: no-store` を付ける。**拒否した理由は応答に含めない**(攻撃者がトークンを作り直す手がかりになるため)。理由は DEBUG ログとメトリクス `eia.security.jwt.rejections`(属性 `reason`。値は `JwtRejectionReason` の固定の集合)で追う。
 - `WWW-Authenticate` に入れるのは、設定の realm と、RFC 6749 §3.3 の scope-token の形式で検証済みのスコープだけ。リクエストから受け取った値は入れない(ヘッダの注入を防ぐ)。
 - `requireScopes` は `authenticate { }` の中で使う。認証を通っていない(`authenticate(optional = true)` でトークンがない場合を含む)ときは 401 にし、処理を通さない。
-- P05 で Problem Details を全体に導入するとき、`type` を連携標準のエラーの URI に揃える。
+- P05 で Problem Details を全体に導入するとき、`type` を連携標準のエラーの URI に揃える。→ P05 ②a で揃えた(`platform/api` の `respondProblem`。`unauthorized` / `forbidden` / `service-unavailable`。ADR-0022 §2)。
 
 ### 6. SecretProvider のローカルの実装(`EnvSecretProvider`。ADR-0008)
 - 名前 `NAME`(`[A-Z][A-Z0-9_]*`、`_FILE` で終わる名前は使えない)に対して、`NAME`(値)か `NAME_FILE`(Docker secrets のファイルのパス)の**どちらか一方**を設定する。両方あるとき・どちらもないとき・値が空のときはエラーにする。
@@ -178,3 +178,4 @@ P04a ③ で `platform/security` を作る。Framework 12.1 は、受信側で�
 ## 改訂履歴
 - 2026-09-30: §4 のトークンの取得に、`shared/resilience` の Retry・Circuit Breaker・締め切りを結線した(P04b ②。ADR-0021 §11)。1 回の取得のタイムアウトは `ClientCredentialsConfig.timeout` から `Resilience` の `attemptTimeout` に移した。`Retry-After` の解析は `platform/reliability` に移した。RetryPolicy が `Retry-After` を優先して待つようになったため、5xx のうち `Retry-After` を使うのは 503 だけにした(INTEGRATION_STANDARDS §3)。接続の失敗として扱う例外は `IOException` と名前解決の失敗・タイムアウトに絞り、そのほかの例外(プログラムの誤り)は捕まえずに伝える(ADR-0021 §3。Circuit Breaker とリトライに数えないため)。JWKS の取得を専用の dispatcher に分けるかの判断は、Bulkhead がスレッドを分けないため P05 に送った。
 - 2026-09-30: §4 のトークンの取得が、呼び出し元の締め切り(`CallDeadline`)を引き継ぐようにした(P05 ①。ADR-0021 §12・Issue #48)。取得中の呼び出しを待つ時間も呼び出し元の残り時間までにし、呼び出し元の締め切りで打ち切った失敗は待っていた呼び出しに共有しない。
+- 2026-09-30: §5 の 401 / 403 / 503 の本文を `platform/api` の Problem Details にした(P05 ②a。ADR-0022 §2)。`type` を `https://eiaf.example/problems/{unauthorized,forbidden,service-unavailable}` にし、`correlationId` を付ける。拒否した理由を返さない方針は変えない。

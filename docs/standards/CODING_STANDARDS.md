@@ -12,7 +12,7 @@
 ## エラー処理
 - domain/application: `Result<T, DomainError>`(kernel 提供)で返す。`DomainError` は sealed interface で、直下は `Retryable` / `NonRetryable` の 2 つ。サービスのエラーはどちらか一方だけを実装する(両方の実装は Konsist で禁止。ADR-0011)。
 - adapters: 外部例外を捕捉し、Retryable / NonRetryable に分類して上位へ。
-- REST 応答は RFC 9457 Problem Details(`type`, `title`, `status`, `detail`, `correlationId`)。
+- REST 応答は RFC 9457 Problem Details(`type`, `title`, `status`, `detail`, `correlationId`)。`platform/api` の `installProblemDetails` を入れ、エラーは `call.respondError(error)` で返す。`detail` に例外や `DomainError` のメッセージを入れない(INTEGRATION_STANDARDS §6・ADR-0022 §2)。
 
 ## Canonical Model
 - 受信点(REST / Kafka / File / Webhook などのデシリアライズ)で Canonical Model を読むときは `CanonicalCodec.decode` を使い、デシリアライズと `validate()` を必ず一緒に行う。`Json.decodeFromString` を直接使わない(`Money` は `@Contextual` のため Codec なしでは扱えない)。送信時も `CanonicalCodec.encode` で検証を通す(ADR-0011 §5)。
