@@ -92,7 +92,7 @@ Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)�
 | Grafana | `admin` | `GRAFANA_ADMIN_PASSWORD` |
 | MQTT | `MQTT_USERNAME` | `MQTT_PASSWORD` |
 | S3(管理者) | `eiaf`(Admin)。バケットとポリシーの作成用 | `S3_ACCESS_KEY` / `S3_SECRET_KEY` |
-| S3(監査のアンカーの書込み) | `eiaf-audit`。バケット `eiaf-audit` の Read / Write / List だけ。バケットの管理操作と削除はバケットポリシーで拒否する(ADR-0017 §7)。サービスごとの分離は #43 | `AUDIT_S3_ACCESS_KEY` / `AUDIT_S3_SECRET_KEY` |
+| S3(監査のアンカーの書込み。サービスごと) | `eiaf-audit-{service}`(今は `eiaf-audit-order`)。バケット `eiaf-audit` の Read / List と、`anchors/{service}/` の下だけの Write。ほかのサービスのプレフィックス・バケットの管理操作・削除・Legal Hold はできない(ADR-0017 §7。Issue #43) | `ORDER_AUDIT_S3_ACCESS_KEY` / `ORDER_AUDIT_S3_SECRET_KEY`。以前の共有の `AUDIT_S3_*` は使われない(.env に残っていても害はない) |
 | S3(監査の検査) | `eiaf-audit-verify`。バケット `eiaf-audit` の Read / List だけ。`make audit-verify` が使う | `AUDIT_VERIFY_S3_ACCESS_KEY` / `AUDIT_VERIFY_S3_SECRET_KEY` |
 | SFTP | `eiaf-file` / `partner01` | 秘密鍵 `secrets/sftp-file` / `secrets/sftp-b2b` |
 
