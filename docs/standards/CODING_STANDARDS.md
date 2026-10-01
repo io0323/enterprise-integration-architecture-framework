@@ -6,7 +6,7 @@
 - `!!` 禁止。`lateinit` は DI/テスト以外禁止。
 - 値オブジェクトは `@JvmInline value class` で表現(ID・金額・キー)。
 - 時刻は `kotlin.time.Instant`(UTC)。`kotlin.time.Clock` をインジェクションしテスト可能にする(テストは kernel の `FixedClock`。ADR-0011)。
-- 永続化やイベントに載せる時刻は、受け付けた時点でマイクロ秒に切り捨てる(PostgreSQL と Avro の timestamp-micros の精度に合わせる。ADR-0012 §3)。テストではナノ秒の端数を持つ時計を使い、精度の食い違いを手元でも再現できるようにする。
+- 永続化やイベントに載せる時刻は、受け付けた時点で `Instant.truncatedToMicros()`(shared/kernel)でマイクロ秒に切り捨てる(PostgreSQL と Avro の timestamp-micros の精度に合わせる。ADR-0012 §3)。テストではナノ秒の端数を持つ時計を使い、精度の食い違いを手元でも再現できるようにする。
 - 金額は kernel の `Money`(最小通貨単位の Long + `Currency`)。浮動小数点で金額・率を扱わない。率は `Rate`(分数 / basis points)で表し、率を掛ける演算では `RoundingMode` を必ず明示する(ADR-0011)。
 - 非同期は coroutines。`GlobalScope` 禁止。ブロッキング I/O は `Dispatchers.IO`。
 

@@ -38,6 +38,7 @@ Canonical Model(Kotlin)の型と Avro の型を、次の表のとおりに対応
 - Avro では `long` + 論理型 `timestamp-micros`(UTC エポックからのマイクロ秒)で表す。
 - **マイクロ秒未満は切り捨てる。** 切り捨ては時間軸の過去方向(負の無限大方向)とし、エポック以前の時刻でも同じ規則にする(`1969-12-31T23:59:59.999999999Z` → `-1`)。
 - `long` のマイクロ秒で表せない時刻(約 ±29 万年の外)はエラーにする。
+- 切り捨ては `shared/kernel` の `Instant.truncatedToMicros()` に置き、domain(受け付けた時刻の切り捨て)と次の変換関数の両方がこれを使う。
 - 変換関数は `shared/canonical-model` の `Instant.toEpochMicros()` と `instantOfEpochMicros()`(commonMain)に置く。ナノ秒を含む値の往復・エポック以前・範囲の端は `EpochMicrosSpec` で検査する。
 
 ### 4. 一致検査(contract-check の `CC-CANON-*`)

@@ -7,6 +7,7 @@ import io.eia.shared.kernel.err
 import io.eia.shared.kernel.money.Money
 import io.eia.shared.kernel.money.MoneyError
 import io.eia.shared.kernel.ok
+import io.eia.shared.kernel.truncatedToMicros
 import kotlin.time.Instant
 
 /**
@@ -222,9 +223,3 @@ public data class RestoredLine(
     val unitPrice: Money,
     val lineAmount: Money,
 )
-
-private const val NANOS_PER_MICRO = 1_000
-
-/** マイクロ秒未満を切り捨てる(ADR-0012 §3)。 */
-internal fun Instant.truncatedToMicros(): Instant =
-    Instant.fromEpochSeconds(epochSeconds, nanosecondsOfSecond / NANOS_PER_MICRO * NANOS_PER_MICRO)
