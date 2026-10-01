@@ -48,6 +48,15 @@ public class ProblemType private constructor(
         public val RATE_LIMITED: ProblemType = of("rate-limited", 429, "Too many requests", "The rate limit was exceeded.")
         public val SERVICE_UNAVAILABLE: ProblemType =
             of("service-unavailable", 503, "Service unavailable", "The service is temporarily unavailable.")
+
+        /** 入口で決めたリクエストの予算を超えた。処理は確定していない(ADR-0024 §3)。 */
+        public val DEADLINE_EXCEEDED: ProblemType =
+            of(
+                "deadline-exceeded",
+                503,
+                "Deadline exceeded",
+                "The request did not complete within its time budget and was not committed. Retry with the same Idempotency-Key.",
+            )
         public val INTERNAL_ERROR: ProblemType = of("internal-error", 500, "Internal error", "An unexpected error occurred.")
         public val UNAUTHORIZED: ProblemType = of("unauthorized", 401, "Unauthorized", null)
         public val FORBIDDEN: ProblemType = of("forbidden", 403, "Forbidden", null)
@@ -64,6 +73,7 @@ public class ProblemType private constructor(
                 CONFLICT,
                 RATE_LIMITED,
                 SERVICE_UNAVAILABLE,
+                DEADLINE_EXCEEDED,
                 INTERNAL_ERROR,
                 UNAUTHORIZED,
                 FORBIDDEN,
