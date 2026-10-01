@@ -68,7 +68,7 @@ services/order/
     port/outbound/OrderRepository.kt(楽観的ロック), TransactionRunner.kt, OrderIdGenerator.kt, OutboxPort.kt(P06)   # IdempotencyStore は platform/api(ADR-0022 §1)
     usecase/PlaceOrderService.kt, GetOrderService.kt
   adapters/src/main/kotlin/io/eia/order/adapters/             # package io.eia.order.adapters
-    in/rest/OrderRoutes.kt, OrderDtoMapper.kt
+    inbound/rest/OrderRoutes.kt, OrderDtos.kt, OrderDtoMapper.kt, OrderProblems.kt   # `in` は予約語(ktlint はバッククォートのパッケージ名を許さない)
     out/persistence/ExposedOrderRepository.kt, ExposedTransactionRunner.kt, OrderSchema.kt(order と監査のマイグレーション),
                     UuidV7OrderIdGenerator.kt, PostgresIdempotencyStore.kt, ExposedTransactionBoundary.kt(冪等。ADR-0022 §3),
                     ExposedOutbox.kt(P06)
