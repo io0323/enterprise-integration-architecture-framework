@@ -1,8 +1,8 @@
-# ADR-0024: サービスの実行時の構成(エンジン・コマンドと資格情報・予算と打ち切り・ヘルスチェック・設定)
+# ADR-0024: サービスの実行時の構成(エンジン・コマンドと資格情報・予算と打ち切り・ヘルスチェック・設定・mTLS・イメージ)
 - Status: Accepted
 - Date: 2026-10-01
-- Framework 参照章: 5.2, 12.2, 12.3, 13.1, 14
-- 関連: ADR-0021 §12(呼び出し元の締め切り)、ADR-0022 §3(冪等)、ADR-0017(監査のマイグレーション)、ADR-0018(可観測性)、ADR-0019(JWT)、ADR-0023(⑤ のゲートウェイと mTLS)
+- Framework 参照章: 5.2, 12.1, 12.2, 12.3, 13.1, 14
+- 関連: ADR-0021 §12(呼び出し元の締め切り)、ADR-0022 §3(冪等)、ADR-0017(監査のマイグレーション)、ADR-0018(可観測性)、ADR-0019(JWT)、ADR-0008(mTLS の範囲と開発用 CA)、ADR-0016(イメージの固定)、ADR-0023(⑤c のゲートウェイ)
 - 番号: P05 で予約した番号(0022 platform/api / 0023 gateway / 0024 サービスの実行時の構成)
 
 ## Context
@@ -13,6 +13,8 @@ P05 ④b-2 で、最初のサービス(order-service)を起動できる形にす
 3. リクエストの予算と、その打ち切り(コルーチンと DB)、ほかのタイムアウトとの大小関係
 4. ヘルスチェック、期限切れの冪等の記録の削除
 5. 設定(環境変数)と秘密情報の名前
+6. API の mTLS(ゲートウェイ → サービス。ADR-0008)と、ヘルスチェックのポート(P05 ⑤b で追加)
+7. コンテナイメージ(P05 ⑤b で追加)
 
 ## Decision
 ### 1. エンジンは Ktor の Netty
@@ -23,7 +25,7 @@ P05 ④b-2 で、最初のサービス(order-service)を起動できる形にす
   - `migrate`: DB の所有者(`{service}`)の資格情報(`ORDER_DB_PASSWORD`)で、サービスの表と監査の表(ADR-0017)をマイグレーションして終わる。
   - `serve`: アプリのロール(`{service}_app`)の資格情報(`ORDER_APP_DB_PASSWORD`)だけで、リクエストを処理する。**マイグレーションはしない。**
 - **serve の環境に所有者のパスワード(`ORDER_DB_PASSWORD` か `ORDER_DB_PASSWORD_FILE`)があれば、起動しない**(終了コード 2)。誤って渡しても、リクエストを処理するプロセスが所有者の権限(DDL・権限の変更・監査のトリガーの無効化)を持たないことを、起動時の検査で保証する。
-- 順序: ローカル基盤と統合テストでは、`migrate` を実行してから `serve` を起動する。⑤ の compose では、`migrate` を 1 回だけ動くコンテナにし、`serve` のコンテナは `depends_on: condition: service_completed_successfully` で待たせ、`serve` の環境には `ORDER_APP_DB_PASSWORD` だけを渡す。
+- 順序: ローカル基盤と統合テストでは、`migrate` を実行してから `serve` を起動する。compose(profile `order`)では、`order-migrate` を 1 回だけ動くコンテナにし、`order-service`(serve)は `depends_on: condition: service_completed_successfully` で待たせ、`serve` の環境には `ORDER_APP_DB_PASSWORD` だけを渡す。`make up` の `--wait` は、終了コード 0 で終わった `order-migrate` を失敗と扱わない(Compose v5.5.1 で確かめた。CI の infra ジョブ `verify (order)` でも確かめる)。
 - 理由: 起動のたびに所有者の接続でマイグレーションすると、リクエストを処理するプロセスが、常に所有者のパスワードを持つことになる。プロセスが侵害されたときに、表の削除や監査のトリガーの無効化(ADR-0017 §8 の残るリスク)まで許してしまう(Framework 12.3 の最小権限)。
 
 ### 3. リクエストの予算と打ち切り
@@ -59,13 +61,32 @@ P05 ④b-2 で、最初のサービス(order-service)を起動できる形にす
 - 5xx なので冪等の記録には保存しない(ADR-0022 §3)。`ServerObservability` には `markTimedOut()` で伝え、ほかの 503 と区別して `error.type=timeout` で数える(ADR-0018 §5)。
 
 ### 4. ヘルスチェックと削除のジョブ
-- `/health/live`(プロセスが動いている)と `/health/ready`(DB に接続できる。できなければ 503)。認証しない。⑤ で、平文のポート(コンテナの中だけ)に分ける。
+- `/health/live`(プロセスが動いている)と `/health/ready`(DB に接続できる。できなければ 503)。認証しない。平文のヘルスチェックのポートだけで返す(§6)。
 - 期限切れの冪等の記録の削除(`IdempotencyStore.purgeExpired`)を、`serve` の中で既定 5 分ごとに行う(`ORDER_IDEMPOTENCY_PURGE_INTERVAL`)。処理中の記録の猶予はリースの長さ(ADR-0022 §3)。失敗しても次の周期でやり直し、サーバの停止で止まる。
 
 ### 5. 設定と秘密情報
 - 設定は環境変数で渡す。秘密情報は `SecretProvider`(`EnvSecretProvider`。値か `_FILE` の Docker secrets。ADR-0019 §6)から読む。order-service の変数は `OrderConfig` の KDoc に一覧がある。
 - 配線は Koin。依存先ごとの `Resilience` は `ResilienceMetrics` 経由で作る(Konsist の `resilienceOnlyThroughMetrics`)。
 - JWT の検証は `requireClientId = true`(ADR-0019・ADR-0022 §3)。
+
+### 6. API は mTLS だけで受け、ヘルスチェックは平文のポートに分ける(P05 ⑤b)
+- コネクタを 2 つにする。
+  | ポート | 既定 | 受けるもの | 公開 |
+  |---|---|---|---|
+  | API(`ORDER_HTTPS_PORT`) | 8443 | API のルートだけ。**mTLS だけ**(TLS 1.2 / 1.3) | ゲートウェイ(APISIX)から。ローカルではホストの 127.0.0.1:19443 にも出す(mTLS なしの接続を拒否することの検査用) |
+  | ヘルスチェック(`ORDER_HEALTH_PORT`) | 8081 | `/health/live`・`/health/ready` だけ。平文 | コンテナの外には出さない(コンテナのヘルスチェック用) |
+- ルートは、ポートの番号ではなく接続の種類(Ktor の `request.local.scheme` が `https` か `http` か)で分ける。テストでは空いているポートを使うため、番号が起動するまで決まらない。API のルートは平文のポートでは 404、ヘルスチェックは API のポートでは 404。
+- **クライアント証明書は必須**にする(Ktor の `sslConnector` に trustStore を設定すると `needClientAuth` になる)。開発用 CA の署名と期限を確かめる。
+- **さらに SAN の DNS 名を許可の一覧(`ORDER_TLS_ALLOWED_CLIENTS`。既定 `apisix`)で確かめる**。同じ CA がほかのサービスの証明書も署名するため、CA の検証だけでは、ゲートウェイ以外のクライアントも API のポートに接続できてしまう。Ktor は TrustManager を差し替えられないので、Netty のパイプラインで TLS の処理(`ssl`)の直後に確認の処理を置き、許可されていなければ HTTP の処理に渡す前に接続を閉じる(`ClientCertificateAllowList`)。このためゲートウェイとの間は HTTP/1.1 にする(`enableHttp2 = false`)。
+- 鍵と証明書は PEM のファイル(鍵は PKCS#8。EC P-256)から、メモリ上の KeyStore を作る。キーストアのパスワードという秘密情報を増やさないため(パスワードはプロセスの中で乱数から作る)。
+- **起動時に有効期限を確かめる**。サーバ証明書か CA が期限切れ(またはまだ有効でない)なら起動しない。エラーには、どの設定の証明書か、`notAfter`、直し方(`make certs`。docs/runbooks/dev-certificates.md)を書く。残りが 7 日を切っていれば WARN を残す。
+- 開発用の CA と証明書は `infra/local/scripts/gen-dev-certs.sh` が `infra/local/certs/`(.gitignore 済み)に作る(ADR-0008)。CA は 90 日、証明書は 30 日。`make up` と `make certs` のたびに確かめ、**残りが 7 日を切っている・今の CA で検証できない・ない証明書だけを作り直す**(CA を作り直したらすべて)。起動中のコンテナは証明書を起動時にしか読まないので、作り直したら `make up` が証明書を使うコンテナを作り直す(Makefile の `CERT_CONSUMERS`)。
+
+### 7. コンテナイメージ(P05 ⑤b)
+- ベースは distroless の Java 21 の nonroot(`gcr.io/distroless/java21-debian12:nonroot`)。images.env の `JAVA_RUNTIME_IMAGE` にタグとダイジェストで固定する(ADR-0016 §2)。シェルとパッケージマネージャがなく、攻撃面が小さい。uid 65532 で動く。
+- シェルがないので、Gradle の起動スクリプトは使わず、`java -cp '/app/lib/*' io.eia.order.app.MainKt` で起動する。中身は `installDist` の出力で、`make up PROFILE=order` が先に作る(`make order-dist`)。
+- ヘルスチェックは、ほかのシェルのないイメージと同じく、BusyBox の wget を `/probe` にマウントして使う(ADR-0016 §4)。
+- **root で動かさない**。compose では、開発用の鍵(`infra/local/certs/*.key`。0600)を読むため、ホストの利用者の uid:gid で動かす(Makefile の `EIAF_UID` / `EIAF_GID`)。ホストで root として実行した場合は 65532 にし、`gen-dev-certs.sh` が鍵の所有者を 65532 にする。本番では Secret の配布の仕組みで鍵を渡し、イメージの既定の 65532 で動かす。
 
 ## Alternatives Considered
 - **Ktor の CIO**: 依存は軽いが、Server は TLS を扱えず、⑤ でエンジンを替えることになる。不採用。
@@ -76,8 +97,18 @@ P05 ④b-2 で、最初のサービス(order-service)を起動できる形にす
 - **予算切れを 504 にする**: §3 の表のとおり、ゲートウェイの 504 と区別できず、`Retry-After` も付けられない。不採用。
 - **statement_timeout を残り時間ちょうどにする**: DB の打ち切り(SQL の例外)とコルーチンの打ち切りが競い、応答の種類(`service-unavailable` と `deadline-exceeded`)が定まらない。余裕を足して、コルーチンを先にした。不採用。
 
+- **TLS を任意にする(証明書がなければ平文で API を受ける)**: 設定の漏れで、mTLS のない API のポートができてしまう。serve では TLS のファイルを必須にした。不採用。
+- **ポートの番号でルートを分ける(Ktor の `localPort`)**: 空いているポートを使うテストで、番号が起動するまで決まらない。接続の種類で分けた。不採用。
+- **SAN を確かめず、CA の検証だけにする**: 同じ CA が署名したほかのサービスの証明書でも、API のポートに直接接続できる(ゲートウェイの JWT の検証や Rate Limit を迂回できる)。不採用。
+- **キーストア(PKCS#12)のファイルを渡す**: キーストアのパスワードという秘密情報が増え、APISIX(PEM を使う)と形式が分かれる。不採用。
+- **eclipse-temurin の JRE に root 以外の利用者を加える**: シェルとパッケージがあり攻撃面が大きい。不採用(P05 ⑤ の計画で決めた)。
+- **鍵を 0644 にして、イメージの既定の uid 65532 で動かす**: 同じホストのほかの利用者が鍵を読める。ホストの利用者の uid で動かす形にした。不採用。
+
 ## Consequences(トレードオフ)
-- デプロイの手順が 2 段階(migrate → serve)になる。⑤ の compose と、本番の配備の仕組み(Job・init container など)で順序を守る必要がある。
+- デプロイの手順が 2 段階(migrate → serve)になる。compose(§2)と、本番の配備の仕組み(Job・init container など)で順序を守る必要がある。
+- `./gradlew :services:order:app:run` などでホストから serve を動かすときも、TLS のファイル(`ORDER_TLS_*`)が要る(`make certs` が作る `infra/local/certs/` を指す)。
+- ゲートウェイとの間は HTTP/1.1 になる(§6 の許可の一覧の確認のため)。HTTP/2 にするときは、確認の処理を HTTP/2 のパイプラインにも置く必要がある。
+- distroless のタグ `nonroot` は上流が付け直す(OS のパッケージの更新など)。固定したダイジェストの更新は、Issue #35 の定期確認(images.env の全イメージが対象)で検知する。
 - DB の問い合わせは、予算 + 0.5 秒まで続きうる(その間、接続は使われたまま)。
 - 予算を超えた要求は 503 `deadline-exceeded` になり、同じキーで再試行すると処理し直す(打ち切られた処理は確定していない)。
 - ゲートウェイの上流のタイムアウトの 504(結果は分からない)は、⑤c で契約に加え、Problem Details で返せるかを確かめる。
@@ -85,3 +116,4 @@ P05 ④b-2 で、最初のサービス(order-service)を起動できる形にす
 ## 改訂履歴
 - 2026-10-01: 作成(P05 ④b-2)。
 - 2026-10-01: P05 ⑤a で、予算切れの応答を Ktor の既定の 504 から 503 `deadline-exceeded`(Problem Details、`Retry-After`)に変えた(§3 の表)。契約(order-api.v1 の `ServiceUnavailable`)と INTEGRATION_STANDARDS §6 にも加えた。
+- 2026-10-01: P05 ⑤b で、§6(API は mTLS だけで受け、SAN の許可の一覧を確かめる。ヘルスチェックは平文のポート。証明書の有効期限の確認と、7 日を切ったときの作り直し)と §7(distroless の nonroot のイメージ)を加えた。compose の `order-migrate` → `order-service` の順序を実装した(§2)。
