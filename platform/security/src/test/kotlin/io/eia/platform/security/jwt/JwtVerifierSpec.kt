@@ -30,6 +30,7 @@ internal fun config(
     audience: String = AUDIENCE,
     algorithms: Set<String> = SignatureAlgorithms.DEFAULT,
     maxTokenLifetime: kotlin.time.Duration = JwtVerifierConfig.DEFAULT_MAX_TOKEN_LIFETIME,
+    requireClientId: Boolean = false,
 ): JwtVerifierConfig =
     JwtVerifierConfig(
         issuer = ISSUER,
@@ -37,6 +38,7 @@ internal fun config(
         jwksUri = JWKS_URI,
         algorithms = algorithms,
         maxTokenLifetime = maxTokenLifetime,
+        requireClientId = requireClientId,
     )
 
 internal fun verifier(
@@ -131,6 +133,25 @@ class JwtVerifierSpec :
                 ).forEach { remove ->
                     verifier.rejection(signRsa(claims(remove))) shouldBe JwtRejectionReason.MISSING_CLAIM
                 }
+            }
+
+            test("azp も client_id もないトークンは、既定では受け入れる(clientId は null)") {
+                val token = signRsa(claims { claim("azp", null) })
+                verifier
+                    .verifyBlocking(token)
+                    .shouldBeInstanceOf<Result.Ok<VerifiedToken>>()
+                    .value.clientId shouldBe null
+            }
+
+            test("requireClientId を有効にすると、azp も client_id もないトークンを missing_client_id で拒否する。client_id だけなら受け入れる") {
+                val strict = verifier(config = config(requireClientId = true))
+                strict.rejection(signRsa(claims { claim("azp", null) })) shouldBe JwtRejectionReason.MISSING_CLIENT_ID
+                strict.rejection(signRsa(claims { claim("azp", " ") })) shouldBe JwtRejectionReason.MISSING_CLIENT_ID
+                strict
+                    .verifyBlocking(signRsa(claims { claim("azp", null).claim("client_id", "legacy-client") }))
+                    .shouldBeInstanceOf<Result.Ok<VerifiedToken>>()
+                    .value.clientId shouldBe "legacy-client"
+                strict.rejection(signRsa(claims {})) shouldBe null
             }
 
             test("nbf と iat が leeway を超えて未来なら拒否する") {

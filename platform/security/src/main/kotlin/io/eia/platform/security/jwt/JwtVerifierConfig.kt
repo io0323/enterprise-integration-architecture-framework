@@ -17,6 +17,9 @@ import kotlin.time.Duration.Companion.seconds
  * @param clockSkew 時刻のずれの許容幅(leeway)。`exp` / `nbf` / `iat` の判定に使う。
  * @param maxTokenLifetime `exp - iat` の上限。これを超える(長期有効の)トークンを拒否する(Framework 12.1「長期有効JWT禁止」)。
  * @param jwks JWKS の取得とキャッシュ。
+ * @param requireClientId `azp`(なければ `client_id`)がないトークンを拒否するか(理由は [JwtRejectionReason.MISSING_CLIENT_ID])。
+ *   呼び出し元のクライアントでデータを分ける API(例: Idempotency-Key の範囲。ADR-0022 §3)で有効にする。
+ *   既定は無効(既存の利用者の振る舞いを変えない)。Keycloak の Client Credentials のトークンには、常に `azp` がある。
  */
 @Suppress("LongParameterList") // 設定の項目(既定値つき。名前付き引数で指定する)
 public class JwtVerifierConfig(
@@ -27,6 +30,7 @@ public class JwtVerifierConfig(
     public val clockSkew: Duration = DEFAULT_CLOCK_SKEW,
     public val maxTokenLifetime: Duration = DEFAULT_MAX_TOKEN_LIFETIME,
     public val jwks: JwksConfig = JwksConfig(),
+    public val requireClientId: Boolean = false,
 ) {
     init {
         require(issuer.isNotBlank()) { "issuer が空です" }

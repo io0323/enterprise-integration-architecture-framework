@@ -175,7 +175,10 @@ public class JwtVerifier internal constructor(
             false
         }
 
-    /** 5. クレーム: iss・aud・時刻・有効期間(必須のクレームの有無と型は [TokenClaims.read] で確かめ済み)。 */
+    /**
+     * 5. クレーム: iss・aud・時刻・有効期間、設定によって呼び出し元のクライアント(必須のクレームの有無と型は [TokenClaims.read] で
+     * 確かめ済み)。
+     */
     private fun checkClaims(claims: TokenClaims): Result<VerifiedToken, JwtVerificationError> {
         val now = clock.now()
         val skew = config.clockSkew
@@ -196,6 +199,8 @@ public class JwtVerifier internal constructor(
                 exp <= iat -> JwtRejectionReason.MALFORMED
 
                 exp - iat > config.maxTokenLifetime -> JwtRejectionReason.LIFETIME_TOO_LONG
+
+                config.requireClientId && claims.caller.clientId.isNullOrBlank() -> JwtRejectionReason.MISSING_CLIENT_ID
 
                 else -> null
             }
