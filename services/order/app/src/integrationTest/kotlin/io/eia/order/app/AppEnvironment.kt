@@ -25,7 +25,8 @@ import kotlin.time.Clock
 import kotlin.time.Duration.Companion.minutes
 
 /**
- * app の統合テストの環境: ローカル基盤と同じロール(所有者 `order_service` と `order_service_app`)の PostgreSQL と、テスト用の IdP。
+ * app の統合テストの環境: ローカル基盤と同じロール(所有者 `order_service` と `order_service_app`)の PostgreSQL、テスト用の IdP、
+ * テスト用の CA([pki])と、ゲートウェイ(SAN `apisix`)のクライアント証明書で接続する HTTP クライアント([gateway])。
  * 環境変数は、migrate と serve で別々に作る(serve には所有者のパスワードを渡さない。ADR-0024 §2)。
  */
 internal class AppEnvironment : AutoCloseable {
@@ -43,6 +44,17 @@ internal class AppEnvironment : AutoCloseable {
             }
             start()
         }
+
+    val pki = TestPki()
+
+    /** order-service のサーバ証明書(SAN は localhost。テストは https://localhost:{port} に接続する)。 */
+    val serverCert: TestPki.Issued = pki.issue("order-service", listOf("order-service", "localhost"))
+
+    /** ゲートウェイのクライアント証明書(許可の一覧の既定 `apisix`)で接続する HTTP クライアント。 */
+    val gateway: TestHttp = TestHttp(pki.issue("apisix", listOf("apisix")).clientContext(pki))
+
+    /** 平文の HTTP クライアント(ヘルスチェックのポートと、mTLS なしの接続の確認)。 */
+    val plain: TestHttp = TestHttp(null)
 
     fun start() {
         postgres.start()
@@ -80,11 +92,20 @@ internal class AppEnvironment : AutoCloseable {
         mapOf(
             "ORDER_DB_URL" to url(database),
             "ORDER_APP_DB_PASSWORD" to appPassword,
-            "ORDER_HTTP_PORT" to "0",
+            "ORDER_HTTPS_PORT" to "0",
+            "ORDER_HEALTH_PORT" to "0",
             "OIDC_ISSUER" to ISSUER,
             "OIDC_JWKS_URI" to "http://127.0.0.1:${jwks.address.port}/jwks",
             "EIA_LOG_FORMAT" to "console",
-        ) + extra
+        ) + tlsEnv(serverCert) + extra
+
+    /** サーバ証明書と鍵、クライアント証明書を検証する CA のファイル。 */
+    fun tlsEnv(server: TestPki.Issued): Map<String, String> =
+        mapOf(
+            TlsFiles.CERT to server.certFile.toString(),
+            TlsFiles.KEY to server.keyFile.toString(),
+            TlsFiles.CLIENT_CA to pki.caFile.toString(),
+        )
 
     fun token(clientId: String = "client-a"): String {
         val now = Clock.System.now()
@@ -133,6 +154,7 @@ internal class AppEnvironment : AutoCloseable {
     override fun close() {
         jwks.stop(0)
         postgres.stop()
+        pki.close()
     }
 
     companion object {
