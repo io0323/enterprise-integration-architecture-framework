@@ -90,6 +90,9 @@ public class Order private constructor(
          * - 明細は 1 件以上。数量は 1 以上。単価は 0 以上。
          * - すべての明細の単価は、1 件目の明細と同じ通貨。
          * - 単価 × 数量と合計が、金額で表せる範囲を超えない(超えたら丸めずにエラー。ADR-0011 §1)。
+         * - [orderedAt] はマイクロ秒に切り捨てる(ADR-0012 §3 と同じ規則)。保存先(PostgreSQL の timestamptz)と連携(Avro の
+         *   timestamp-micros)はマイクロ秒までしか持たないため、受け付けた時点で揃えておく。揃えないと、ナノ秒の精度の時計(Linux)では、
+         *   登録の応答の時刻と、保存して読み直した時刻が食い違う(PostgreSQL はマイクロ秒未満を丸める)。
          */
         public fun place(
             id: OrderId,
@@ -104,7 +107,7 @@ public class Order private constructor(
             // 合計は、違反がないときだけ計算する(合計があれば、ほかの項目にも違反はない)
             val total = if (violations.isEmpty) totalOf(violations, lines) else null
             return if (total != null && customerId != null && address != null) {
-                ok(Order(id, customerId, OrderStatus.PLACED, orderedAt, lines, total, address, INITIAL_VERSION))
+                ok(Order(id, customerId, OrderStatus.PLACED, orderedAt.truncatedToMicros(), lines, total, address, INITIAL_VERSION))
             } else {
                 err(violations.toError())
             }
@@ -219,3 +222,9 @@ public data class RestoredLine(
     val unitPrice: Money,
     val lineAmount: Money,
 )
+
+private const val NANOS_PER_MICRO = 1_000
+
+/** マイクロ秒未満を切り捨てる(ADR-0012 §3)。 */
+internal fun Instant.truncatedToMicros(): Instant =
+    Instant.fromEpochSeconds(epochSeconds, nanosecondsOfSecond / NANOS_PER_MICRO * NANOS_PER_MICRO)

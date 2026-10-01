@@ -81,6 +81,12 @@ class OrderSpec :
                 order.totalAmount shouldBeEqual usd(50) // 0.10 × 3 + 0.20 = 0.50
             }
 
+            test("受け付けの時刻はマイクロ秒に切り捨てる(保存先と連携の精度に揃える。ADR-0012 §3)") {
+                val nanos = Instant.parse("2026-10-01T01:30:57.538668505Z")
+                Order.place(ID, draft(), nanos).ok().orderedAt shouldBe Instant.parse("2026-10-01T01:30:57.538668Z")
+                Order.place(ID, draft(), ORDERED_AT).ok().orderedAt shouldBe ORDERED_AT
+            }
+
             test("違反はすべて集めて返し、項目のパスは契約と同じ") {
                 val error =
                     Order
