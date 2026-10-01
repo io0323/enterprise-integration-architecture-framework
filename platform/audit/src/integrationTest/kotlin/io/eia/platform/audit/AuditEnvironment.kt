@@ -2,8 +2,10 @@ package io.eia.platform.audit
 
 import io.eia.platform.audit.anchor.S3AnchorStore
 import io.eia.platform.audit.anchor.S3AnchorStoreConfig
+import io.eia.platform.audit.anchor.ServiceName
 import io.eia.platform.audit.jdbc.AuditSchema
 import io.eia.platform.security.secret.EnvSecretProvider
+import io.eia.platform.security.secret.SecretName
 import io.eia.platform.testsupport.InfraImages
 import io.eia.platform.testsupport.SeaweedFsContainer
 import io.eia.shared.kernel.getOrNull
@@ -30,8 +32,12 @@ import java.util.concurrent.atomic.AtomicInteger
  *
  * - DB: 所有者 `order_service`(マイグレーション)とアプリ用の `order_service_app`(INSERT / SELECT だけ)。
  *   改竄のテストが互いに影響しないよう、[newDatabase] でテストごとに DB を作る。
- * - S3: 管理者 `eiaf` と、`eiaf-audit` バケットだけを操作できる `eiaf-audit`。バケットポリシーは
- *   infra/local/seaweedfs/audit-bucket-policy.json をそのまま使う(compose の seaweedfs-init と同じ)。
+ * - S3: 管理者 `eiaf`、検査用(読み取り専用)の `eiaf-audit-verify`、書込み用のサービスごとの identity(Issue #43)。
+ *   - `eiaf-audit-order`: compose と同じ。`anchors/order/` の下にだけ書ける。権限のテストに使う。
+ *   - `eiaf-audit-svc-N`: テストのサービス(`svc-N`)ごとに作り、`anchors/svc-N/` の下にだけ書ける。アンカーの機能のテストで、
+ *     テストごとにサービスを分けるために使う([writer])。
+ *   バケットポリシーは infra/local/seaweedfs/audit-bucket-policy.json をそのまま使う(compose の seaweedfs-init と同じ)。
+ *   ポリシーが対象にするのは `eiaf-audit-order` だけなので、Legal Hold と削除の拒否は order で確かめる。
  */
 internal class AuditEnvironment : AutoCloseable {
     val postgres: PostgreSQLContainer = PostgreSQLContainer(InfraImages.get("POSTGRES_IMAGE").asCompatibleSubstituteFor("postgres"))
@@ -39,9 +45,9 @@ internal class AuditEnvironment : AutoCloseable {
         SeaweedFsContainer(
             mapOf(
                 ADMIN to listOf("Admin", "Read", "Write", "List", "Tagging"),
-                AUDIT to listOf("Read:$BUCKET", "Write:$BUCKET", "List:$BUCKET"),
+                ORDER to writerActions("order"),
                 VERIFY to listOf("Read:$BUCKET", "List:$BUCKET"),
-            ),
+            ) + (1..TEST_SERVICES).associate { "eiaf-audit-svc-$it" to writerActions("svc-$it") },
         )
     private val ownerPassword = randomHex()
     private val appPassword = randomHex()
@@ -83,20 +89,20 @@ internal class AuditEnvironment : AutoCloseable {
         block: (Connection) -> T,
     ): T = dataSource(postgres.username, postgres.password, database).connection.use(block)
 
-    /** [identity] の資格情報のアンカーの保存先。既定は書込み用の `eiaf-audit`、検査は読み取り専用の `eiaf-audit-verify`。 */
+    /** [identity] の資格情報のアンカーの保存先(書込みは [writer] の identity、検査は読み取り専用の [VERIFY])。 */
     fun anchorStore(
+        identity: String,
         interceptors: List<ExecutionInterceptor> = emptyList(),
-        identity: String = AUDIT,
     ): S3AnchorStore {
         val credentials = seaweed.credentials.getValue(identity)
         val secrets =
-            EnvSecretProvider(mapOf("AUDIT_S3_ACCESS_KEY" to credentials.accessKey, "AUDIT_S3_SECRET_KEY" to credentials.secretKey))
-        val config = S3AnchorStoreConfig(endpoint = URI(seaweed.endpoint), bucket = BUCKET)
+            EnvSecretProvider(mapOf(ACCESS_KEY.value to credentials.accessKey, SECRET_KEY.value to credentials.secretKey))
+        val config = S3AnchorStoreConfig(URI(seaweed.endpoint), BUCKET, ACCESS_KEY, SECRET_KEY)
         return S3AnchorStore(config, S3AnchorStore.buildClient(config, secrets, interceptors))
     }
 
-    /** audit の資格情報の S3 クライアント(権限の検査用。SDK を直接使う)。 */
-    fun auditClient(): S3Client = s3Client(seaweed.credentials.getValue(AUDIT))
+    /** [identity] の資格情報の S3 クライアント(権限の検査用。SDK を直接使う)。既定は order の書込み用。 */
+    fun writerClient(identity: String = ORDER): S3Client = s3Client(seaweed.credentials.getValue(identity))
 
     /** 検査専用(読み取り専用)の資格情報の S3 クライアント。 */
     fun verifyClient(): S3Client = s3Client(seaweed.credentials.getValue(VERIFY))
@@ -133,7 +139,20 @@ internal class AuditEnvironment : AutoCloseable {
     companion object {
         const val BUCKET = "eiaf-audit"
         const val ADMIN = "eiaf"
-        const val AUDIT = "eiaf-audit"
+        const val ORDER = "eiaf-audit-order"
+
+        /** 書込み用の identity を作っておくテストのサービスの数(`svc-1` … )。足りなければ増やす。 */
+        const val TEST_SERVICES = 30
+        private val ACCESS_KEY = SecretName("IT_AUDIT_S3_ACCESS_KEY")
+        private val SECRET_KEY = SecretName("IT_AUDIT_S3_SECRET_KEY")
+
+        /** サービスの書込み用の identity の名前(compose の `eiaf-audit-{service}` と同じ形)。 */
+        fun writer(service: ServiceName): String = "eiaf-audit-$service"
+
+        /** 書込み用の identity の操作: 読み取りと一覧はバケット全体、書込みは `anchors/{service}/` の下だけ(Issue #43)。 */
+        private fun writerActions(service: String): List<String> =
+            listOf("Read:$BUCKET", "List:$BUCKET", "Write:$BUCKET/anchors/$service/*")
+
         const val VERIFY = "eiaf-audit-verify"
         const val OWNER_ROLE = "order_service"
         const val APP_ROLE = "order_service_app"

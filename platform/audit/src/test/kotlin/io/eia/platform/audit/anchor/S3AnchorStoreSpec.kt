@@ -44,7 +44,13 @@ import java.time.Instant
 import java.util.Base64
 
 private const val BUCKET = "eiaf-audit"
-private val CONFIG = S3AnchorStoreConfig(endpoint = URI("http://localhost:19333"), bucket = BUCKET)
+private val CONFIG =
+    S3AnchorStoreConfig(
+        endpoint = URI("http://localhost:19333"),
+        bucket = BUCKET,
+        accessKeyName = SecretName("ORDER_AUDIT_S3_ACCESS_KEY"),
+        secretKeyName = SecretName("ORDER_AUDIT_S3_SECRET_KEY"),
+    )
 private val MODIFIED: Instant = Instant.parse("2026-09-28T00:00:00Z")
 private val UNTIL: Instant = Instant.parse("2026-09-29T00:00:00Z")
 
@@ -252,17 +258,17 @@ class S3AnchorStoreSpec :
         test("資格情報は SecretProvider から取り、取れなければ値を含まない例外にする") {
             val provider =
                 SecretCredentialsProvider(
-                    EnvSecretProvider(mapOf("AUDIT_S3_ACCESS_KEY" to "ak", "AUDIT_S3_SECRET_KEY" to "sk")),
-                    SecretName("AUDIT_S3_ACCESS_KEY"),
-                    SecretName("AUDIT_S3_SECRET_KEY"),
+                    EnvSecretProvider(mapOf("ORDER_AUDIT_S3_ACCESS_KEY" to "ak", "ORDER_AUDIT_S3_SECRET_KEY" to "sk")),
+                    SecretName("ORDER_AUDIT_S3_ACCESS_KEY"),
+                    SecretName("ORDER_AUDIT_S3_SECRET_KEY"),
                 )
             provider.resolveCredentials().accessKeyId() shouldBe "ak"
             provider.resolveCredentials().secretAccessKey() shouldBe "sk"
             val missing =
                 SecretCredentialsProvider(
-                    EnvSecretProvider(mapOf("AUDIT_S3_ACCESS_KEY" to "ak")),
-                    SecretName("AUDIT_S3_ACCESS_KEY"),
-                    SecretName("AUDIT_S3_SECRET_KEY"),
+                    EnvSecretProvider(mapOf("ORDER_AUDIT_S3_ACCESS_KEY" to "ak")),
+                    SecretName("ORDER_AUDIT_S3_ACCESS_KEY"),
+                    SecretName("ORDER_AUDIT_S3_SECRET_KEY"),
                 )
             shouldThrow<SdkClientException> { missing.resolveCredentials() }.message shouldNotContain "ak"
         }

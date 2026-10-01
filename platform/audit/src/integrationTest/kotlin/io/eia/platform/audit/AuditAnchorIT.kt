@@ -5,6 +5,7 @@ package io.eia.platform.audit
 import io.eia.platform.audit.anchor.AnchorKeys
 import io.eia.platform.audit.anchor.AnchorPublisher
 import io.eia.platform.audit.anchor.PublishedAnchor
+import io.eia.platform.audit.anchor.S3AnchorStore
 import io.eia.platform.audit.anchor.ServiceName
 import io.eia.platform.audit.jdbc.AuditLog
 import io.eia.platform.audit.verify.AuditVerification
@@ -63,19 +64,27 @@ class AuditAnchorIT :
     FunSpec({
         val env = AuditEnvironment()
         beforeSpec { env.start() }
-        afterSpec { env.close() }
         val log = AuditLog()
         val services = AtomicInteger()
         val recorder = PutHeaderRecorder()
-        val store by lazy { env.anchorStore(listOf(recorder)) }
+        // アンカーは、サービスごとの書込み用の identity で書く(anchors/{service}/ の下だけ。Issue #43)
+        val stores = mutableMapOf<ServiceName, S3AnchorStore>()
+
+        fun storeFor(service: ServiceName): S3AnchorStore =
+            stores.getOrPut(service) { env.anchorStore(AuditEnvironment.writer(service), listOf(recorder)) }
+
+        afterSpec {
+            stores.values.forEach { it.close() }
+            env.close()
+        }
 
         // 検査は、アンカーを書けない読み取り専用の資格情報で行う(make audit-verify と同じ)
-        val verifyStore by lazy { env.anchorStore(identity = AuditEnvironment.VERIFY) }
+        val verifyStore by lazy { env.anchorStore(AuditEnvironment.VERIFY) }
 
         fun newService(): ServiceName = ServiceName.parse("svc-${services.incrementAndGet()}").getOrNull()!!
 
         fun AuditDatabase.publish(service: ServiceName): PublishedAnchor =
-            app.connection.use { AnchorPublisher(service, store, RETENTION).publish(it).getOrNull().shouldNotBeNull() }
+            app.connection.use { AnchorPublisher(service, storeFor(service), RETENTION).publish(it).getOrNull().shouldNotBeNull() }
 
         fun AuditDatabase.verify(service: ServiceName): VerificationReport =
             app.connection.use { AuditVerification(service, verifyStore, MIN_RETENTION).run(it).getOrNull().shouldNotBeNull() }
@@ -134,24 +143,12 @@ class AuditAnchorIT :
                 listOf(Finding.HashMismatch(4), Finding.AnchorHashMismatch(published.key, published.versionId, 4))
         }
 
-        test("保持期限内のアンカーは audit の資格情報でも管理者の資格情報でも削除できず、保持期限を短縮できない") {
+        test("保持期限内のアンカーは管理者の資格情報でも削除できず、保持期限を短縮できない(書込み用の identity は下の権限のテスト)") {
             val db = env.newDatabase()
             val service = newService()
             db.append(log, 1)
             val published = db.publish(service)
             val shorter = Instant.now().plus(Duration.ofMinutes(1))
-            env.auditClient().use { audit ->
-                forbidden { audit.deleteObject { it.bucket(AuditEnvironment.BUCKET).key(published.key).versionId(published.versionId) } }
-                forbidden {
-                    audit.putObjectRetention {
-                        it
-                            .bucket(AuditEnvironment.BUCKET)
-                            .key(published.key)
-                            .versionId(published.versionId)
-                            .retention { r -> r.mode(ObjectLockRetentionMode.COMPLIANCE).retainUntilDate(shorter) }
-                    }
-                }
-            }
             forbidden {
                 env.admin.deleteObject {
                     it
@@ -184,14 +181,54 @@ class AuditAnchorIT :
             db.verify(service).findings.shouldBeEmpty()
         }
 
-        test("audit の資格情報では、バケットの管理操作とほかのバケットの操作ができない") {
+        test("order の書込み用の identity は、自分のプレフィックス(anchors/order/)にだけ書け、削除・Legal Hold・保持期限の短縮・管理操作ができない") {
+            val bucket = AuditEnvironment.BUCKET
             val other = "eiaf-it-other"
             env.admin.createBucket { it.bucket(other) }
             env.admin.putObject({ it.bucket(other).key("k.txt") }, RequestBody.fromString("x"))
-            env.auditClient().use { audit ->
-                val bucket = AuditEnvironment.BUCKET
+            val retainUntil = Instant.now().plus(Duration.ofMinutes(2))
+            env.writerClient().use { order ->
+                fun put(key: String) =
+                    order.putObject(
+                        {
+                            it
+                                .bucket(bucket)
+                                .key(key)
+                                .objectLockMode(ObjectLockMode.COMPLIANCE)
+                                .objectLockRetainUntilDate(retainUntil)
+                        },
+                        RequestBody.fromString("{}"),
+                    )
+                // 自分のプレフィックスには COMPLIANCE の版を書ける
+                val key = "anchors/order/it-probe-${System.nanoTime()}.json"
+                val version = put(key).versionId()
+                // ほかのサービスのプレフィックスと、anchors/ の外には書けない(ほかのサービスの検査を妨害できない)
+                forbidden { put("anchors/svc-1/it-probe.json") }
+                forbidden { put("it-probe.json") }
+                // 自分のプレフィックスでも、削除・削除マーカー・Legal Hold・保持期限の短縮はできない(バケットポリシーの Deny)
+                forbidden { order.deleteObject { it.bucket(bucket).key(key).versionId(version) } }
+                forbidden { order.deleteObject { it.bucket(bucket).key(key) } }
                 forbidden {
-                    audit.putObjectLockConfiguration {
+                    order.putObjectLegalHold {
+                        it
+                            .bucket(bucket)
+                            .key(key)
+                            .versionId(version)
+                            .legalHold { h -> h.status("ON") }
+                    }
+                }
+                forbidden {
+                    order.putObjectRetention {
+                        it
+                            .bucket(bucket)
+                            .key(key)
+                            .versionId(version)
+                            .retention { r -> r.mode(ObjectLockRetentionMode.COMPLIANCE).retainUntilDate(Instant.now().plusSeconds(30)) }
+                    }
+                }
+                // バケットの管理操作とほかのバケットの操作はできない(プレフィックスに限った Write は管理操作を含まない)
+                forbidden {
+                    order.putObjectLockConfiguration {
                         it.bucket(bucket).objectLockConfiguration { c ->
                             c.objectLockEnabled(ObjectLockEnabled.ENABLED).rule { r ->
                                 r.defaultRetention { d -> d.mode(ObjectLockRetentionMode.GOVERNANCE).days(1) }
@@ -199,15 +236,23 @@ class AuditAnchorIT :
                         }
                     }
                 }
-                forbidden { audit.putBucketVersioning { it.bucket(bucket).versioningConfiguration { c -> c.status("Suspended") } } }
-                forbidden { audit.putBucketPolicy { it.bucket(bucket).policy("""{"Version":"2012-10-17","Statement":[]}""") } }
-                forbidden { audit.deleteBucketPolicy { it.bucket(bucket) } }
-                forbidden { audit.deleteBucket { it.bucket(bucket) } }
-                forbidden { audit.createBucket { it.bucket("eiaf-it-by-audit") } }
-                forbidden { audit.listObjectsV2 { it.bucket(other) } }
-                forbidden { audit.putObject({ it.bucket(other).key("z.txt") }, RequestBody.fromString("x")) }
-                forbidden { audit.getObjectAsBytes { it.bucket(other).key("k.txt") } }
-                forbidden { audit.deleteObject { it.bucket(other).key("k.txt") } }
+                forbidden { order.putBucketVersioning { it.bucket(bucket).versioningConfiguration { c -> c.status("Suspended") } } }
+                forbidden { order.putBucketPolicy { it.bucket(bucket).policy("""{"Version":"2012-10-17","Statement":[]}""") } }
+                forbidden { order.deleteBucketPolicy { it.bucket(bucket) } }
+                forbidden { order.deleteBucket { it.bucket(bucket) } }
+                forbidden { order.createBucket { it.bucket("eiaf-it-by-order") } }
+                forbidden { order.listObjectsV2 { it.bucket(other) } }
+                forbidden { order.putObject({ it.bucket(other).key("z.txt") }, RequestBody.fromString("x")) }
+                forbidden { order.getObjectAsBytes { it.bucket(other).key("k.txt") } }
+                forbidden { order.deleteObject { it.bucket(other).key("k.txt") } }
+            }
+        }
+
+        test("サービスの書込み用の identity は、ほかのサービスのプレフィックスに書けない(svc-1 → anchors/order/・anchors/svc-2/)") {
+            env.writerClient(AuditEnvironment.writer(ServiceName.parse("svc-1").getOrNull()!!)).use { svc1 ->
+                listOf("anchors/order/it-probe.json", "anchors/svc-2/it-probe.json").forEach { key ->
+                    forbidden { svc1.putObject({ it.bucket(AuditEnvironment.BUCKET).key(key) }, RequestBody.fromString("{}")) }
+                }
             }
         }
 
@@ -288,12 +333,11 @@ class AuditAnchorIT :
             }
         }
 
-        test("アンカーの削除マーカーを検出する(audit の資格情報では作れないため、管理者の資格情報で作る)") {
+        test("アンカーの削除マーカーを検出する(書込み用の identity では作れないため、管理者の資格情報で作る)") {
             val db = env.newDatabase()
             val service = newService()
             db.append(log, 1)
             val published = db.publish(service)
-            env.auditClient().use { audit -> forbidden { audit.deleteObject { it.bucket(AuditEnvironment.BUCKET).key(published.key) } } }
             val marker = env.admin.deleteObject { it.bucket(AuditEnvironment.BUCKET).key(published.key) }
             marker.deleteMarker() shouldBe true
             db.verify(service).findings shouldContainExactly listOf(Finding.AnchorDeleteMarker(published.key, marker.versionId()))
