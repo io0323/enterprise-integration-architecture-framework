@@ -10,7 +10,7 @@ EIAF の参照実装が使うミドルウェア一式を Docker Compose で起�
 | Docker | Docker Engine 28.0.4 以上、Docker Compose v2.38.2 以上(確認した最も古い組み合わせ。CI の ubuntu-latest)。otel-collector と loki のヘルスチェックに image マウント(`volumes: [{type: image}]`)を使うため、これより古い版では healthy にならないことがある。ローカルでは Engine 29.8.0 / Compose v5.5.1 でも確認済み |
 | メモリ | Docker に 8GB 以上を割り当てる。実測値は `docs/reports/p03-local-infrastructure.md`(core だけで約 1.8GB) |
 | CPU | linux/amd64・linux/arm64 のどちらでも動く(全イメージがマルチアーキテクチャ) |
-| ホストのツール | `make`、`bash`、`python3`、`curl`、`ssh-keygen` / `sftp`(file・b2b の検査) |
+| ホストのツール | `make`、`bash`、`python3`、`curl`、`openssl`(開発用の証明書。OpenSSL 1.1.1 以上か LibreSSL 3 以上)、`ssh-keygen` / `sftp`(file・b2b の検査)、JDK 21(order profile。イメージの中身を Gradle で作る) |
 
 ## 起動と停止
 
@@ -20,6 +20,8 @@ make up                       # core を起動し、全コンテナが healthy �
 make up PROFILE=cdc           # core + cdc(profile は常に core に積み上がる)
 make up PROFILE="file chaos"  # 複数の profile を同時に起動する
 make verify PROFILE=cdc       # healthy と各機能の疎通を検査する(PASS / FAIL を 1 行ずつ出力)
+make up PROFILE=order         # core + order-service(先に installDist でイメージの中身を作り、migrate → serve の順に起動する)
+make certs                    # 開発用の CA と mTLS の証明書を作る(make up も毎回確かめる。残りが 7 日を切ると作り直す)
 make ps                       # 状態
 make logs SERVICE=kafka       # ログ
 make stats                    # メモリ使用量(docker stats)
@@ -43,6 +45,7 @@ docker compose -f infra/local/docker-compose.yml --env-file infra/local/images.e
 | `file` | seaweedfs(S3), sftp | ファイル連携(P09)、Audit のアンカー(P04a) |
 | `b2b` | seaweedfs(S3), sftp-b2b | B2B / EDI(P12) |
 | `chaos` | toxiproxy | 障害注入(P04b, P14) |
+| `order` | order-migrate(1 回だけ動いて終わる), order-service | API 連携のサンプル業務サービス(P05。ADR-0024) |
 
 Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)。
 
@@ -69,6 +72,7 @@ Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)�
 | 19333 | `seaweedfs:8333` | SeaweedFS | file, b2b | S3 API(path-style: `http://localhost:19333/{bucket}/{key}`) |
 | 19432 | `postgres:5432` | PostgreSQL | core | サービス別 DB |
 | 19433 | `toxiproxy:19433` | PostgreSQL(Toxiproxy 経由) | chaos | 障害注入用 |
+| 19443 | `order-service:8443` | order-service | order | API(`/v1/...`)。**mTLS だけ**(クライアント証明書は開発用 CA の署名で、SAN が `apisix`)。mTLS なしの接続を拒否することの検査と調査用。ヘルスチェック(8081。平文)は公開しない |
 | 19474 | `toxiproxy:8474` | Toxiproxy | chaos | 管理 API(toxic の追加・削除) |
 | 19883 | `mosquitto:1883` | Mosquitto | iot | MQTT(匿名接続は不可) |
 
@@ -110,6 +114,7 @@ curl -s -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token
   - アプリ(`platform/observability`。ADR-0018)の環境変数: `OTEL_SERVICE_NAME`、`OTEL_EXPORTER_OTLP_ENDPOINT`(OTLP/HTTP。ホストのアプリは `http://localhost:19318`、コンテナのアプリは `http://otel-collector:4318`。未設定なら OTLP に送らず標準出力だけ)、`OTEL_TRACES_SAMPLER_ARG`(起点のサンプリング率。既定 1.0)、`EIA_ENVIRONMENT`(既定 `local`)。
   - 標準出力のログの形式は `EIA_LOG_FORMAT` で切り替える。既定は `json`(Loki と同じ項目)。手元で読むときは `EIA_LOG_FORMAT=console ./gradlew :services:order:app:run` のように `console` にする。
 - **監査(ADR-0017)**: `seaweedfs-init`(file / b2b profile)が、`make up` のたびにバケット `eiaf-audit`(Object Lock)を作り、`seaweedfs/audit-bucket-policy.json` を設定し、完了のファイルを作って待機する(ヘルスチェックが完了を示すので、`make up` は初期化の完了まで待つ)。改竄の検査は `make audit-verify SERVICE=<name>`(終了コード 0 / 1 / 2。`docs/runbooks/audit-verify.md`)。
+- **order-service(ADR-0024)**: `order-migrate` が所有者の資格情報でマイグレーションして終わり、`order-service` は完了を待ってから、アプリのロールの資格情報だけで起動する。API は mTLS だけで受ける。証明書は `infra/local/certs/`(.gitignore 済み。`make certs`)で、仕組みと期限切れのときの対処は `docs/runbooks/dev-certificates.md`。コンテナは開発用の鍵を読むため、ホストの利用者の uid で動く(root にはしない)。
 - **Toxiproxy**: 起動時に `kafka-host`(19094)、`kafka-internal`(19095)、`postgres`(19433)の proxy を作る(`toxiproxy/toxiproxy.json`)。
 
 ## イメージの更新
@@ -117,6 +122,7 @@ curl -s -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token
 版は `images.env` だけに書く(タグ + ダイジェスト。ADR-0016 §2)。
 
 1. 最新の安定版のタグを確認する(プレリリース・RC は使わない)。
+   - `JAVA_RUNTIME_IMAGE`(distroless)は版のタグがなく、タグ `nonroot` を上流が付け直す。今のダイジェストに更新し、`make up PROFILE=order && make verify PROFILE=order` で確かめる。
 2. ダイジェストと対応アーキテクチャを確認する。`linux/amd64` と `linux/arm64` の両方が必要。
 
    ```bash

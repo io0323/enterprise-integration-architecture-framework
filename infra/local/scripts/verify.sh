@@ -43,6 +43,16 @@ consume() { # consume <トピック> <件数> <タイムアウト ms>(読めた�
     --from-beginning --max-messages "$2" --timeout-ms "$3" 2>/dev/null || true
 }
 
+# Keycloak の client credentials(eiaf-e2e)で、sales.order:* のスコープのアクセストークンを取る(失敗したら空)
+client_token() {
+  curl -fsS -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token \
+    -d grant_type=client_credentials -d client_id=eiaf-e2e --data-urlencode "client_secret=$EIAF_E2E_CLIENT_SECRET" \
+    --data-urlencode 'scope=sales.order:read sales.order:write' | json 'd["access_token"]' 2>/dev/null || true
+}
+
+# 1 回だけ動いて終わるコンテナ(終了コード 0 で終わっていれば正常)
+oneshot_services=" order-migrate "
+
 # ------------------------------------------------------------------ 共通: healthy
 verify_health() {
   current="health"
@@ -51,7 +61,9 @@ verify_health() {
   for svc in $services; do
     local state
     state="$("${compose[@]}" ps -a --format '{{.State}}/{{.Health}}/{{.ExitCode}}' "$svc" 2>/dev/null | head -1)"
-    if [[ "$state" == running/healthy/* ]]; then
+    if [[ "$oneshot_services" == *" $svc "* ]]; then
+      if [[ "$state" == exited/*/0 ]]; then pass "$svc: 終了コード 0 で終わった"; else fail "$svc: ${state:-コンテナなし}"; fi
+    elif [[ "$state" == running/healthy/* ]]; then
       pass "$svc: running/healthy"
     else
       fail "$svc: ${state:-コンテナなし}"
@@ -429,6 +441,78 @@ verify_chaos() {
 
   toxic_cleanup
   "${compose[@]}" exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka $kbin/kafka-topics.sh --bootstrap-server kafka:9092 --delete --topic "$topic" >/dev/null 2>&1 || true
+}
+
+# ------------------------------------------------------------------ order(P05。ADR-0024)
+verify_order() {
+  current="order"
+  local certs="$here/certs" orders="https://localhost:19443/v1/orders" token container
+  token="$(client_token)"
+  [[ -n "$token" ]] || fail "Keycloak: アクセストークンを取れない"
+  container="$("${compose[@]}" ps -q order-service)"
+
+  # mTLS なしの直接接続を拒否する(ROADMAP P05 の DoD)。API のポートはクライアント証明書を必須にし、SAN の許可の一覧を確かめる
+  local tls=(curl -sS -o /dev/null --max-time 10 --cacert "$certs/ca.crt" -H "Authorization: Bearer $token")
+  if "${tls[@]}" "$orders/ord-none" 2>/dev/null; then
+    fail "order-service: クライアント証明書のない直接接続に応答した"
+  else
+    pass "order-service: クライアント証明書のない直接接続を拒否する"
+  fi
+  if curl -sS -o /dev/null --max-time 10 "http://localhost:19443/v1/orders/ord-none" 2>/dev/null; then
+    fail "order-service: API のポートが平文の HTTP に応答した"
+  else
+    pass "order-service: API のポートは平文の HTTP に応答しない"
+  fi
+  # 同じ CA の証明書でも、SAN が許可の一覧(apisix)にないものは拒否する(order-service 自身の証明書で確かめる)
+  if "${tls[@]}" --cert "$certs/order-service.crt" --key "$certs/order-service.key" "$orders/ord-none" 2>/dev/null; then
+    fail "order-service: 許可の一覧にない SAN の証明書に応答した"
+  else
+    pass "order-service: 許可の一覧にない SAN(order-service)の証明書を拒否する"
+  fi
+
+  # ゲートウェイの証明書(SAN apisix)なら API に届く。POST と同じ Idempotency-Key の再送(サービスの段階。Gateway 経由は ⑤c)
+  local gw=(curl -sS --max-time 15 --cacert "$certs/ca.crt" --cert "$certs/apisix.crt" --key "$certs/apisix.key" -H "Authorization: Bearer $token")
+  local code
+  code="$("${gw[@]}" -o /dev/null -w '%{http_code}' "$orders/ord-none" || true)"
+  if [[ "$code" == 404 ]]; then
+    pass "order-service: ゲートウェイの証明書(SAN apisix)なら API に届く(ない注文は 404)"
+  else
+    fail "order-service: ゲートウェイの証明書での応答が ${code:-なし}"
+  fi
+  local key="verify-$$-$(date +%s)" body first second
+  body='{"customerId":"cust-verify","lines":[{"productId":"prod-1","sku":"SKU-1","quantity":1,"unitPrice":{"amount":"1000","currency":"JPY"}}],"shippingAddress":{"countryCode":"JP","postalCode":"100-0001","city":"Chiyoda","line1":"1-1"}}'
+  first="$("${gw[@]}" -o - -w '\n%{http_code}' -X POST "$orders" -H "Idempotency-Key: $key" -H 'Content-Type: application/json' -d "$body" || true)"
+  second="$("${gw[@]}" -D - -o - -X POST "$orders" -H "Idempotency-Key: $key" -H 'Content-Type: application/json' -d "$body" || true)"
+  if [[ "$(tail -n1 <<<"$first")" == 201 ]]; then pass "order-service: POST /v1/orders が 201"; else fail "order-service: POST /v1/orders が $(tail -n1 <<<"$first")"; fi
+  if grep -q -i '^idempotent-replayed: true' <<<"$second" && [[ "$(tail -n1 <<<"$second")" == "$(sed '$d' <<<"$first" | tail -n1)" ]]; then
+    pass "order-service: 同じ Idempotency-Key の再送は同じ本文と Idempotent-Replayed: true"
+  else
+    fail "order-service: 同じ Idempotency-Key の再送の応答が想定外"
+  fi
+
+  # ヘルスチェックは平文のポート(8081)で、コンテナの外には公開しない
+  check "order-service: ヘルスチェック(平文の 8081)が UP" \
+    "${compose[@]}" exec -T order-service /probe/bin/wget -q -O /dev/null http://127.0.0.1:8081/health/ready
+  if [[ -z "$("${compose[@]}" port order-service 8081 2>/dev/null || true)" ]]; then
+    pass "order-service: ヘルスチェックのポートはホストに公開しない"
+  else
+    fail "order-service: ヘルスチェックのポートがホストに公開されている"
+  fi
+
+  # serve は所有者のパスワードを持たない(ADR-0024 §2)。値は出さず、変数の名前だけを見る
+  if docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$container" | cut -d= -f1 | grep -q -E '^ORDER_DB_PASSWORD(_FILE)?$'; then
+    fail "order-service: serve の環境に所有者のパスワードがある"
+  else
+    pass "order-service: serve の環境に所有者のパスワードがない"
+  fi
+  # root で動かさない(ADR-0024 §7)
+  local user
+  user="$(docker inspect --format '{{.Config.User}}' "$container")"
+  if [[ -n "$user" && "${user%%:*}" != 0 && "${user%%:*}" != root ]]; then
+    pass "order-service: root 以外の利用者で動く (user=$user)"
+  else
+    fail "order-service: root で動いている (user='$user')"
+  fi
 }
 
 verify_health

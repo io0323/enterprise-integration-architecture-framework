@@ -3,12 +3,16 @@ on:
   pull_request:
     paths:
       - "infra/local/**"
+      - "services/*/app/Dockerfile"
+      - "services/*/app/.dockerignore"
       - "Makefile"
       - ".github/workflows/infra.yml"
   push:
     branches: [main]
     paths:
       - "infra/local/**"
+      - "services/*/app/Dockerfile"
+      - "services/*/app/.dockerignore"
       - "Makefile"
       - ".github/workflows/infra.yml"
 permissions:
@@ -31,7 +35,7 @@ jobs:
         run: make env
       - name: Validate every profile
         run: |
-          for profile in core cdc iot file b2b chaos; do
+          for profile in core cdc iot file b2b chaos order; do
             echo "::group::$profile"
             docker compose -f infra/local/docker-compose.yml --env-file infra/local/images.env --env-file infra/local/.env \
               --profile core --profile "$profile" config --quiet
@@ -48,7 +52,7 @@ jobs:
       - name: Self-built images use images.env bases and checksummed downloads
         run: |
           status=0
-          for dockerfile in infra/local/images/*/Dockerfile; do
+          for dockerfile in infra/local/images/*/Dockerfile services/*/app/Dockerfile; do
             if grep -n -E '^FROM ' "$dockerfile" | grep -v -E 'FROM \$\{[A-Z0-9_]+_IMAGE\}( AS [a-z0-9-]+)?$'; then
               echo "$dockerfile: FROM は images.env の変数(ARG で受け取る \${..._IMAGE})だけにしてください"; status=1
             fi
@@ -67,7 +71,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        profile: [core, cdc, iot, file, b2b, chaos]
+        profile: [core, cdc, iot, file, b2b, chaos, order]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Docker versions
@@ -80,6 +84,14 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           docker system prune --all --force >/dev/null
           df -h /
+      # order profile: イメージの中身(installDist)を Gradle で作る(make up が order-dist を実行する)
+      - if: ${{ matrix.profile == 'order' }}
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "21"
+      - if: ${{ matrix.profile == 'order' }}
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
       - name: Up
         run: make up PROFILE=${{ matrix.profile }}
       - name: Verify
