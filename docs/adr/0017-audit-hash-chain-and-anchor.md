@@ -147,7 +147,11 @@ P04a ④ で `platform/audit` を作る。Framework 14.1 は「誰が・いつ�
   - 検出したときの対応は `docs/runbooks/audit-verify.md`。
 
 ### 7. audit 専用の S3 の資格情報
-- SeaweedFS に identity `eiaf-audit` を作り、操作を `Read:eiaf-audit` / `Write:eiaf-audit` / `List:eiaf-audit` に限る(Issue #6)。管理者の `eiaf` は、バケットとポリシーの作成にだけ使う。
+- **アンカーを書く identity はサービスごとに分ける(Issue #43。2026-10-01 改訂)**: `eiaf-audit-{service}`(例 `eiaf-audit-order`)の操作を、`Read:eiaf-audit` / `List:eiaf-audit` / **`Write:eiaf-audit/anchors/{service}/*`** に限る。資格情報は `{SERVICE}_AUDIT_S3_ACCESS_KEY` / `{SERVICE}_AUDIT_S3_SECRET_KEY`(`make env` が生成)で、`S3AnchorStoreConfig` には既定の名前を置かず、サービスが必ず明示する(取り違えを防ぐ)。管理者の `eiaf` は、バケットとポリシーの作成にだけ使う。
+  - SeaweedFS 4.47 で使い捨てのコンテナで確かめた結果(2026-10-01): プレフィックスに限った `Write` は、自分のプレフィックスへの put を許し、**ほかのサービスのプレフィックスと `anchors/` の外への put を拒否する**。さらに、全体の `Write` と違い、**バケットの管理操作(Object Lock の設定・バージョニング・ポリシー・バケットの削除と作成)も拒否する**。自分のプレフィックスの Legal Hold の変更と削除(削除マーカー)は許すので、下のバケットポリシーで拒否する。
+  - 比べた方式: 全体の `Write` にバケットポリシーの `NotResource` で自分のプレフィックス以外の put を拒否する方式も効いたが、管理操作は identity の側で絞れない(ポリシーの Deny に頼る)ため、プレフィックスに限った `Write` を採用した。
+  - 以前の共有の identity `eiaf-audit`(バケット全体の `Write`。P04a ④。Issue #6)は削除した。アンカーを書くサービスがまだなかったため、移行は不要だった。
+- 以下の表は、P04a ④ の時点の共有の identity(バケット全体の `Write`)で確かめた結果。
 - **SeaweedFS 4.47 の `Write` は管理操作を含んでいた**。2026-09-28 に使い捨てのコンテナで確かめた結果(AWS CLI 2.37.4)は次のとおり。
 
   | 操作(audit の資格情報。バケットポリシーなし) | 結果 |
@@ -161,7 +165,7 @@ P04a ④ で `platform/audit` を作る。Framework 14.1 は「誰が・いつ�
   | ほかのバケットへの list / put / get / delete | 拒否(AccessDenied) |
   | list-buckets | 許可(返るのは `eiaf-audit` だけ) |
 
-- **対策: audit の identity だけを拒否するバケットポリシー**(`infra/local/seaweedfs/audit-bucket-policy.json`)
+- **対策: 書込み用の identity を拒否するバケットポリシー**(`infra/local/seaweedfs/audit-bucket-policy.json`。Principal は `eiaf-audit-order`。サービスを足すときは同じ形で足す。複数の Principal を 1 つの文に並べる形を SeaweedFS が解釈するかは、そのときに確かめる)
   - SeaweedFS 4.47 は、Principal の `{"AWS": "arn:aws:iam::<アカウント>:user/<identity 名>"}` を解釈する。アカウントの部分は `*` でも `000000000000` でも一致した。`"eiaf-audit"`・`{"AWS":"eiaf-audit"}`・`arn:aws:iam:::user/...`(アカウントが空)・アクセスキーでの指定は効かなかった(拒否されない)。
   - 次の 9 つを Deny する: `PutBucketObjectLockConfiguration`・`PutBucketVersioning`・`PutBucketPolicy`・`DeleteBucketPolicy`・`DeleteBucket`・`DeleteObject`・`DeleteObjectVersion`・`PutObjectLegalHold`・`BypassGovernanceRetention`。
   - 設定は `seaweedfs-init`(AWS CLI のイメージ。file / b2b profile)が、管理者の資格情報で `make up` のたびに行う。何度実行しても結果は同じ。バケットは Object Lock を有効にして作り、既定の保持設定は付けない。
@@ -170,7 +174,7 @@ P04a ④ で `platform/audit` を作る。Framework 14.1 は「誰が・いつ�
     - 管理者は、Object Lock の設定・バージョニング・ポリシー・Legal Hold の変更を続けられる。
     - COMPLIANCE の版の削除と保持期限の短縮(GOVERNANCE への変更、bypass の指定を含む)は、**管理者の資格情報でも拒否される**(ADR-0015 で持ち越した確認)。
 - **検査専用の identity `eiaf-audit-verify`**: `Read:eiaf-audit` と `List:eiaf-audit` だけを持つ。`make audit-verify` はこれを使い、アンカーを書ける資格情報を検査に使わない。全版の一覧・取得・保持の設定の取得ができ、put・削除マーカーの作成・版の削除・ほかのバケットの操作は拒否されることを、`make verify PROFILE=file` と `AuditAnchorIT` で確かめた。
-- **書込み用の identity は全サービスで共有している**(P04a ④ のレビューの Major 4)。サービスごとに分けて `anchors/{service}/` の下にだけ書けるように制限するのは、アンカーを書くサービスができるフェーズで行う(Issue #43)。それまでの影響は §8。
+- **書込み用の identity はサービスごと**(Issue #43 で解消。P04a ④ のレビューの Major 4)。あるサービスの資格情報で、ほかのサービスのプレフィックスに版を書けないことを、`make verify PROFILE=file`(`s3-audit.sh`)と `AuditAnchorIT` で確かめる。
 - **多層防御**: 管理者の資格情報なら、バケットの既定の保持設定の変更と、削除マーカーの作成はできる。どちらも §5・§6 で扱う。
   - 既定の保持設定の変更: アプリは put のたびに COMPLIANCE と保持期限を明示するので、効かない。
   - 削除マーカー: 検証で検出する(`anchor_delete_marker`)。
@@ -179,7 +183,7 @@ P04a ④ で `platform/audit` を作る。Framework 14.1 は「誰が・いつ�
 ### 8. 残るリスク
 - **最後のアンカーより後の記録**は、トリガーを外せるロールなら、次のアンカーまでの間に書き換え・削除して、チェーンをつなぎ直せる。検出の遅れは、アンカーの間隔が上限になる。間隔は各サービスがスケジュールで決める(P05 以降)。
 - **保持期限が切れたアンカー**は、管理者が削除できる。削除された後は、その時点までの照合ができない。保持期間は、監査証跡の保存期間以上に設定する(本番は環境ごとの設定)。
-- **書込み用の資格情報 `eiaf-audit` は全サービスで共有している**(Issue #43 で分ける)。あるサービスの資格情報で、ほかのサービスのプレフィックスにも COMPLIANCE の版を書ける。書いた版は保持期限まで消せないので、そのサービスの検査は保持期限まで `anchor_invalid` か `anchor_hash_mismatch` になりうる。記録そのものは改竄できないため、検出の漏れにはならない。ただし、検査を失敗させ続ける妨害はできる。P04a の時点では、アンカーを書くサービスはまだない。
+- ~~**書込み用の資格情報 `eiaf-audit` は全サービスで共有している**~~(Issue #43 で解消。§7)。以下は P04a ④ の時点の記述。あるサービスの資格情報で、ほかのサービスのプレフィックスにも COMPLIANCE の版を書ける。書いた版は保持期限まで消せないので、そのサービスの検査は保持期限まで `anchor_invalid` か `anchor_hash_mismatch` になりうる。記録そのものは改竄できないため、検出の漏れにはならない。ただし、検査を失敗させ続ける妨害はできる。P04a の時点では、アンカーを書くサービスはまだない。
 - **管理者の S3 の資格情報**(`eiaf`)は、audit のバケットのポリシーを外せる。本番では、管理者の資格情報の利用を監査し、S3 の細かい権限(IAM のポリシー)でアプリ用と管理用を分ける。
 - ローカルの S3 は平文の http(ADR-0008 の「転送路の暗号化」、#29)。
 - **アンカーを保存する前にチェーンを検証していない。** 前回のアンカーより後に改竄されていれば、改竄後の状態をアンカーとして固定する。ただし、前回のアンカーより前の改竄は、その後の検査で検出できる。保存の前の検証は、P05 でスケジュールに結線するときに、処理の時間とあわせて決める。
@@ -204,3 +208,6 @@ P04a ④ で `platform/audit` を作る。Framework 14.1 は「誰が・いつ�
 - `file` / `b2b` profile に、初期化のコンテナ(`seaweedfs-init`)が増えた。初期化を終えた後も待機し(メモリの上限 256 MiB)、ヘルスチェックで完了を示す。終了させると、CI の Compose v2.38.2 の `up --wait` が、終了コード 0 でも失敗として扱う(PR #44 の CI で確認)。待機させることで、`make up` は初期化の完了まで待つ。
 - 監査テーブルのマイグレーションは、各サービスのマイグレーションとは別の履歴で管理される。サービスは起動時に `AuditSchema.migrate` も呼ぶ(P05 以降)。
 - SeaweedFS を更新するときは、バケットポリシーの Principal の解釈と Write の範囲が変わっていないかを、`make verify PROFILE=file` で確かめる。
+
+## 改訂履歴
+- 2026-10-01: P05 ⑧ で、アンカーの書込み用の identity をサービスごと(`eiaf-audit-{service}`。`Write:eiaf-audit/anchors/{service}/*`)にし、共有の `eiaf-audit` を削除した(§7・§8。Issue #43)。`S3AnchorStoreConfig` の資格情報の名前の既定をやめ、`make audit-verify` は `AUDIT_VERIFY_S3_*` の名前で読む。
