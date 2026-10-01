@@ -46,7 +46,7 @@ docker compose -f infra/local/docker-compose.yml --env-file infra/local/images.e
 | `file` | seaweedfs(S3), sftp | ファイル連携(P09)、Audit のアンカー(P04a) |
 | `b2b` | seaweedfs(S3), sftp-b2b | B2B / EDI(P12) |
 | `chaos` | toxiproxy | 障害注入(P04b, P14) |
-| `order` | order-migrate(1 回だけ動いて終わる), order-service | API 連携のサンプル業務サービス(P05。ADR-0024) |
+| `order` | order-migrate(1 回だけ動いて終わる), order-service, seaweedfs, seaweedfs-init | API 連携のサンプル業務サービス(P05。ADR-0024)。SeaweedFS は監査のアンカーの保存先(ADR-0017 §5) |
 
 Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)。
 
@@ -70,7 +70,7 @@ Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)�
 | 19317 | `otel-collector:4317` | OTel Collector | core | OTLP gRPC |
 | 19318 | `otel-collector:4318` | OTel Collector | core | OTLP HTTP |
 | 19320 | `tempo:3200` | Tempo | core | API |
-| 19333 | `seaweedfs:8333` | SeaweedFS | file, b2b | S3 API(path-style: `http://localhost:19333/{bucket}/{key}`) |
+| 19333 | `seaweedfs:8333` | SeaweedFS | file, b2b, order | S3 API(path-style: `http://localhost:19333/{bucket}/{key}`) |
 | 19432 | `postgres:5432` | PostgreSQL | core | サービス別 DB |
 | 19433 | `toxiproxy:19433` | PostgreSQL(Toxiproxy 経由) | chaos | 障害注入用 |
 | 19443 | `order-service:8443` | order-service | order | API(`/v1/...`)。**mTLS だけ**(クライアント証明書は開発用 CA の署名で、SAN が `apisix`)。mTLS なしの接続を拒否することの検査と調査用。ヘルスチェック(8081。平文)は公開しない |
@@ -122,7 +122,8 @@ curl -s -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token
     - 依存先の呼び出し: `eia.resilience.timeouts{kind=caller_deadline}`(呼び出し元の締め切りで打ち切った件数)。急増したらアラートの候補(しきい値は P14 で SLO と合わせて決める)。order-service は P05 では依存先を呼ばないので、P06・P07 までは空。
     - `make verify PROFILE=order` は、ダッシュボードが読み込まれていることと、全パネルの式が Prometheus でデータを返すことを確かめる(caller_deadline は合成の値 `service_name=eiaf-verify` で確かめる)。
   - 標準出力のログの形式は `EIA_LOG_FORMAT` で切り替える。既定は `json`(Loki と同じ項目)。手元で読むときは `EIA_LOG_FORMAT=console ./gradlew :services:order:app:run` のように `console` にする。
-- **監査(ADR-0017)**: `seaweedfs-init`(file / b2b profile)が、`make up` のたびにバケット `eiaf-audit`(Object Lock)を作り、`seaweedfs/audit-bucket-policy.json` を設定し、完了のファイルを作って待機する(ヘルスチェックが完了を示すので、`make up` は初期化の完了まで待つ)。改竄の検査は `make audit-verify SERVICE=<name>`(終了コード 0 / 1 / 2。`docs/runbooks/audit-verify.md`)。
+- **監査(ADR-0017)**: `seaweedfs-init`(file / b2b / order profile)が、`make up` のたびにバケット `eiaf-audit`(Object Lock)を作り、`seaweedfs/audit-bucket-policy.json` を設定し、完了のファイルを作って待機する(ヘルスチェックが完了を示すので、`make up` は初期化の完了まで待つ)。改竄の検査は `make audit-verify SERVICE=<name>`(終了コード 0 / 1 / 2。`docs/runbooks/audit-verify.md`)。
+  - order-service は、1 分ごと(`ORDER_AUDIT_ANCHOR_INTERVAL`。アプリの既定は 1 時間)に、前回のアンカーからの差分を検証してアンカーを保存する(記録が増えていなければ保存しない)。成否はダッシュボード `Order API — RED` の「監査の記録」の行に出る。`make verify PROFILE=order` と `make e2e` は、保存を待ってから `make audit-verify SERVICE=order` が OK でアンカーがあることを確かめる(`scripts/audit-anchored.sh`)。
 - **order-service(ADR-0024)**: `order-migrate` が所有者の資格情報でマイグレーションして終わり、`order-service` は完了を待ってから、アプリのロールの資格情報だけで起動する。API は mTLS だけで受ける。証明書は `infra/local/certs/`(.gitignore 済み。`make certs`)で、仕組みと期限切れのときの対処は `docs/runbooks/dev-certificates.md`。コンテナは開発用の鍵を読むため、ホストの利用者の uid で動く(root にはしない)。
 - **Toxiproxy**: 起動時に `kafka-host`(19094)、`kafka-internal`(19095)、`postgres`(19433)の proxy を作る(`toxiproxy/toxiproxy.json`)。
 
