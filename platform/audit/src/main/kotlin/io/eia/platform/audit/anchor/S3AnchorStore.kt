@@ -214,13 +214,17 @@ public class S3AnchorStore internal constructor(
 /**
  * @property endpoint S3 のエンドポイント(ローカルは `http://localhost:19333`)
  * @property pathStyle true なら `{endpoint}/{bucket}/{key}`(ADR-0015 §2)
- * @property accessKeyName / secretKeyName [SecretProvider] で取得する名前(ローカルは `AUDIT_S3_ACCESS_KEY` / `AUDIT_S3_SECRET_KEY`)
+ * @property accessKeyName / secretKeyName [SecretProvider] で取得する名前。既定はない(呼び出し側が必ず明示する)。
+ *   アンカーを書くサービスは、自分の identity(`eiaf-audit-{service}`。`anchors/{service}/` の下にだけ書ける)の名前を渡す
+ *   (ローカルは `{SERVICE}_AUDIT_S3_ACCESS_KEY` / `{SERVICE}_AUDIT_S3_SECRET_KEY`。Issue #43・ADR-0017 §7)。
+ *   検査(`make audit-verify`)は読み取り専用の `eiaf-audit-verify` の名前(`AUDIT_VERIFY_S3_*`)を渡す。
+ *   既定を置かないのは、ほかのサービスの資格情報や、書込み用の資格情報を取り違えて使わないようにするため。
  */
 public data class S3AnchorStoreConfig(
     val endpoint: URI,
     val bucket: String,
-    val accessKeyName: SecretName = SecretName("AUDIT_S3_ACCESS_KEY"),
-    val secretKeyName: SecretName = SecretName("AUDIT_S3_SECRET_KEY"),
+    val accessKeyName: SecretName,
+    val secretKeyName: SecretName,
     val region: String = "us-east-1",
     val pathStyle: Boolean = true,
     val connectTimeout: Duration = DEFAULT_CONNECT_TIMEOUT,

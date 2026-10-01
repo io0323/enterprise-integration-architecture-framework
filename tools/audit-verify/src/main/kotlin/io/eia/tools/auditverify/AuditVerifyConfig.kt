@@ -16,7 +16,8 @@ import java.time.format.DateTimeParseException
 /**
  * 検査の設定。環境変数から読む(`scripts/audit-verify.sh` が infra/local/.env とサービス名から組み立てる)。
  * DB のパスワードと S3 の資格情報は設定に持たず、実行時に SecretProvider から取る。
- * S3 の資格情報(`AUDIT_S3_ACCESS_KEY` / `AUDIT_S3_SECRET_KEY`)には、読み取り専用の `eiaf-audit-verify` の値を渡す(ADR-0017 §7)。
+ * S3 の資格情報は、読み取り専用の `eiaf-audit-verify` のもの(`AUDIT_VERIFY_S3_ACCESS_KEY` / `AUDIT_VERIFY_S3_SECRET_KEY`)を読む
+ * (ADR-0017 §7)。アンカーを書ける資格情報は使わない。
  */
 internal data class AuditVerifyConfig(
     val service: ServiceName,
@@ -30,6 +31,8 @@ internal data class AuditVerifyConfig(
         const val JDBC_URL = "AUDIT_JDBC_URL"
         const val DB_USER = "AUDIT_DB_USER"
         val DB_PASSWORD = SecretName("AUDIT_DB_PASSWORD")
+        val S3_ACCESS_KEY = SecretName("AUDIT_VERIFY_S3_ACCESS_KEY")
+        val S3_SECRET_KEY = SecretName("AUDIT_VERIFY_S3_SECRET_KEY")
         const val S3_ENDPOINT = "AUDIT_S3_ENDPOINT"
         const val S3_BUCKET = "AUDIT_S3_BUCKET"
         const val S3_PATH_STYLE = "AUDIT_S3_PATH_STYLE"
@@ -59,7 +62,14 @@ internal data class AuditVerifyConfig(
                     service = service,
                     jdbcUrl = jdbcUrl,
                     dbUser = dbUser,
-                    s3 = S3AnchorStoreConfig(endpoint = endpoint, bucket = value(S3_BUCKET) ?: DEFAULT_BUCKET, pathStyle = pathStyle),
+                    s3 =
+                        S3AnchorStoreConfig(
+                            endpoint = endpoint,
+                            bucket = value(S3_BUCKET) ?: DEFAULT_BUCKET,
+                            accessKeyName = S3_ACCESS_KEY,
+                            secretKeyName = S3_SECRET_KEY,
+                            pathStyle = pathStyle,
+                        ),
                     minRetention = minRetention,
                 ),
             )

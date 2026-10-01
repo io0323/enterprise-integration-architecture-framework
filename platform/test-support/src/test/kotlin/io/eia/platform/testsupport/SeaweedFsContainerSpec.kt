@@ -10,16 +10,17 @@ class SeaweedFsContainerSpec :
         test("identity ごとの資格情報と操作を、compose の s3.json と同じ形の JSON にする") {
             val json =
                 SeaweedFsContainer.s3Config(
-                    linkedMapOf("eiaf" to listOf("Admin", "Read"), "eiaf-audit" to listOf("Read:eiaf-audit")),
+                    linkedMapOf("eiaf" to listOf("Admin", "Read"), "eiaf-audit-order" to listOf("Write:eiaf-audit/anchors/order/*")),
                     mapOf(
                         "eiaf" to SeaweedFsContainer.S3Credentials("ak1", "sk1"),
-                        "eiaf-audit" to SeaweedFsContainer.S3Credentials("ak2", "sk2"),
+                        "eiaf-audit-order" to SeaweedFsContainer.S3Credentials("ak2", "sk2"),
                     ),
                 )
             json shouldBe
                 """{"identities":[""" +
                 """{"name":"eiaf","credentials":[{"accessKey":"ak1","secretKey":"sk1"}],"actions":["Admin","Read"]},""" +
-                """{"name":"eiaf-audit","credentials":[{"accessKey":"ak2","secretKey":"sk2"}],"actions":["Read:eiaf-audit"]}""" +
+                """{"name":"eiaf-audit-order","credentials":[{"accessKey":"ak2","secretKey":"sk2"}],""" +
+                """"actions":["Write:eiaf-audit/anchors/order/*"]}""" +
                 "]}"
         }
 

@@ -62,8 +62,8 @@ class AuditVerifyIT :
             EnvSecretProvider(
                 mapOf(
                     "AUDIT_DB_PASSWORD" to postgres.password,
-                    "AUDIT_S3_ACCESS_KEY" to seaweed.credentials.getValue("eiaf").accessKey,
-                    "AUDIT_S3_SECRET_KEY" to secretKey,
+                    "AUDIT_VERIFY_S3_ACCESS_KEY" to seaweed.credentials.getValue("eiaf").accessKey,
+                    "AUDIT_VERIFY_S3_SECRET_KEY" to secretKey,
                 ),
             )
 
@@ -113,7 +113,9 @@ class AuditVerifyIT :
                     )
                 transaction { log.append(it, event).getOrNull().shouldNotBeNull() }
             }
-            S3AnchorStore(S3AnchorStoreConfig(URI(seaweed.endpoint), BUCKET), secrets()).use { store ->
+            val config =
+                S3AnchorStoreConfig(URI(seaweed.endpoint), BUCKET, AuditVerifyConfig.S3_ACCESS_KEY, AuditVerifyConfig.S3_SECRET_KEY)
+            S3AnchorStore(config, secrets()).use { store ->
                 dataSource.connection.use { AnchorPublisher(service, store, RETENTION).publish(it).getOrNull().shouldNotBeNull() }
             }
         }
