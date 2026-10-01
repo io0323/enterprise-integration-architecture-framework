@@ -32,7 +32,7 @@ Ruleset `main protection`(ID 24095263)を設定した。
 | force push | 禁止 |
 | 直線履歴 | 必須(マージコミットを作らない) |
 | PR | 必須。承認の必要数は 0。マージの方式は rebase だけ |
-| 必須チェック | `build`(GitHub Actions が報告したものだけ有効) |
+| 必須チェック | ci の `build`・`integration (Testcontainers)`・`macos (macosArm64 tests)`(GitHub Actions が報告したものだけ有効。§3) |
 | 最新のブランチであること | 求めない(`strict_required_status_checks_policy: false`) |
 | バイパス | なし(管理者も対象) |
 
@@ -42,14 +42,13 @@ Ruleset `main protection`(ID 24095263)を設定した。
 - **pre-push フックは残す**(多層防御)。push の前に手元で止められるため、誤った push が GitHub に届く前に気づける。
 - **バイパスをなしにした理由**: 管理者でも、Ruleset を明示的に変えない限り main を書き換えられないようにする。緊急時は、Ruleset を一時的に無効にしてから対応し、対応が終わったら戻す。
 
-### 3. 必須チェックは `build` だけにする
-- `build` は、ci の workflow の中で条件なしに毎回実行される。ci は、すべての PR で起動する。
-- ほかのジョブは、変更のあったパスによって実行されたりされなかったりする。
-  - `integration` と `macos`: ジョブの `if` による。
-  - contract-check と infra: workflow の `paths` による。
-- workflow の `paths` で起動しなかった workflow は、チェックを報告しない。これを必須にすると、対象外の PR がいつまでもマージできなくなる。
-- 実行された場合に、それらのジョブが成功していることは、運用で確かめる(CLAUDE.md §6)。
-- 必須チェックの送り元を GitHub Actions(`integration_id` 15368)に固定した。別の GitHub App や、コミットのステータスの API から `build` という名前のチェックを報告されても、条件を満たさない。
+### 3. 必須チェックは ci の `build`・`integration`・`macos` にする(改訂: 2026-10-01)
+- ci の workflow は、すべての PR で起動する(workflow に `paths` の条件がない)。
+  - `build` は、条件なしに毎回実行される。
+  - `integration (Testcontainers)` と `macos (macosArm64 tests)` は、ジョブの `if`(`changes` ジョブの paths-filter の結果)で、関係のない変更ではスキップされる。**スキップされたジョブは、必須チェックとしては成功に数えられる**ので、関係のない PR は止まらない。実行されたときは、失敗すれば GitHub がマージを止める。
+- contract-check と infra は必須にしない。workflow の `paths` で起動しなかった workflow は、チェックを報告しない。これを必須にすると、対象外の PR がいつまでもマージできなくなる。実行された場合に成功していることは、運用で確かめる(CLAUDE.md §6)。
+- 必須チェックの名前は、CI の表示名(ジョブの `name`)と完全に一致させる。ジョブの `name` を変えるときは、Ruleset も同時に変える(変えないと、必須チェックが報告されなくなり、すべての PR がマージできなくなる)。
+- 必須チェックの送り元を GitHub Actions(`integration_id` 15368)に固定した。別の GitHub App や、コミットのステータスの API から同じ名前のチェックを報告されても、条件を満たさない。
 
 ### 4. 秘密情報の扱い
 公開すると、git の履歴を含めて全体が誰にでも読める。一度でも秘密情報をコミットしていれば、それも公開される。
@@ -82,6 +81,7 @@ LICENSE を置いていないため、著作権法上、すべての権利が作
 - **private のまま、課金の上限を上げる**: CI は動くが、GitHub Free の private リポジトリでは Ruleset を使えない問題が残る。不採用。
 - **private のまま、有料のプラン(Team など)にする**: Ruleset も使えるが、個人の参照実装に対して費用が見合わない。不採用。
 - **ci・integration・macos・contract-check・infra をすべて必須チェックにする**: paths で起動しなかった workflow のチェックが報告されず、PR がマージできなくなる。すべてを常に起動するように変えると、Docker を使う infra の検査などが PR ごとに走り、時間がかかる。不採用。
+- **必須チェックを `build` だけにする(2026-10-01 までの決定)**: `integration` と `macos` の失敗が運用の確認だけに頼ることになる。#56 で adapters のカバレッジの検証を `integration` ジョブに移したため、見落とすとカバレッジの不足もマージされる。ジョブの `if` によるスキップは成功に数えられ、関係のない PR を止めないので、必須にした。
 - **承認の必要数を 1 にする**: 共同作業者がいないため、マージできなくなる。不採用。共同作業者を加えたら、この ADR を改訂して見直す。
 - **pre-push フックを外し、Ruleset だけにする**: 誤った push が GitHub に届いてから拒否されることになる。手元で止めるほうが早く気づけるので、残す。
 
@@ -95,8 +95,10 @@ LICENSE を置いていないため、著作権法上、すべての権利が作
   
   挙動には影響しないので、この ADR では変えていない。それぞれの workflow を次に変えるときに見直す。
 - 管理者も main を直接書き換えられない。緊急時は、Ruleset を無効にする操作が要る。
-- 必須チェックが `build` だけなので、integration などが失敗しても、GitHub はマージを止めない。実行されたジョブの結果を確かめるのは、運用(CLAUDE.md §6)である。
+- contract-check と infra は必須ではないので、失敗しても GitHub はマージを止めない。実行されたときの結果を確かめるのは、運用(CLAUDE.md §6)である。
+- `integration` と `macos` は `changes` ジョブ(paths-filter)の結果で動く。`changes` が失敗すると、両方ともスキップされ、必須チェックとしては成功に数えられる。`changes` が失敗していないことは、運用で確かめる(`changes` を必須チェックに加えるかは見直しの候補)。
 
 ## 改訂履歴
 - 2026-09-28: Ruleset のマージの方式を rebase だけにした(§2)。gitleaks の誤検知 7 件を `.gitleaksignore` に登録し、検査は git が追跡しているファイルだけを対象にすることにした(§4)。
 - 2026-09-28: Secret scanning・push protection・Dependabot alerts・Dependabot security updates を有効にし(validity checks と non-provider patterns は無効のまま)、Actions のアクションの SHA 固定を強制した(`sha_pinning_required`)。リポジトリの設定でマージコミットと squash を無効にして rebase だけを残し、マージ後のブランチの自動削除を有効にした。
+- 2026-10-01: 必須チェックに ci の `integration (Testcontainers)` と `macos (macosArm64 tests)` を加えた(§3)。どちらもジョブの `if` でスキップされる作りで、スキップは成功に数えられるため、関係のない PR を止めない。contract-check と infra は workflow の `paths` で起動しないことがあるため、必須にしない。

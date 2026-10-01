@@ -92,7 +92,7 @@ docs/                   設計書・ロードマップ・標準・ADR・プロ�
    - main の保護は GitHub の Ruleset で強制している(force push 禁止、直線履歴、PR 必須、build 必須、マージは rebase だけ。ADR-0020)。`make setup` で登録する pre-push フックは多層防御として残す(push の前に手元で止める)。
    - ブランチは `git switch -c <name> --no-track origin/main` で作る(upstream を main にしない)。
    - push は `git push -u origin <branch>:<branch>` と送り先を明示する。
-   - **CI が成功していない PR はマージしない**。必須チェックは `build` だけなので、実行されたほかのジョブ(integration・macos・contract-check・infra)が成功していることは運用で確かめる(ADR-0020 §3)。
+   - **CI が成功していない PR はマージしない**。必須チェックは ci の `build`・`integration (Testcontainers)`・`macos (macosArm64 tests)`(`integration` と `macos` は関係のない変更ではスキップされ、スキップは成功に数えられる)。必須でない contract-check・infra と、`changes` ジョブが成功していることは運用で確かめる(ADR-0020 §3)。
    - CI の失敗したジョブを再実行してよいのは、原因が特定できていて、PR の差分と無関係な場合だけ。再実行したときは PR 本文に理由を書く。同じ原因で 2 回失敗したら Issue で直す。
 4. アーキテクチャ上の決定は `docs/adr/NNNN-*.md` に ADR として残す(`/adr` コマンド)。
 5. 完了前に必ず以下を実行し、全て成功させる:
