@@ -9,6 +9,7 @@ import io.eia.shared.kernel.getOrNull
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldHaveSize
+import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldNotContain
 import io.kotest.matchers.types.shouldBeInstanceOf
@@ -177,6 +178,52 @@ class S3AnchorStoreSpec :
             v1.body!!.decodeToString() shouldBe "x"
             versions.single { it.versionId == "v2" }.retentionMode shouldBe null
             versions.single { it.versionId == "m1" }.isDeleteMarker shouldBe true
+        }
+
+        test("latest は、削除マーカーを除いて最も新しい版(最大のキーの、最も新しい保存)の内容だけを読む") {
+            val client = mockk<S3Client>()
+
+            fun version(
+                key: String,
+                id: String,
+                modified: Instant,
+            ) = ObjectVersion
+                .builder()
+                .key(key)
+                .versionId(id)
+                .lastModified(modified)
+                .build()
+            every { client.listObjectVersions(any<ListObjectVersionsRequest>()) } returns
+                ListObjectVersionsResponse
+                    .builder()
+                    .isTruncated(false)
+                    .versions(
+                        version("anchors/order/2026-10-01.json", "old", MODIFIED.plusSeconds(600)),
+                        version("anchors/order/2026-10-02.json", "v1", MODIFIED),
+                        version("anchors/order/2026-10-02.json", "v2", MODIFIED.plusSeconds(60)),
+                    ).deleteMarkers(
+                        DeleteMarkerEntry
+                            .builder()
+                            .key("anchors/order/2026-10-02.json")
+                            .versionId("m1")
+                            .lastModified(MODIFIED.plusSeconds(120))
+                            .build(),
+                    ).build()
+            val reads = mutableListOf<GetObjectRequest>()
+            every { client.getObject(capture(reads)) } answers { body("x".toByteArray()) }
+            every { client.getObjectRetention(any<GetObjectRetentionRequest>()) } returns GetObjectRetentionResponse.builder().build()
+
+            val latest = S3AnchorStore(CONFIG, client).latest("anchors/order/").getOrNull().shouldNotBeNull()
+
+            latest.versionId shouldBe "v2"
+            reads.map { it.versionId() } shouldBe listOf("v2")
+        }
+
+        test("latest は、版がなければ null") {
+            val client = mockk<S3Client>()
+            every { client.listObjectVersions(any<ListObjectVersionsRequest>()) } returns
+                ListObjectVersionsResponse.builder().isTruncated(false).build()
+            S3AnchorStore(CONFIG, client).latest("anchors/order/").getOrNull() shouldBe null
         }
 
         test("読めない版は理由つきで返し、一覧の取得は続ける") {

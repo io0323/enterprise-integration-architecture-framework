@@ -86,6 +86,8 @@ private class FixedStore(
     ): Result<String, AuditError> = throw UnsupportedOperationException()
 
     override fun listVersions(prefix: String): Result<List<AnchorVersion>, AuditError> = result
+
+    override fun latest(prefix: String): Result<AnchorVersion?, AuditError> = throw UnsupportedOperationException()
 }
 
 private fun anchorAt(seq: Long): AnchorVersion =
