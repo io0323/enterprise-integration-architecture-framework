@@ -46,7 +46,7 @@ P05 で最初の REST API(order-service の `POST /v1/orders`・`GET /v1/orders/
 | `NotFoundException`・どのルートにも当たらない | 404 `not-found` |
 | 許可されていないメソッド | 405 `about:blank` |
 | `UnsupportedMediaTypeException` / `PayloadTooLargeException` | 415 / 413 `about:blank` |
-| キャンセル(クライアントの切断・タイムアウト) | 扱わずに伝える(タイムアウトは Ktor が 504 を返し、`ServerObservability` が記録する。ADR-0018 §5) |
+| キャンセル(クライアントの切断・タイムアウト) | 扱わずに伝える(タイムアウトは Ktor が 504 を返し、`ServerObservability` が記録する。ADR-0018 §5)。入口のリクエストの予算(`installRequestDeadline`)の期限切れは、そちらが 503 `deadline-exceeded` で返す(ADR-0024 §3) |
 | 応答を送り始めた後の例外 | 状態コードを変えられないので伝える |
 
 - **例外は、Ktor のパイプラインの `Plugins` の段階の interceptor で扱う。StatusPages の `exception` は使わない。** StatusPages の例外の処理(Ktor 3 の `CallFailed`)は `Setup` より前の段階に入り、`ServerObservability`(`Monitoring`)の外側で動く。そこで扱うと、`ServerObservability` には例外がそのまま届き、400 にした応答も 500 として RED メトリクスに数えられ、未処理の例外のログも二重になる(実装中にテストで確かめた)。`Plugins` の段階は `Monitoring` の内側なので、応答の状態コードとログが 1 回で正しく記録され、`correlationId` もその処理のコンテキストから取れる。
@@ -138,3 +138,4 @@ P05 で最初の REST API(order-service の `POST /v1/orders`・`GET /v1/orders/
 - 2026-09-30: ②b で §3(Idempotency-Key)を追記した。
 - 2026-10-01: P05 ④a-2 で、リースと保持期限を保存先の時刻(PostgreSQL の `clock_timestamp()`)で設定・判定することにした。複数のインスタンスの時計のずれで、有効なリースを横取りしたり、期限の前の記録を消したりしないため。これに合わせて `IdempotencyStore` の `claim` / `complete` / `purgeExpired` は時刻を引数に取らず、期間だけを受け取る形に変え、`IdempotencyHandler` はアプリの時計を使わなくなった。`purgeExpired` は、リースの期限に猶予を足した時刻を過ぎた処理中の記録も消す。指紋が違えば、状態やリースの有効・期限切れに関係なく 422 であることを明記した(PostgreSQL の実装の統合テストで確かめた)。
 - 2026-10-01: P05 ④b-1 で、Idempotency-Key を使う API は、呼び出し元のクライアント(`azp`、なければ `client_id`)のないトークンを 401 `invalid_token` で拒否することにした(`JwtVerifierConfig.requireClientId`)。
+- 2026-10-01: P05 ⑤a で、リクエストの予算切れを 503 `deadline-exceeded`(`Retry-After` 付き)で返すことにした(ADR-0024 §3)。5xx なので保存せず、打ち切られた処理は確定していないため、同じキーの再試行で 1 回だけ処理される。

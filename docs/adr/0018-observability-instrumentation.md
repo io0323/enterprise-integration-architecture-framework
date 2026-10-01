@@ -108,6 +108,7 @@ P06・P07 で自前で実装する範囲(`platform/messaging-kafka` / `platform/
   - クライアントの切断や呼び出し側の中止で処理がキャンセルされた場合は、応答していないので `http.response.status_code` を記録せず、`error.type` も付けない。500 として数えると、実際には返していない 5xx が Error 率と SLO のアラートを押し上げるため。
   - タイムアウトは `error.type=timeout`(semconv が許す低カーディナリティの独自の値)を付けてエラーに数える。同期呼び出しの 4 点セット(Framework 13)の Timeout の失敗を、Error 率に出すため。対象は `withTimeout` の期限切れ(`TimeoutCancellationException`)、Ktor の `HttpRequestTimeoutException` / `ConnectTimeoutException`、読み取りのタイムアウト(`java.net.SocketTimeoutException`)。
   - サーバのハンドラの中でタイムアウトした場合、Ktor は 504 を返す(テストで確認)。ステータスに 504 を記録し、Correlation ID の付いた WARN を 1 回残す。
+  - タイムアウトを例外ではなく応答で返す部品(入口のリクエストの予算切れの 503。ADR-0024 §3)は、`markTimedOut()` で印を付ける。返したステータスを記録し、`error.type=timeout` で数えて WARN を 1 回残す。
   - 判定は `HttpMetrics.failureErrorType` に集め、Server / Client のプラグインと `withSpan` が同じ規則を使う。
 
 ## Alternatives Considered
@@ -129,3 +130,6 @@ P06・P07 で自前で実装する範囲(`platform/messaging-kafka` / `platform/
 - ログの trace は、記録した時点の現在の span(フラグを含む)を優先し、なければ MDC の trace_id / span_id を使う。MDC だけから作った場合、trace flags は既定値(00)になる。
 - **外部から受け取った sampled フラグを信じる。** サンプラは ParentBased のため、外部の呼び出し元が sampled=1 を送れば記録される。社外に公開する入口では、Gateway(APISIX)で外部の `traceparent` を捨てて付け直すか、信じるかを P05 で決める(ROADMAP P05)。
 - **OTLP の送信は、ローカル参照実装では平文で、認証もない。** 本番の構成では TLS(可能なら mTLS)と送信先の認証が要る。ローカル基盤の転送路の暗号化と合わせて Issue #29 で扱う。資格情報は ③ security の `SecretProvider` から渡す。
+
+## 改訂履歴
+- 2026-10-01: P05 ⑤a で、タイムアウトを応答で返す部品のための `markTimedOut()` を `ServerObservability` に加えた(§5。リクエストの予算切れの 503 も `error.type=timeout` で数える。ADR-0024 §3)。
