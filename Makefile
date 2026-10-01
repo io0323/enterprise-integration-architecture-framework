@@ -92,5 +92,6 @@ audit-verify: ## 監査記録の改竄の検査(例: make audit-verify SERVICE=o
 stats: ## 起動中コンテナのメモリ使用量(docker stats)
 	@$(INFRA)/scripts/stats.sh
 
-e2e: ## E2E シナリオ(P05 で tests/e2e を構築)
-	@if [ -d tests/e2e ]; then $(GRADLE) :tests:e2e:e2eTest; else echo "tests/e2e は未構築です(P05)"; exit 1; fi
+# 秘密情報は infra/local/.env から環境変数で渡す(verify.sh と同じ)。基盤は make up PROFILE=order で起動しておく
+e2e: env ## E2E シナリオ(tests/e2e。make up PROFILE=order で起動した基盤に、公開されたエンドポイントだけで接続する)
+	@set -a && . $(INFRA)/.env && set +a && $(GRADLE) :tests:e2e:e2eTest

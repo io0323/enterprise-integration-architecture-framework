@@ -55,7 +55,7 @@ flowchart BT
   | `platform:api` | `platform:observability` | Problem Details の `correlationId`(ADR-0022 §2) |
 - `platform:test-support` はテストのソースセット(`test` / `integrationTest` など)からだけ参照する。
 - `services` 間のコード依存は禁止(連携は契約経由のみ)。契約モデルは contracts から生成するか `adapters` 内で定義する。
-- `tests:e2e` は `services:*` にコード依存しない(契約・SDK・公開エンドポイント経由のみで検証する)。
+- `tests:e2e` は `services:*` にコード依存しない(契約・SDK・公開エンドポイント経由のみで検証する)。P05 の時点では SDK(P11)がないため、JDK の HttpClient で公開エンドポイント(Gateway・Keycloak・Tempo・Prometheus・Grafana)に接続する。ソースは `src/e2eTest/kotlin`、実行は `make e2e`(起動した基盤に対して)と ci の `e2e` ジョブ。
 - `tools:device-simulator` は `shared:integration-sdk` にのみ依存する。
 
 ## 3. サービス内部レイアウト(例: order)
