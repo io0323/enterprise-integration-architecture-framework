@@ -59,6 +59,7 @@ P05 ④b-2 で、最初のサービス(order-service)を起動できる形にす
 - クライアントにとっての意味を分ける: **503 `deadline-exceeded` は「確定していない」、ゲートウェイの 504 は「分からない」**。どちらも同じ `Idempotency-Key` で再試行すれば、二重にはならない(ADR-0022 §3)。
 - 応答は `platform/api` の `installRequestDeadline` が返す。打ち切るのは予算の期限切れだけで、処理の中の別の `withTimeout` の期限切れは、これまでどおり例外として伝わる(Ktor の 504)。
 - 5xx なので冪等の記録には保存しない(ADR-0022 §3)。`ServerObservability` には `markTimedOut()` で伝え、ほかの 503 と区別して `error.type=timeout` で数える(ADR-0018 §5)。
+- **応答を返し始めた後に予算が切れた場合**(ハンドラが応答のヘッダを送った後、`proceed()` から戻る前)は、状態コードを変えられず、クライアントは返した応答を受け取っている。503 には書き換えず、エラーにも数えない。超過は `markDeadlineOverrun()` で別に数える(`eia.http.server.deadline_overruns`。ADR-0018 §5)。
 
 ### 4. ヘルスチェックと削除のジョブ
 - `/health/live`(プロセスが動いている)と `/health/ready`(DB に接続できる。できなければ 503)。認証しない。平文のヘルスチェックのポートだけで返す(§6)。
@@ -123,3 +124,4 @@ P05 ④b-2 で、最初のサービス(order-service)を起動できる形にす
 - 2026-10-01: P05 ⑤b で、§6(API は mTLS だけで受け、SAN の許可の一覧を確かめる。ヘルスチェックは平文のポート。証明書の有効期限の確認と、7 日を切ったときの作り直し)と §7(distroless の nonroot のイメージ)を加えた。compose の `order-migrate` → `order-service` の順序を実装した(§2)。
 - 2026-10-01: P05 ⑤c で、§7 を直した。ホストの uid が 0(root)なら `make up` / `make certs` を止める(以前は 65532 で動かし、鍵の所有者を変えていた)。本番では固定の nonroot の uid で動かし、鍵の読み取り権限は Secret の配置で与えることを書いた。
 - 2026-10-01: P05 ⑤c で、ゲートウェイの上流のタイムアウトを 15 秒にした(§3 の表。ADR-0023 §1)。
+- 2026-10-01: P05 ⑦a の前に、応答を返し始めた後に予算が切れた要求を、エラー(`error.type=timeout`)ではなく、別のカウンタ `eia.http.server.deadline_overruns` で数えることにした(§3。RED の Errors はクライアントが受け取った結果に合わせる)。

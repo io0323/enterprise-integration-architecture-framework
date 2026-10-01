@@ -109,6 +109,7 @@ P06・P07 で自前で実装する範囲(`platform/messaging-kafka` / `platform/
   - タイムアウトは `error.type=timeout`(semconv が許す低カーディナリティの独自の値)を付けてエラーに数える。同期呼び出しの 4 点セット(Framework 13)の Timeout の失敗を、Error 率に出すため。対象は `withTimeout` の期限切れ(`TimeoutCancellationException`)、Ktor の `HttpRequestTimeoutException` / `ConnectTimeoutException`、読み取りのタイムアウト(`java.net.SocketTimeoutException`)。
   - サーバのハンドラの中でタイムアウトした場合、Ktor は 504 を返す(テストで確認)。ステータスに 504 を記録し、Correlation ID の付いた WARN を 1 回残す。
   - タイムアウトを例外ではなく応答で返す部品(入口のリクエストの予算切れの 503。ADR-0024 §3)は、`markTimedOut()` で印を付ける。返したステータスを記録し、`error.type=timeout` で数えて WARN を 1 回残す。
+  - **RED の Errors(`error.type`)は、クライアントが実際に受け取った結果に合わせる。** 応答を返し始めた後に予算を超えた場合は、クライアントは返した応答(200 など)を受け取っているので、エラーには数えない。`markDeadlineOverrun()` で印を付け、返したステータスのとおりに記録し、予算を超えたことはカウンタ `eia.http.server.deadline_overruns`(状態コード・メソッド・ルートの属性)と span の属性 `eia.deadline.overrun` で別に数え、WARN を 1 回残す。
   - 判定は `HttpMetrics.failureErrorType` に集め、Server / Client のプラグインと `withSpan` が同じ規則を使う。
 
 ## Alternatives Considered
@@ -135,3 +136,4 @@ P06・P07 で自前で実装する範囲(`platform/messaging-kafka` / `platform/
 - 2026-10-01: P05 ⑤a で、タイムアウトを応答で返す部品のための `markTimedOut()` を `ServerObservability` に加えた(§5。リクエストの予算切れの 503 も `error.type=timeout` で数える。ADR-0024 §3)。
 - 2026-10-01: P05 ⑤c で、Gateway が外部の `traceparent` / `tracestate` を捨て、ゲートウェイでトレースを始めることにした(ADR-0023 §4)。APISIX の `opentelemetry` が `plugin_metadata` を読まずに何もしていなかった不具合を直し、Tempo に apisix の span が記録されることを `make verify PROFILE=order` で確かめるようにした。
 - 2026-10-01: P05 ⑥a で、RED のダッシュボード(`Order API — RED`)を Grafana の provisioning で加えた(`infra/local/grafana/provisioning/dashboards/`)。式は §5 の属性(`http_route`・`http_response_status_code`・`error_type`)と、OTLP から Prometheus への名前の変換(`http.server.request.duration` → `http_server_request_duration_seconds_*`、カウンタは `_total`)に合わせた。
+- 2026-10-01: P05 ⑦a の前に、応答を返し始めた後に予算を超えた要求を `error.type=timeout` で数えるのをやめた(§5)。200 を受け取ったクライアントの要求がエラーに見えていたため。超過は `eia.http.server.deadline_overruns` と `eia.deadline.overrun` で別に数える。
