@@ -10,8 +10,9 @@ concurrency:
   cancel-in-progress: true
 
 # アクションはタグではなくコミット SHA で固定し、コメントにバージョンを併記する。
-# 必須チェック(Ruleset「main protection」)は `build`・`changes`・`integration (Testcontainers)`・`macos (macosArm64 tests)`(ADR-0020 §3)。
-# `macos` ジョブは shared/** などの変更時だけ、`integration` ジョブは platform/**・services/** などの変更時だけ実行される。
+# 必須チェック(Ruleset「main protection」)は `build`・`changes`・`integration (Testcontainers)`・`macos (macosArm64 tests)`・`e2e`(ADR-0020 §3)。
+# `macos` ジョブは shared/** などの変更時だけ、`integration` ジョブは platform/**・services/** などの変更時だけ、
+# `e2e` ジョブは services/**・platform/**・shared/**・contracts/**・infra/local/** などの変更時だけ実行される。
 # ジョブの `if` でスキップされたジョブは成功に数えられるので、関係のない PR は止まらない。
 # ジョブの `name` を変えるときは、Ruleset の必須チェックの名前も同時に変える(完全一致で照合される)。
 # 統合テストを持つモジュール(adapters・platform の一部)のカバレッジの閾値は、`integration` ジョブで統合テストを含めて検証する
