@@ -43,6 +43,8 @@ import kotlin.time.TimeSource
  * - 未処理の例外は、Correlation ID と trace_id の付いたログに 1 回だけ記録する(Ktor 自身のログはそれらの外で出るため)。
  * - 処理のキャンセル(クライアントの切断など)は、応答していないのでステータスを記録せず、エラーにも数えない。
  *   タイムアウトは `error.type=timeout` でエラーに数え、Ktor が返す 504 を記録し、WARN を 1 回残す(ADR-0018 §5)。
+ * - タイムアウトを例外ではなく応答(リクエストの予算切れの 503 など)で返す部品は、[markTimedOut] で印を付ける。
+ *   返したステータスを記録したうえで、例外の場合と同じく `error.type=timeout` で数え、WARN を 1 回残す(ADR-0024 §3)。
  */
 public val ServerObservability: ApplicationPlugin<ServerObservabilityConfig> =
     createApplicationPlugin("EiaServerObservability", ::ServerObservabilityConfig) {
@@ -94,9 +96,19 @@ public val ServerObservability: ApplicationPlugin<ServerObservabilityConfig> =
 private val logger = LoggerFactory.getLogger("io.eia.platform.observability.ktor.server.ServerObservability")
 private val IN_FLIGHT = AttributeKey<InFlight>("eia.observability.in-flight")
 private val ROUTE = AttributeKey<String>("eia.observability.route")
+private val TIMED_OUT = AttributeKey<Unit>("eia.observability.timed-out")
 private val CORRELATION_ID = stringKey(LogKeys.CORRELATION_ID)
 private const val SERVER_ERROR = 500
 private const val GATEWAY_TIMEOUT = 504
+private const val TIMED_OUT_MESSAGE = "処理がタイムアウトしました(error.type={})"
+
+/**
+ * この処理がタイムアウトし、例外ではなく応答で返したことを [ServerObservability] に伝える。
+ * 返したステータスはそのまま記録し、`error.type` は `timeout` にする(ADR-0018 §5・ADR-0024 §3)。
+ */
+public fun ApplicationCall.markTimedOut() {
+    attributes.put(TIMED_OUT, Unit)
+}
 
 /** 処理中のリクエスト(終了時にメトリクスと span を閉じるための情報)。 */
 private class InFlight(
@@ -117,12 +129,13 @@ private suspend fun observe(
     var failure: Throwable? = null
     try {
         proceed()
+        if (call.attributes.contains(TIMED_OUT)) logger.warn(TIMED_OUT_MESSAGE, HttpMetrics.TIMEOUT)
     } catch (e: Throwable) {
         failure = e
         // Ktor もこの後に応答・記録するが、それは Correlation ID と trace_id の外になる。追跡できるようにここで 1 回記録する
         when (e) {
             // Ktor は 504 を返す。どの処理が期限切れになったかを追えるようにする
-            is TimeoutCancellationException -> logger.warn("処理がタイムアウトしました(error.type={})", HttpMetrics.TIMEOUT)
+            is TimeoutCancellationException -> logger.warn(TIMED_OUT_MESSAGE, HttpMetrics.TIMEOUT)
 
             // クライアントの切断など。応答しないので記録しない
             is CancellationException -> Unit
@@ -150,7 +163,9 @@ private fun complete(
             is CancellationException -> null
             else -> SERVER_ERROR
         }
-    val exchange = HttpExchange(inFlight.method, status, HttpMetrics.serverErrorType(status, failure))
+    val errorType =
+        if (failure == null && call.attributes.contains(TIMED_OUT)) HttpMetrics.TIMEOUT else HttpMetrics.serverErrorType(status, failure)
+    val exchange = HttpExchange(inFlight.method, status, errorType)
     val span = inFlight.span
     status?.let { span.setAttribute(HttpAttributes.HTTP_RESPONSE_STATUS_CODE, it.toLong()) }
     exchange.errorType?.let {
