@@ -3,6 +3,8 @@ package io.eia.platform.audit.jdbc
 import io.eia.platform.audit.AuditError
 import io.eia.platform.audit.AuditEvent
 import io.eia.platform.audit.AuditEventNormalizer
+import io.eia.platform.audit.AuditLogListener
+import io.eia.platform.audit.AuditMetrics
 import io.eia.platform.audit.AuditMisuse
 import io.eia.platform.audit.AuditRecord
 import io.eia.platform.audit.ChainHash
@@ -10,12 +12,14 @@ import io.eia.platform.audit.canonical.CanonicalForm
 import io.eia.platform.audit.canonical.CanonicalForms
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.err
+import io.eia.shared.kernel.map
 import io.eia.shared.kernel.ok
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.sql.Connection
 import java.sql.SQLException
 import java.time.Clock
+import java.time.Duration
 import java.time.ZoneOffset
 
 /**
@@ -30,15 +34,36 @@ import java.time.ZoneOffset
  *   直前にコミットされた記録が見えず、同じ `seq` を使って一意制約の違反になる。
  *
  * Exposed のトランザクションからは [appendAudit] を使う。
+ *
+ * [listener] に、追記の所要時間・チェーンのロックの待ち時間・失敗を知らせる(ADR-0017 §8 の A17-5。メトリクスは [AuditMetrics])。
  */
 public class AuditLog(
     private val clock: Clock = Clock.systemUTC(),
     private val canonicalForm: CanonicalForm = CanonicalForms.CURRENT,
+    private val listener: AuditLogListener = AuditLogListener.NONE,
 ) {
     public fun append(
         connection: Connection,
         event: AuditEvent,
     ): Result<AuditRecord, AuditError> {
+        val started = System.nanoTime()
+        val result = appendTimed(connection, event)
+        when (result) {
+            is Result.Ok -> listener.appended(Duration.ofNanos(System.nanoTime() - started), result.value.lockWait)
+            is Result.Err -> listener.failed(result.error)
+        }
+        return result.map { it.record }
+    }
+
+    private class Appended(
+        val record: AuditRecord,
+        val lockWait: Duration,
+    )
+
+    private fun appendTimed(
+        connection: Connection,
+        event: AuditEvent,
+    ): Result<Appended, AuditError> {
         val normalized =
             when (val result = AuditEventNormalizer.normalize(event)) {
                 is Result.Ok -> result.value
@@ -46,10 +71,12 @@ public class AuditLog(
             }
         return sqlCatching {
             checkTransaction(connection)?.let { return@sqlCatching err(it) }
+            val lockStarted = System.nanoTime()
             connection.prepareStatement("SELECT pg_advisory_xact_lock(?)").use {
                 it.setLong(1, CHAIN_LOCK_KEY)
                 it.executeQuery().close()
             }
+            val lockWait = Duration.ofNanos(System.nanoTime() - lockStarted)
             // ロックを取った後に時刻を読む(seq の順と recorded_at の順を揃える)
             val recordedAt = AuditEventNormalizer.truncateToMicros(clock.instant())
             val tail = AuditLogReader.head(connection)
@@ -61,7 +88,7 @@ public class AuditLog(
                 )
             val hashed = record.copy(hash = canonicalForm.hash(record).hex)
             insert(connection, hashed)
-            ok(hashed)
+            ok(Appended(hashed, lockWait))
         }
     }
 

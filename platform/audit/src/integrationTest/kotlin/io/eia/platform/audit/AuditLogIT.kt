@@ -22,6 +22,7 @@ import org.jetbrains.exposed.v1.jdbc.Database
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import java.sql.Connection
 import java.sql.SQLException
+import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -200,6 +201,38 @@ class AuditLogIT :
                 (log.append(connection, sampleEvent(1)) as Result.Err).error.shouldBeInstanceOf<AuditMisuse>()
                 connection.rollback()
             }
+        }
+
+        test("追記の所要時間とロックの待ち時間、失敗をリスナーに知らせる(メトリクスの元。ADR-0017 §8 の A17-5)") {
+            val appended = mutableListOf<Pair<Duration, Duration>>()
+            val failed = mutableListOf<AuditError>()
+            val listening =
+                AuditLog(
+                    listener =
+                        object : AuditLogListener {
+                            override fun appended(
+                                duration: Duration,
+                                lockWait: Duration,
+                            ) {
+                                appended += duration to lockWait
+                            }
+
+                            override fun failed(error: AuditError) {
+                                failed += error
+                            }
+                        },
+                )
+            val db = env.newDatabase()
+            db.append(listening, 1)
+            db.app.connection.use { connection ->
+                connection.autoCommit = true
+                listening.append(connection, sampleEvent(2))
+            }
+
+            val (duration, lockWait) = appended.single()
+            (lockWait <= duration) shouldBe true
+            lockWait.isNegative shouldBe false
+            failed.single().shouldBeInstanceOf<AuditMisuse>()
         }
 
         test("並行して追記しても、欠番・重複・分岐のないチェーンになる") {

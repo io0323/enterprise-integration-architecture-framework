@@ -27,6 +27,8 @@ dependencies {
 
     testImplementation(libs.kotest.property)
     testImplementation(libs.mockk)
+    // AuditMetrics の単体テスト(InMemoryMetricReader)
+    testImplementation(libs.opentelemetry.sdk.testing)
 
     integrationTestImplementation(project(":platform:test-support"))
     integrationTestImplementation(libs.testcontainers.postgresql)
