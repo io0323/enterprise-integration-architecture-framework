@@ -1,5 +1,5 @@
 # EIAF ローカル基盤(ADR-0003 / ADR-0015 / ADR-0016)
-# - 起動は Makefile 経由: `make up PROFILE=<core|cdc|iot|file|b2b|chaos>`(core は常に含まれる)
+# - 起動は Makefile 経由: `make up PROFILE=<core|cdc|iot|file|b2b|chaos|order>`(core は常に含まれる)
 # - イメージは images.env(タグ + ダイジェスト)、秘密情報は .env(`make env` で生成)から読む。
 # - ホスト側のポートは 127.0.0.1 の 19000〜19999 に割り当てる。一覧は README.md。
 name: eiaf
@@ -287,6 +287,66 @@ services:
       <<: *healthcheck
       # イメージ同梱の CLI で API(:8474)に問い合わせる
       test: ["CMD", "/toxiproxy-cli", "list"]
+
+  # ---------------------------------------------------------------- order(P05。ADR-0024)
+  # order-service のイメージ(services/order/app/Dockerfile)。中身は installDist の出力で、make up PROFILE=order が先に作る
+  # マイグレーション(1 回だけ動いて終わる)。DB の所有者のパスワードを渡すのはこのコンテナだけ(ADR-0024 §2)
+  order-migrate:
+    build: &order-build
+      context: ../../services/order/app
+      args:
+        JAVA_RUNTIME_IMAGE: ${JAVA_RUNTIME_IMAGE:?}
+    profiles: [order]
+    command: ["migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ORDER_DB_URL: jdbc:postgresql://postgres:5432/order_service
+      ORDER_DB_PASSWORD: ${ORDER_DB_PASSWORD:?make env を実行してください}
+      OTEL_SERVICE_NAME: order-service
+    mem_limit: 256m
+    restart: "no"
+
+  # リクエストの処理(serve)。マイグレーションが成功してから起動する。アプリのロールのパスワードだけを渡す(ADR-0024 §2)
+  # - API(8443)は mTLS だけで受ける(クライアント証明書は開発用 CA の署名と SAN の許可の一覧。ADR-0024 §6)。
+  #   ホストの 19443 は、mTLS なしの直接接続を拒否することの検査(make verify)と調査のためだけに公開する
+  # - ヘルスチェック(8081)は平文で、コンテナの外には公開しない
+  # - 鍵(certs/*.key。0600)を読めるよう、ホストの利用者の uid で動かす(root にはしない。Makefile の EIAF_UID)
+  order-service:
+    build: *order-build
+    profiles: [order]
+    command: ["serve"]
+    user: "${EIAF_UID:-65532}:${EIAF_GID:-65532}"
+    depends_on:
+      order-migrate:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_healthy
+    environment:
+      ORDER_DB_URL: jdbc:postgresql://postgres:5432/order_service
+      ORDER_APP_DB_PASSWORD: ${ORDER_APP_DB_PASSWORD:?make env を実行してください}
+      # iss はトークンに入っている値(ホストから見た URL)、JWKS はコンテナから届く URL(ADR-0019)
+      OIDC_ISSUER: http://localhost:19180/realms/eiaf
+      OIDC_JWKS_URI: http://keycloak:8080/realms/eiaf/protocol/openid-connect/certs
+      ORDER_TLS_CERT_FILE: /certs/order-service.crt
+      ORDER_TLS_KEY_FILE: /certs/order-service.key
+      ORDER_TLS_CLIENT_CA_FILE: /certs/ca.crt
+      ORDER_TLS_ALLOWED_CLIENTS: apisix
+      OTEL_SERVICE_NAME: order-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    ports:
+      - 127.0.0.1:19443:8443
+    volumes:
+      # CA の鍵(ca.key)は渡さない
+      - ./certs/ca.crt:/certs/ca.crt:ro
+      - ./certs/order-service.crt:/certs/order-service.crt:ro
+      - ./certs/order-service.key:/certs/order-service.key:ro
+      - *probe-volume
+    mem_limit: 384m
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "/probe/bin/wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/health/ready"]
 
   # ---------------------------------------------------------------- core: data / security / gateway
   postgres:

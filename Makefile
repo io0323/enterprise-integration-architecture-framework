@@ -1,15 +1,22 @@
 # EIAF ローカル開発用コマンド(CLAUDE.md §7)
 GRADLE := ./gradlew
 
-.PHONY: help setup build check arch-test contract-check integration-test format env up down logs ps verify stats clean e2e audit-verify
+.PHONY: help setup build check arch-test contract-check integration-test format env certs order-dist up down logs ps verify stats clean e2e audit-verify
 
 # ローカル基盤(infra/local。ADR-0016)
-# PROFILE: core / cdc / iot / file / b2b / chaos。core は常に含まれる(積み上げ方式)。空白区切りで複数指定できる。
+# PROFILE: core / cdc / iot / file / b2b / chaos / order。core は常に含まれる(積み上げ方式)。空白区切りで複数指定できる。
 PROFILE ?= core
 INFRA := infra/local
 COMPOSE := docker compose -f $(INFRA)/docker-compose.yml --env-file $(INFRA)/images.env --env-file $(INFRA)/.env
 COMPOSE_PROFILES_ARGS := --profile core $(foreach p,$(filter-out core,$(PROFILE)),--profile $(p))
 SERVICE ?=
+# order-service のコンテナは、開発用の鍵(infra/local/certs/*.key。0600)を読むため、ホストの利用者の uid で動かす(root にはしない)。
+# root で実行したときは distroless の nonroot(65532)にし、gen-dev-certs.sh が鍵の所有者を 65532 にする(ADR-0024 §7)
+EIAF_UID := $(shell if [ "$$(id -u)" = 0 ]; then echo 65532; else id -u; fi)
+EIAF_GID := $(shell if [ "$$(id -u)" = 0 ]; then echo 65532; else id -g; fi)
+export EIAF_UID EIAF_GID
+# 開発用の証明書(infra/local/certs)を読むコンテナ。証明書を作り直したら(certs/.renewed)、make up で作り直す
+CERT_CONSUMERS := order-service
 
 help: ## コマンド一覧
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -41,8 +48,19 @@ format: ## ktlint で自動整形
 env: ## infra/local/.env(秘密情報)をランダム生成する。既にあれば不足分だけ追記
 	@$(INFRA)/scripts/init-env.sh
 
-# --build: 自前で組み立てるイメージ(kafka-connect。ADR-0016 §9)の Dockerfile の変更を反映する(変更がなければキャッシュを使う)
-up: env ## ローカル基盤を起動し、全コンテナが healthy になるまで待つ(例: make up PROFILE=cdc)
+certs: ## 開発用の CA と mTLS の証明書を作る。残りが 7 日を切っていれば作り直す(docs/runbooks/dev-certificates.md)
+	@$(INFRA)/scripts/gen-dev-certs.sh
+
+order-dist: ## order-service のイメージの中身(installDist)を作る
+	$(GRADLE) :services:order:app:installDist
+
+# --build: 自前で組み立てるイメージ(kafka-connect・order-service。ADR-0016 §9)の変更を反映する(変更がなければキャッシュを使う)
+# 証明書の有効期限は毎回確かめる(期限切れの証明書で起動に失敗しないように)
+up: env certs $(if $(filter order,$(PROFILE)),order-dist) ## ローカル基盤を起動し、全コンテナが healthy になるまで待つ(例: make up PROFILE=cdc)
+	@if [ -f $(INFRA)/certs/.renewed ]; then \
+		$(COMPOSE) --profile '*' rm --stop --force $(CERT_CONSUMERS) >/dev/null 2>&1 || true; \
+		rm -f $(INFRA)/certs/.renewed; \
+	fi
 	$(COMPOSE) $(COMPOSE_PROFILES_ARGS) up -d --build --wait --wait-timeout 420
 
 down: env ## ローカル基盤を停止する(全 profile。データは残す)
