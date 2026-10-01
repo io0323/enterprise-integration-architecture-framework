@@ -10,4 +10,4 @@ contract: contracts/openapi/order-api.v1.yaml
 tier: 1
 dataClassification: confidential
 slo: { availability: "99.95", latencyP99: "500ms" }
-lifecycle: design
+lifecycle: active
