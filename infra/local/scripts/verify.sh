@@ -43,12 +43,17 @@ consume() { # consume <トピック> <件数> <タイムアウト ms>(読めた�
     --from-beginning --max-messages "$2" --timeout-ms "$3" 2>/dev/null || true
 }
 
-# Keycloak の client credentials(eiaf-e2e)で、sales.order:* のスコープのアクセストークンを取る(失敗したら空)
+# Keycloak の client credentials で、sales.order:* のスコープのアクセストークンを取る(失敗したら空)
+# client_token [クライアント ID] [シークレット](既定は eiaf-e2e)
 client_token() {
+  local id="${1:-eiaf-e2e}" secret="${2:-$EIAF_E2E_CLIENT_SECRET}"
   curl -fsS -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token \
-    -d grant_type=client_credentials -d client_id=eiaf-e2e --data-urlencode "client_secret=$EIAF_E2E_CLIENT_SECRET" \
+    -d grant_type=client_credentials -d client_id="$id" --data-urlencode "client_secret=$secret" \
     --data-urlencode 'scope=sales.order:read sales.order:write' | json 'd["access_token"]' 2>/dev/null || true
 }
+
+# 応答のヘッダの値(curl -D - の出力から。大文字小文字を区別しない)
+header_value() { awk -v name="$(tr '[:upper:]' '[:lower:]' <<<"$1")" -F': ' 'tolower($1) == name { sub(/\r$/, "", $2); print $2; exit }'; }
 
 # 1 回だけ動いて終わるコンテナ(終了コード 0 で終わっていれば正常)
 oneshot_services=" order-migrate "
@@ -513,6 +518,122 @@ verify_order() {
   else
     fail "order-service: root で動いている (user='$user')"
   fi
+
+  verify_gateway
+}
+
+# ------------------------------------------------------------------ order: Gateway(APISIX → order-service。ADR-0023)
+verify_gateway() {
+  current="gateway"
+  local url="http://localhost:19080/sales/v1/orders" token token_b out code
+  token="$(client_token)"
+  token_b="$(client_token eiaf-e2e-b "$EIAF_E2E_B_CLIENT_SECRET")"
+  [[ -n "$token_b" ]] || fail "Keycloak: eiaf-e2e-b のトークンを取れない(このクライアントより前に作ったボリュームなら make clean → make up)"
+
+  # JWT の検証(ADR-0023 §2)。ゲートウェイ自身の 401 は Problem Details
+  out="$(curl -sS -D - -o - "$url/ord-none" || true)"
+  if [[ "$(head -1 <<<"$out")" == *" 401 "* ]] && [[ "$(header_value content-type <<<"$out")" == application/problem+json* ]] &&
+    grep -q 'problems/unauthorized' <<<"$out"; then
+    pass "Gateway: トークンがなければ 401(Problem Details)"
+  else
+    fail "Gateway: トークンなしの応答が想定外 ($(head -1 <<<"$out" | tr -d '\r'))"
+  fi
+  local tampered
+  tampered="$(python3 -c 'import sys; h,p,s=sys.argv[1].split("."); m=len(s)//2; print(h+"."+p+"."+s[:m]+("A" if s[m]!="A" else "B")+s[m+1:])' "$token")"
+  code="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $tampered" "$url/ord-none" || true)"
+  if [[ "$code" == 401 ]]; then pass "Gateway: 署名を改ざんしたトークンは 401"; else fail "Gateway: 署名を改ざんしたトークンが $code"; fi
+
+  # 公開パスの書き換え(/sales/v1 → /v1)と mTLS で order-service に届く。X-Correlation-Id は受け取った値を返す
+  local cid="verify-gw-$$"
+  out="$(curl -sS -D - -o - -H "Authorization: Bearer $token" -H "X-Correlation-Id: $cid" "$url/ord-none" || true)"
+  if [[ "$(head -1 <<<"$out")" == *" 404 "* ]] && grep -q 'problems/not-found' <<<"$out"; then
+    pass "Gateway: /sales/v1/orders/{id} を order-service の /v1/orders/{id} に送る(mTLS。ない注文は 404)"
+  else
+    fail "Gateway: order-service に届かない ($(head -1 <<<"$out" | tr -d '\r'))"
+  fi
+  if [[ "$(header_value x-correlation-id <<<"$out")" == "$cid" ]]; then pass "Gateway: 受け取った X-Correlation-Id を返す"; else fail "Gateway: X-Correlation-Id が返らない"; fi
+  if [[ -n "$(curl -sS -D - -o /dev/null -H "Authorization: Bearer $token" "$url/ord-none" | header_value x-correlation-id)" ]]; then
+    pass "Gateway: X-Correlation-Id がなければ付ける"
+  else
+    fail "Gateway: X-Correlation-Id を付けない"
+  fi
+
+  # 同じ Idempotency-Key の再送で同じ応答(ROADMAP P05 の DoD。Gateway 経由)
+  local key="verify-gw-$$-$(date +%s)" body first second
+  body='{"customerId":"cust-gw","lines":[{"productId":"prod-1","sku":"SKU-1","quantity":1,"unitPrice":{"amount":"1000","currency":"JPY"}}],"shippingAddress":{"countryCode":"JP","postalCode":"100-0001","city":"Chiyoda","line1":"1-1"}}'
+  first="$(curl -sS -o - -w '\n%{http_code}' -X POST "$url" -H "Authorization: Bearer $token" -H "Idempotency-Key: $key" -H 'Content-Type: application/json' -d "$body" || true)"
+  second="$(curl -sS -D - -o - -X POST "$url" -H "Authorization: Bearer $token" -H "Idempotency-Key: $key" -H 'Content-Type: application/json' -d "$body" || true)"
+  if [[ "$(tail -n1 <<<"$first")" == 201 && "$(header_value idempotent-replayed <<<"$second")" == true &&
+    "$(tail -n1 <<<"$second")" == "$(sed '$d' <<<"$first" | tail -n1)" ]]; then
+    pass "Gateway: POST は 201。同じ Idempotency-Key の再送は同じ本文と Idempotent-Replayed: true"
+  else
+    fail "Gateway: POST / 再送の応答が想定外 ($(tail -n1 <<<"$first"))"
+  fi
+
+  # 外部の traceparent を捨て、ゲートウェイでトレースを始める(ADR-0023 §4)。Tempo に apisix の span が、
+  # X-Correlation-Id の属性つきで記録され、order-service の span の親になる(#8 の APISIX の OTel の確認)
+  local sent_trace cid2="verify-trace-$$-$(date +%s)" found
+  sent_trace="$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
+  curl -sS -o /dev/null -H "Authorization: Bearer $token" -H "X-Correlation-Id: $cid2" \
+    -H "traceparent: 00-$sent_trace-$(python3 -c 'import secrets; print(secrets.token_hex(8))')-01" "$url/ord-none" || true
+  found=""
+  for _ in $(seq 1 20); do
+    found="$(curl -sS -G http://localhost:19320/api/search \
+      --data-urlencode "q={ resource.service.name = \"apisix\" && span.x-correlation-id = \"$cid2\" }" --data-urlencode limit=5 |
+      json '",".join(t["traceID"] for t in d.get("traces",[]))' 2>/dev/null || true)"
+    [[ -n "$found" ]] && break
+    sleep 3
+  done
+  if [[ -n "$found" && "$found" != *"$sent_trace"* ]]; then
+    pass "Gateway: 外部の traceparent を使わず、新しいトレースを始める(Tempo に apisix の span と X-Correlation-Id)"
+  else
+    fail "Gateway: Tempo の apisix の span が想定外 (found='${found}')"
+  fi
+  local chain
+  chain="$(curl -sS "http://localhost:19320/api/traces/${found%%,*}" | python3 -c '
+import base64,json,sys
+d=json.load(sys.stdin); spans={}
+for b in d.get("batches",[]):
+  svc=[a["value"].get("stringValue") for a in b["resource"]["attributes"] if a["key"]=="service.name"][0]
+  for ss in b.get("scopeSpans",[]):
+    for s in ss.get("spans",[]): spans[s["spanId"]]=(svc,s.get("parentSpanId",""))
+roots=[i for i,(svc,p) in spans.items() if svc=="apisix" and not p]
+children=[i for i,(svc,p) in spans.items() if svc=="order-service" and p in roots]
+print("ok" if roots and children else "ng")' 2>/dev/null || true)"
+  if [[ "$chain" == ok ]]; then pass "Gateway: order-service の span の親は apisix の span"; else fail "Gateway: order-service の span の親が apisix の span ではない"; fi
+
+  # クライアント(azp)ごとの Rate Limit。偽の X-Eiaf-Client-Id / X-Userinfo を付けても、ほかのクライアントの枠は減らない(ADR-0023 §5)
+  remaining() { curl -sS -D - -o /dev/null "$@" "$url/ord-none" | header_value x-ratelimit-remaining; }
+  local b_before b_after a_last forged_userinfo
+  forged_userinfo="$(printf '{"azp":"eiaf-e2e-b"}' | base64)"
+  b_before="$(remaining -H "Authorization: Bearer $token_b")"
+  for _ in 1 2 3; do
+    a_last="$(remaining -H "Authorization: Bearer $token" -H "X-Eiaf-Client-Id: eiaf-e2e-b" -H "X-Userinfo: $forged_userinfo")"
+  done
+  b_after="$(remaining -H "Authorization: Bearer $token_b")"
+  if [[ -n "$b_before" && -n "$b_after" && "$b_after" -eq $((b_before - 1)) ]]; then
+    pass "Gateway: 偽の X-Eiaf-Client-Id / X-Userinfo を付けた要求は、ほかのクライアント(eiaf-e2e-b)の枠を減らさない ($b_before → $b_after)"
+  else
+    fail "Gateway: ほかのクライアントの枠が想定外に変わった ('$b_before' → '$b_after')"
+  fi
+  [[ -n "$a_last" ]] && pass "Gateway: 偽のヘッダの要求は、送ったクライアント自身の枠で数える (残り $a_last)" || fail "Gateway: X-RateLimit-Remaining がない"
+
+  # 枠を超えたら 429 + Retry-After(整数の秒)+ Problem Details。ほかのクライアントは影響を受けない
+  local limited=""
+  for _ in $(seq 1 80); do
+    out="$(curl -sS -D - -o - -H "Authorization: Bearer $token" "$url/ord-none" || true)"
+    if [[ "$(head -1 <<<"$out")" == *" 429 "* ]]; then limited="$out"; break; fi
+  done
+  local retry
+  retry="$(header_value retry-after <<<"$limited")"
+  if [[ -n "$limited" && "$retry" =~ ^[1-9][0-9]*$ && "$(header_value content-type <<<"$limited")" == application/problem+json* ]] &&
+    grep -q 'problems/rate-limited' <<<"$limited"; then
+    pass "Gateway: 枠を超えると 429 + Retry-After ($retry 秒) + Problem Details(rate-limited)"
+  else
+    fail "Gateway: 429 / Retry-After が想定外 (Retry-After='${retry}')"
+  fi
+  code="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token_b" "$url/ord-none" || true)"
+  if [[ "$code" == 404 ]]; then pass "Gateway: ほかのクライアント(eiaf-e2e-b)は 429 にならない"; else fail "Gateway: eiaf-e2e-b が $code"; fi
 }
 
 verify_health
