@@ -38,6 +38,7 @@ logback = "1.6.4"
 # P04a ③ security(確認日: 2026-09-27。ADR-0019)
 # JWT の検証と JWKS の取得・キャッシュ。推移的な依存を持たない。ktor-server-auth-jwt(auth0)は使わない(ADR-0019 §1)。
 nimbus-jose-jwt = "10.10"
+bouncycastle = "1.86"
 # Kotlin/JS のテストランナー(mocha。Kotlin の Gradle プラグインが入れる)の間接的な依存を、脆弱性の修正版に上げる(確認日: 2026-09-28)。
 # eia.root が yarn.resolution に渡す。mocha 11.7.6 は serialize-javascript ^6.0.2 と diff ^7.0.0 を要求するが、修正版はメジャー版が上がる。
 # - serialize-javascript: GHSA-5c6j-r48x-rmvq(< 7.0.3)と GHSA-qj8w-gfj5-8c6v(< 7.0.5)
@@ -104,6 +105,8 @@ opentelemetry-exporter-otlp = { module = "io.opentelemetry:opentelemetry-exporte
 # OTLP の送信に JDK の HttpClient を使う(既定の OkHttp の送信部と、それが引き込む Kotlin stdlib の版の衝突を避ける)
 opentelemetry-exporter-sender-jdk = { module = "io.opentelemetry:opentelemetry-exporter-sender-jdk", version.ref = "opentelemetry" }
 nimbus-jose-jwt = { module = "com.nimbusds:nimbus-jose-jwt", version.ref = "nimbus-jose-jwt" }
+# テスト専用(mTLS の統合テストで CA と証明書を作る)
+bouncycastle-pkix = { module = "org.bouncycastle:bcpkix-jdk18on", version.ref = "bouncycastle" }
 opentelemetry-semconv = { module = "io.opentelemetry.semconv:opentelemetry-semconv", version.ref = "opentelemetry-semconv" }
 
 # build-logic が convention plugin から適用するプラグインの実体

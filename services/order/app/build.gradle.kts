@@ -22,6 +22,6 @@ dependencies {
     integrationTestImplementation(libs.testcontainers.postgresql)
     integrationTestImplementation(libs.postgresql)
     integrationTestImplementation(libs.nimbus.jose.jwt)
-    integrationTestImplementation(libs.ktor.client.cio)
+    integrationTestImplementation(libs.bouncycastle.pkix)
     integrationTestImplementation(libs.kotlinx.coroutines.core)
 }

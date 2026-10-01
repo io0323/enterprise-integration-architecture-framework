@@ -9,20 +9,8 @@ import io.kotest.matchers.longs.shouldBeLessThan
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.cio.CIO
-import io.ktor.client.plugins.HttpTimeout
-import io.ktor.client.request.get
-import io.ktor.client.request.header
-import io.ktor.client.request.post
-import io.ktor.client.request.setBody
-import io.ktor.client.statement.HttpResponse
-import io.ktor.client.statement.bodyAsText
-import io.ktor.http.ContentType
-import io.ktor.http.HttpHeaders
-import io.ktor.http.HttpStatusCode
-import io.ktor.http.contentType
 import kotlinx.coroutines.delay
+import java.net.http.HttpResponse
 import kotlin.time.TimeSource
 
 private const val BODY =
@@ -47,27 +35,17 @@ private fun AppEnvironment.migratedServer(
     return OrderServer.start(serveEnv(database, extra)).ok()
 }
 
-private suspend fun HttpClient.place(
+/** ゲートウェイのクライアント証明書で、API のポート(mTLS)に注文を送る。 */
+private fun AppEnvironment.place(
     server: OrderServer,
-    token: String,
     key: String = "key-1",
-): HttpResponse =
-    post("http://127.0.0.1:${server.port}/v1/orders") {
-        header(HttpHeaders.Authorization, "Bearer $token")
-        header("Idempotency-Key", key)
-        contentType(ContentType.Application.Json)
-        setBody(BODY)
-    }
+): HttpResponse<String> = gateway.post("https://localhost:${server.httpsPort}/v1/orders", token(), key, BODY)
 
 class OrderAppIT :
     FunSpec({
         val environment = AppEnvironment()
-        val client = HttpClient(CIO) { install(HttpTimeout) { requestTimeoutMillis = 30_000 } }
         beforeSpec { environment.start() }
-        afterSpec {
-            client.close()
-            environment.close()
-        }
+        afterSpec { environment.close() }
 
         context("migrate と serve の資格情報の分離(ADR-0024 §2)") {
             test("migrate は所有者の資格情報で order と監査の表を作る") {
@@ -96,7 +74,7 @@ class OrderAppIT :
                 try {
                     // マイグレーションしていない DB では表がなく、serve は作らない
                     environment.count(db, "SELECT count(*) FROM pg_tables WHERE tablename = 'orders'") shouldBe 0
-                    client.get("http://127.0.0.1:${server.port}/health/live").status shouldBe HttpStatusCode.OK
+                    environment.plain.get("http://127.0.0.1:${server.healthPort}/health/live").statusCode() shouldBe 200
                 } finally {
                     server.stop()
                 }
@@ -113,20 +91,17 @@ class OrderAppIT :
                 val db = environment.newDatabase()
                 val server = environment.migratedServer(db)
                 try {
-                    val created = client.place(server, environment.token())
-                    created.status shouldBe HttpStatusCode.Created
-                    val location = created.headers[HttpHeaders.Location] ?: error("Location がありません")
+                    val created = environment.place(server)
+                    created.statusCode() shouldBe 201
+                    val location = created.header("Location") ?: error("Location がありません")
 
-                    val replay = client.place(server, environment.token())
-                    replay.headers["Idempotent-Replayed"] shouldBe "true"
-                    replay.bodyAsText() shouldBe created.bodyAsText()
+                    val replay = environment.place(server)
+                    replay.header("Idempotent-Replayed") shouldBe "true"
+                    replay.body() shouldBe created.body()
 
-                    val read =
-                        client.get(
-                            "http://127.0.0.1:${server.port}/v1/$location",
-                        ) { header(HttpHeaders.Authorization, "Bearer ${environment.token()}") }
-                    read.bodyAsText() shouldBe created.bodyAsText()
-                    client.get("http://127.0.0.1:${server.port}/health/ready").status shouldBe HttpStatusCode.OK
+                    val read = environment.gateway.get("https://localhost:${server.httpsPort}/v1/$location", environment.token())
+                    read.body() shouldBe created.body()
+                    environment.plain.get("http://127.0.0.1:${server.healthPort}/health/ready").statusCode() shouldBe 200
                     environment.count(db, "SELECT count(*) FROM orders") shouldBe 1
                 } finally {
                     server.stop()
@@ -150,14 +125,14 @@ class OrderAppIT :
                         }
                     }
                     val started = TimeSource.Monotonic.markNow()
-                    val timedOut = client.place(server, environment.token())
+                    val timedOut = environment.place(server)
 
-                    timedOut.status shouldBe HttpStatusCode.ServiceUnavailable
-                    timedOut.headers[HttpHeaders.ContentType] shouldBe "application/problem+json"
-                    timedOut.headers[HttpHeaders.RetryAfter] shouldBe "1"
-                    val problem = timedOut.bodyAsText()
+                    timedOut.statusCode() shouldBe 503
+                    timedOut.header("Content-Type") shouldBe "application/problem+json"
+                    timedOut.header("Retry-After") shouldBe "1"
+                    val problem = timedOut.body()
                     problem shouldContain "\"type\":\"https://eiaf.example/problems/deadline-exceeded\""
-                    problem shouldContain "\"correlationId\":\"${timedOut.headers["X-Correlation-Id"]}\""
+                    problem shouldContain "\"correlationId\":\"${timedOut.header("X-Correlation-Id")}\""
                     // 予算(2 秒)+ DB の打ち切りの余裕(0.5 秒)の後に、pg_sleep(30) を待たずに返る
                     started.elapsedNow().inWholeMilliseconds shouldBeLessThan 6_000
                     // DB の問い合わせも打ち切られている(pg_sleep が残っていない)
@@ -172,9 +147,9 @@ class OrderAppIT :
                     environment.count(db, "SELECT count(*) FROM idempotency_record") shouldBe 0
 
                     environment.superuser(db) { it.createStatement().use { s -> s.execute("DROP TRIGGER slow_insert ON orders") } }
-                    val retried = client.place(server, environment.token())
-                    retried.status shouldBe HttpStatusCode.Created
-                    retried.headers["Idempotent-Replayed"] shouldBe null
+                    val retried = environment.place(server)
+                    retried.statusCode() shouldBe 201
+                    retried.header("Idempotent-Replayed") shouldBe null
                     environment.count(db, "SELECT count(*) FROM orders") shouldBe 1
                 } finally {
                     server.stop()

@@ -29,8 +29,11 @@ import io.ktor.server.application.Application
 import io.ktor.server.application.install
 import io.ktor.server.auth.Authentication
 import io.ktor.server.auth.authenticate
+import io.ktor.server.engine.ConnectorType
 import io.ktor.server.engine.EmbeddedServer
+import io.ktor.server.engine.connector
 import io.ktor.server.engine.embeddedServer
+import io.ktor.server.engine.sslConnector
 import io.ktor.server.netty.Netty
 import io.ktor.server.netty.NettyApplicationEngine
 import io.ktor.server.response.respondText
@@ -54,7 +57,12 @@ import java.util.concurrent.CountDownLatch
  * order-service の HTTP サーバ(serve。Ktor の Netty。ADR-0024 §1)。
  *
  * プラグインの順序: `ServerObservability`(Monitoring)→ リクエストの予算(`installRequestDeadline`)→ Problem Details → 認証 → ルート。
- * `/health/live` と `/health/ready` は認証しない(⑤ で平文のポートに分ける)。
+ *
+ * コネクタは 2 つ(ADR-0024 §6):
+ * - API のポート([OrderConfig.httpsPort]): mTLS だけで受ける。クライアント証明書は必須で、開発用 CA の署名と、SAN の許可の一覧
+ *   ([ClientCertificateAllowList])を確かめる。API のルートはこのポートにだけある。
+ * - ヘルスチェックのポート([OrderConfig.healthPort]): 平文で、`/health/live` と `/health/ready` だけを返す(認証しない)。
+ *   コンテナのヘルスチェック用で、コンテナの外には公開しない。
  */
 internal class OrderServer private constructor(
     private val server: EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration>,
@@ -63,12 +71,17 @@ internal class OrderServer private constructor(
 ) {
     private val stopped = CountDownLatch(1)
 
-    /** 待ち受けているポート(`ORDER_HTTP_PORT=0` のときは割り当てられたポート)。 */
-    val port: Int get() =
+    /** API のポート(mTLS。`ORDER_HTTPS_PORT=0` のときは割り当てられたポート)。 */
+    val httpsPort: Int get() = resolvedPort(ConnectorType.HTTPS)
+
+    /** ヘルスチェックのポート(平文。`ORDER_HEALTH_PORT=0` のときは割り当てられたポート)。 */
+    val healthPort: Int get() = resolvedPort(ConnectorType.HTTP)
+
+    private fun resolvedPort(type: ConnectorType): Int =
         runBlocking {
             server.engine
                 .resolvedConnectors()
-                .first()
+                .first { it.type == type }
                 .port
         }
 
@@ -91,6 +104,9 @@ internal class OrderServer private constructor(
         private const val GRACE_MILLIS = 1_000L
         private const val TIMEOUT_MILLIS = 5_000L
         private const val READY_TIMEOUT_SECONDS = 2
+
+        /** Framework 12.2: TLS 1.2 以上。 */
+        private val TLS_PROTOCOLS = listOf("TLSv1.3", "TLSv1.2")
         private val logger = LoggerFactory.getLogger(OrderServer::class.java)
 
         /**
@@ -99,15 +115,38 @@ internal class OrderServer private constructor(
          */
         fun start(env: Map<String, String>): Result<OrderServer, ValidationError> =
             serveInputs(env).flatMap { (config, appPassword) ->
-                val observabilityEnv = mapOf(ObservabilityConfig.ENV_SERVICE_NAME to "order-service") + env
-                ObservabilityConfig.fromEnvironment(observabilityEnv).map { observability ->
-                    val runtime = Observability.init(observability)
-                    val koin = koinApplication { modules(orderModule(config, appPassword, runtime)) }.koin
-                    val server = embeddedServer(Netty, port = config.httpPort) { orderApplication(koin, config) }.start(wait = false)
-                    logger.info("order-service を起動しました")
-                    OrderServer(server, koin, runtime)
+                ServerTls.load(config.tls).flatMap { tls ->
+                    val observabilityEnv = mapOf(ObservabilityConfig.ENV_SERVICE_NAME to "order-service") + env
+                    ObservabilityConfig.fromEnvironment(observabilityEnv).map { observability ->
+                        val runtime = Observability.init(observability)
+                        val koin = koinApplication { modules(orderModule(config, appPassword, runtime)) }.koin
+                        val server =
+                            embeddedServer(Netty, configure = { connectors(config, tls) }) { orderApplication(koin, config) }
+                                .start(wait = false)
+                        logger.info("order-service を起動しました")
+                        OrderServer(server, koin, runtime)
+                    }
                 }
             }
+
+        /** API のポート(mTLS)とヘルスチェックのポート(平文)。ADR-0024 §6。 */
+        private fun NettyApplicationEngine.Configuration.connectors(
+            config: OrderConfig,
+            tls: ServerTls,
+        ) {
+            connector { port = config.healthPort }
+            sslConnector(tls.keyStore, ServerTls.KEY_ALIAS, tls::password, tls::password) {
+                port = config.httpsPort
+                // trustStore を設定すると、Ktor はクライアント証明書を必須にする(needClientAuth)
+                trustStore = tls.trustStore
+                enabledProtocols = TLS_PROTOCOLS
+            }
+            // 許可の一覧の確認は HTTP/1.1 のパイプラインに置く(ゲートウェイとの間は HTTP/1.1)
+            enableHttp2 = false
+            channelPipelineConfig = {
+                if (get("ssl") != null) addAfter("ssl", ClientCertificateAllowList.NAME, ClientCertificateAllowList(config.allowedClients))
+            }
+        }
 
         /** serve の設定とアプリのロールのパスワード。所有者のパスワードがあれば、設定の誤りにする。 */
         private fun serveInputs(env: Map<String, String>): Result<Pair<OrderConfig, Secret>, ValidationError> {
@@ -144,8 +183,8 @@ internal class OrderServer private constructor(
                 }
             }
             routing {
-                healthRoutes(koin.get())
-                authenticate { orderRoutes(koin.get()) }
+                overPlaintext { healthRoutes(koin.get()) }
+                overTls { authenticate { orderRoutes(koin.get()) } }
             }
             launchPurgeJob(koin.get(), config)
         }

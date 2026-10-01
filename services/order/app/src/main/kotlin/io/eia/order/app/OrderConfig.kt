@@ -19,7 +19,11 @@ import kotlin.time.Duration.Companion.seconds
  * | `ORDER_DB_URL` | なし(必須) | migrate・serve |
  * | `ORDER_DB_USER` / `ORDER_DB_PASSWORD`(または `_FILE`) | `order_service` / なし | migrate だけ(所有者) |
  * | `ORDER_APP_DB_USER` / `ORDER_APP_DB_PASSWORD`(または `_FILE`) | `order_service_app` / なし | serve だけ(アプリのロール) |
- * | `ORDER_HTTP_PORT` | 8080 | serve |
+ * | `ORDER_HTTPS_PORT` | 8443 | serve(API。mTLS だけで受ける。ADR-0024 §6) |
+ * | `ORDER_HEALTH_PORT` | 8081 | serve(`/health/live` と `/health/ready` だけ。平文。コンテナの外に公開しない) |
+ * | `ORDER_TLS_CERT_FILE` / `ORDER_TLS_KEY_FILE` | なし(serve では必須) | serve(サーバ証明書のチェーンと秘密鍵。PEM。鍵は PKCS#8) |
+ * | `ORDER_TLS_CLIENT_CA_FILE` | なし(serve では必須) | serve(クライアント証明書を検証する CA。PEM) |
+ * | `ORDER_TLS_ALLOWED_CLIENTS` | `apisix` | serve(受け入れるクライアント証明書の SAN の DNS 名。カンマ区切り) |
  * | `OIDC_ISSUER` / `OIDC_JWKS_URI` / `ORDER_API_AUDIENCE` | なし / なし / `order-api` | serve |
  * | `ORDER_REQUEST_BUDGET` | 10s | serve |
  * | `ORDER_IDEMPOTENCY_LEASE` | 60s | serve |
@@ -31,7 +35,10 @@ internal data class OrderConfig(
     val dbUrl: String,
     val ownerUser: String,
     val appUser: String,
-    val httpPort: Int,
+    val httpsPort: Int,
+    val healthPort: Int,
+    val tls: TlsFiles,
+    val allowedClients: Set<String>,
     val issuer: String?,
     val jwksUri: URI?,
     val audience: String,
@@ -42,7 +49,8 @@ internal data class OrderConfig(
     companion object {
         val OWNER_PASSWORD = SecretName("ORDER_DB_PASSWORD")
         val APP_PASSWORD = SecretName("ORDER_APP_DB_PASSWORD")
-        private const val DEFAULT_PORT = 8080
+        private const val DEFAULT_HTTPS_PORT = 8443
+        private const val DEFAULT_HEALTH_PORT = 8081
 
         fun fromEnvironment(env: Map<String, String>): Result<OrderConfig, ValidationError> {
             val reader = EnvReader(env)
@@ -51,7 +59,20 @@ internal data class OrderConfig(
                     dbUrl = reader.required("ORDER_DB_URL"),
                     ownerUser = reader.optional("ORDER_DB_USER") ?: "order_service",
                     appUser = reader.optional("ORDER_APP_DB_USER") ?: "order_service_app",
-                    httpPort = reader.port("ORDER_HTTP_PORT", DEFAULT_PORT),
+                    httpsPort = reader.port("ORDER_HTTPS_PORT", DEFAULT_HTTPS_PORT),
+                    healthPort = reader.port("ORDER_HEALTH_PORT", DEFAULT_HEALTH_PORT),
+                    tls =
+                        TlsFiles(
+                            cert = reader.optional(TlsFiles.CERT),
+                            key = reader.optional(TlsFiles.KEY),
+                            clientCa = reader.optional(TlsFiles.CLIENT_CA),
+                        ),
+                    allowedClients =
+                        (reader.optional("ORDER_TLS_ALLOWED_CLIENTS") ?: "apisix")
+                            .split(',')
+                            .map { it.trim() }
+                            .filter { it.isNotEmpty() }
+                            .toSet(),
                     issuer = reader.optional("OIDC_ISSUER"),
                     jwksUri = reader.optional("OIDC_JWKS_URI")?.let(URI::create),
                     audience = reader.optional("ORDER_API_AUDIENCE") ?: "order-api",
@@ -59,11 +80,28 @@ internal data class OrderConfig(
                     idempotencyLease = reader.duration("ORDER_IDEMPOTENCY_LEASE", 60.seconds),
                     purgeInterval = reader.duration("ORDER_IDEMPOTENCY_PURGE_INTERVAL", 5.minutes),
                 )
+            if (config.allowedClients.isEmpty()) reader.violation("ORDER_TLS_ALLOWED_CLIENTS", "1 つ以上の名前が必要です")
+            if (config.httpsPort != 0 && config.httpsPort == config.healthPort) {
+                reader.violation("ORDER_HEALTH_PORT", "ORDER_HTTPS_PORT と別のポートにしてください")
+            }
             if (config.requestBudget >= config.idempotencyLease) {
                 reader.violation("ORDER_REQUEST_BUDGET", "冪等のリース(ORDER_IDEMPOTENCY_LEASE)より短くしてください(ADR-0024 §3)")
             }
             return reader.result(config)
         }
+    }
+}
+
+/** TLS のファイルのパス(serve で必須。migrate では使わない)。 */
+internal data class TlsFiles(
+    val cert: String?,
+    val key: String?,
+    val clientCa: String?,
+) {
+    companion object {
+        const val CERT = "ORDER_TLS_CERT_FILE"
+        const val KEY = "ORDER_TLS_KEY_FILE"
+        const val CLIENT_CA = "ORDER_TLS_CLIENT_CA_FILE"
     }
 }
 
