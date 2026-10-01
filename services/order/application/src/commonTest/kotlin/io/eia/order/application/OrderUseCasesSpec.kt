@@ -1,5 +1,7 @@
 package io.eia.order.application
 
+import io.eia.order.application.port.inbound.PlaceOrderCommand
+import io.eia.order.application.port.inbound.RequestedBy
 import io.eia.order.application.port.outbound.OrderVersionConflict
 import io.eia.order.application.usecase.GetOrderService
 import io.eia.order.application.usecase.PlaceOrderService
@@ -46,11 +48,17 @@ private fun draft(quantity: Long = 2): OrderDraft =
         shippingAddress = AddressDraft("JP", "100-0001", "東京都", "千代田区", "千代田 1-1", null),
     )
 
+private val CALLER = RequestedBy("client-a")
+private const val DIGEST = "3b7f0c2d8a1e4f5b6c7d8e9f0a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c2d3"
+
+private fun command(draft: OrderDraft = draft()): PlaceOrderCommand = PlaceOrderCommand(draft, CALLER, DIGEST)
+
 private class Fixture {
     val transaction = FakeTransactionRunner()
     val repository = FakeOrderRepository(transaction)
     val ids = SequentialIds()
-    val place = PlaceOrderService(repository, transaction, ids, FixedClock(NOW))
+    val audit = FakeOrderAuditTrail(transaction)
+    val place = PlaceOrderService(repository, transaction, ids, FixedClock(NOW), audit)
     val get = GetOrderService(repository)
 }
 
@@ -59,7 +67,7 @@ class OrderUseCasesSpec :
         context("PlaceOrderUseCase") {
             test("採番した ID と時計の時刻で受け付け、トランザクションの中で保存する") {
                 val f = Fixture()
-                val order = f.place(draft()).ok()
+                val order = f.place(command()).ok()
 
                 order.id.value shouldBe "ord-1"
                 order.orderedAt shouldBe NOW
@@ -69,11 +77,31 @@ class OrderUseCasesSpec :
                 f.transaction.commits shouldBe 1
             }
 
+            test("受け付けたことを、注文の保存と同じトランザクションで監査に記録する(呼び出し元と本文の SHA-256)") {
+                val f = Fixture()
+                val order = f.place(command()).ok()
+
+                f.audit.entries shouldBe listOf(FakeOrderAuditTrail.Entry(order.id, CALLER, DIGEST))
+                f.transaction.commits shouldBe 1
+            }
+
+            test("監査の記録に失敗したら、注文の保存も取り消す(記録のない業務の更新を残さない)") {
+                val f = Fixture()
+                val unavailable = UnavailableError("監査の記録に失敗しました")
+                f.audit.failWith = unavailable
+
+                f.place(command()).error() shouldBeEqual unavailable
+                f.transaction.rollbacks shouldBe 1
+                f.repository.orders shouldBe emptyMap()
+                f.audit.entries shouldBe emptyList()
+            }
+
             test("違反があれば ValidationError を返し、保存しない(トランザクションも始めない)") {
                 val f = Fixture()
-                f.place(draft(quantity = 0)).error().shouldBeInstanceOf<ValidationError>()
+                f.place(command(draft(quantity = 0))).error().shouldBeInstanceOf<ValidationError>()
 
                 f.repository.orders shouldBe emptyMap()
+                f.audit.entries shouldBe emptyList()
                 f.transaction.commits shouldBe 0
                 f.transaction.rollbacks shouldBe 0
             }
@@ -83,17 +111,18 @@ class OrderUseCasesSpec :
                 val unavailable = UnavailableError("DB に接続できません")
                 f.repository.failWith = unavailable
 
-                f.place(draft()).error() shouldBeEqual unavailable
+                f.place(command()).error() shouldBeEqual unavailable
                 f.transaction.rollbacks shouldBe 1
                 f.repository.orders shouldBe emptyMap()
+                f.audit.entries shouldBe emptyList()
             }
 
             test("同じ ID の注文があれば ConflictError(採番の重複)") {
                 val f = Fixture()
-                f.place(draft()).ok()
+                f.place(command()).ok()
                 f.ids.issued = 0 // 同じ ID をもう一度採番させる
 
-                f.place(draft()).error().shouldBeInstanceOf<ConflictError>()
+                f.place(command()).error().shouldBeInstanceOf<ConflictError>()
                 f.repository.orders.size shouldBe 1
             }
         }
@@ -101,7 +130,7 @@ class OrderUseCasesSpec :
         context("GetOrderUseCase") {
             test("保存した注文を返す") {
                 val f = Fixture()
-                val placed = f.place(draft()).ok()
+                val placed = f.place(command()).ok()
                 f.get(placed.id).ok() shouldBe placed
             }
 
@@ -122,7 +151,7 @@ class OrderUseCasesSpec :
         context("OrderRepository の楽観的ロックの約束(④a の実装が満たすこと)") {
             test("読んだ版のまま保存されていれば更新して版を 1 増やし、先に別の更新が確定していれば OrderVersionConflict") {
                 val f = Fixture()
-                val placed = f.place(draft()).ok()
+                val placed = f.place(command()).ok()
                 val confirmed = placed.transitionTo(OrderStatus.CONFIRMED).ok().order
                 val cancelled = placed.transitionTo(OrderStatus.CANCELLED).ok().order
 

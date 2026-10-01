@@ -103,6 +103,8 @@ class OrderAppIT :
                     read.body() shouldBe created.body()
                     environment.plain.get("http://127.0.0.1:${server.healthPort}/health/ready").statusCode() shouldBe 200
                     environment.count(db, "SELECT count(*) FROM orders") shouldBe 1
+                    // 受け付けは監査にも記録する(再送は記録しない。ADR-0017)
+                    environment.count(db, "SELECT count(*) FROM audit.audit_log WHERE action = 'order.create'") shouldBe 1
                 } finally {
                     server.stop()
                 }

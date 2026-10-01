@@ -56,6 +56,29 @@
         "latencyP99": { "type": "string", "pattern": "^[0-9]+(ms|s|m|h)$" }
       }
     },
+    "audit": {
+      "description": "この連携が記録する監査(platform/audit。ADR-0017 §1)。記録する連携では書く",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actions", "dataClassification", "retention"],
+      "properties": {
+        "actions": {
+          "description": "記録する操作(audit.audit_log の action)",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z][a-z0-9_-]*)+$" }
+        },
+        "dataClassification": {
+          "description": "監査の記録の機密区分(actor_id などは個人データになりうる)",
+          "enum": ["public", "internal", "confidential", "restricted"]
+        },
+        "retention": {
+          "description": "監査の記録の保持期間。legal は法令に従う(期間は環境ごとの設定)。または ISO 8601 の期間(例 P7Y)",
+          "anyOf": [{ "const": "legal" }, { "type": "string", "pattern": "^P(?!$)([0-9]+Y)?([0-9]+M)?([0-9]+W)?([0-9]+D)?$" }]
+        }
+      }
+    },
     "lifecycle": { "enum": ["proposed", "design", "active", "deprecated", "retired"] }
   },
   "allOf": [

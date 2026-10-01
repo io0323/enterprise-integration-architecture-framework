@@ -58,6 +58,10 @@ channels:               # event / cdc では必須。AsyncAPI の channels[*].ad
 tier: 1                 # 1 | 2 | 3
 dataClassification: internal   # public | internal | confidential | restricted
 slo: { availability: "99.99", latencyP99: "5s" }
+audit:                  # 任意。この連携が監査を記録するなら書く(ADR-0017 §1)
+  actions: [order.create]          # 記録する操作(audit.audit_log の action)
+  dataClassification: confidential # 監査の記録の機密区分(actor_id などは個人データになりうる)
+  retention: legal                 # legal(法令に従う。期間は環境ごとの設定)か ISO 8601 の期間(例 P7Y)
 lifecycle: active       # proposed | design | active | deprecated | retired
 ```
 - `owner` はチーム単位(`team-{name}`)。個人名は使わない(Framework 16.2)。

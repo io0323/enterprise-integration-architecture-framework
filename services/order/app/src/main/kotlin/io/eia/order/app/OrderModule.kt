@@ -3,6 +3,7 @@ package io.eia.order.app
 import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import io.eia.order.adapters.inbound.rest.OrderApi
+import io.eia.order.adapters.out.audit.ExposedOrderAuditTrail
 import io.eia.order.adapters.out.persistence.ExposedOrderRepository
 import io.eia.order.adapters.out.persistence.ExposedTransactionBoundary
 import io.eia.order.adapters.out.persistence.ExposedTransactionRunner
@@ -10,6 +11,7 @@ import io.eia.order.adapters.out.persistence.PostgresIdempotencyStore
 import io.eia.order.adapters.out.persistence.UuidV7OrderIdGenerator
 import io.eia.order.application.port.inbound.GetOrderUseCase
 import io.eia.order.application.port.inbound.PlaceOrderUseCase
+import io.eia.order.application.port.outbound.OrderAuditTrail
 import io.eia.order.application.port.outbound.OrderIdGenerator
 import io.eia.order.application.port.outbound.OrderRepository
 import io.eia.order.application.port.outbound.TransactionRunner
@@ -19,6 +21,8 @@ import io.eia.platform.api.idempotency.IdempotencyConfig
 import io.eia.platform.api.idempotency.IdempotencyHandler
 import io.eia.platform.api.idempotency.IdempotencyStore
 import io.eia.platform.api.idempotency.TransactionBoundary
+import io.eia.platform.audit.AuditMetrics
+import io.eia.platform.audit.jdbc.AuditLog
 import io.eia.platform.observability.ObservabilityRuntime
 import io.eia.platform.reliability.ResilienceMetrics
 import io.eia.platform.security.jwt.JwtVerifier
@@ -57,7 +61,10 @@ internal fun orderModule(
         single<OrderRepository> { ExposedOrderRepository(get()) }
         single<TransactionRunner> { ExposedTransactionRunner(get()) }
         single<OrderIdGenerator> { UuidV7OrderIdGenerator() }
-        single<PlaceOrderUseCase> { PlaceOrderService(get(), get(), get(), Clock.System) }
+        // 監査の記録(ADR-0017)。追記の所要時間・ロックの待ち・失敗をメトリクスにする(A17-5)
+        single { AuditLog(listener = AuditMetrics(runtime.meter)) }
+        single<OrderAuditTrail> { ExposedOrderAuditTrail(get(), get()) }
+        single<PlaceOrderUseCase> { PlaceOrderService(get(), get(), get(), Clock.System, get()) }
         single<GetOrderUseCase> { GetOrderService(get()) }
         single<IdempotencyStore> { PostgresIdempotencyStore(get()) }
         single { IdempotencyHandler(get(), IdempotencyConfig(lease = config.idempotencyLease)) }

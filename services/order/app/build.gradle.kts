@@ -10,6 +10,8 @@ application {
 dependencies {
     implementation(project(":services:order:adapters"))
     implementation(project(":platform:observability"))
+    // 監査の記録(AuditLog)とメトリクス(AuditMetrics)を配線する(ADR-0017)
+    implementation(project(":platform:audit"))
     // 依存先ごとの Resilience は ResilienceMetrics 経由で作る(#8-c。Konsist の resilienceOnlyThroughMetrics)
     implementation(project(":platform:reliability"))
     implementation(libs.ktor.server.netty)

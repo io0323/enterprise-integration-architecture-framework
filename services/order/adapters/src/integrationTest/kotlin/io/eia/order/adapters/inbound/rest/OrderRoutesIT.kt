@@ -2,6 +2,7 @@
 
 package io.eia.order.adapters.inbound.rest
 
+import io.eia.order.adapters.out.audit.ExposedOrderAuditTrail
 import io.eia.order.adapters.out.persistence.ExposedOrderRepository
 import io.eia.order.adapters.out.persistence.ExposedTransactionBoundary
 import io.eia.order.adapters.out.persistence.ExposedTransactionRunner
@@ -11,10 +12,12 @@ import io.eia.order.adapters.out.persistence.PostgresIdempotencyStore
 import io.eia.order.adapters.out.persistence.UuidV7OrderIdGenerator
 import io.eia.order.application.usecase.GetOrderService
 import io.eia.order.application.usecase.PlaceOrderService
+import io.eia.platform.api.idempotency.CanonicalBody
 import io.eia.platform.api.idempotency.IDEMPOTENCY_KEY_HEADER
 import io.eia.platform.api.idempotency.IDEMPOTENT_REPLAYED_HEADER
 import io.eia.platform.api.idempotency.IdempotencyHandler
 import io.eia.platform.api.problem.installProblemDetails
+import io.eia.platform.audit.jdbc.AuditLog
 import io.eia.platform.observability.Observability
 import io.eia.platform.observability.ObservabilityConfig
 import io.eia.platform.observability.TelemetrySinks
@@ -24,6 +27,8 @@ import io.eia.platform.security.ktor.eiaJwt
 import io.eia.shared.kernel.Result
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.ints.shouldBeGreaterThanOrEqual
+import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
@@ -45,6 +50,9 @@ import io.ktor.server.auth.authenticate
 import io.ktor.server.routing.routing
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.nanoseconds
 import kotlin.time.Instant
@@ -82,7 +90,14 @@ private fun ApplicationTestBuilder.orderService(
     val repository = ExposedOrderRepository(db.database)
     val api =
         OrderApi(
-            placeOrder = PlaceOrderService(repository, ExposedTransactionRunner(db.database), UuidV7OrderIdGenerator(), NANOSECOND_CLOCK),
+            placeOrder =
+                PlaceOrderService(
+                    repository,
+                    ExposedTransactionRunner(db.database),
+                    UuidV7OrderIdGenerator(),
+                    NANOSECOND_CLOCK,
+                    ExposedOrderAuditTrail(db.database, AuditLog()),
+                ),
             getOrder = GetOrderService(repository),
             idempotency = IdempotencyHandler(PostgresIdempotencyStore(db.database)),
             transaction = ExposedTransactionBoundary(db.database),
@@ -165,6 +180,81 @@ class OrderRoutesIT :
                     first.headers[IDEMPOTENT_REPLAYED_HEADER] shouldBe null
                     replay.headers[CorrelationHeaders.X_CORRELATION_ID] shouldNotBe first.headers[CorrelationHeaders.X_CORRELATION_ID]
                     db.count("SELECT count(*) FROM orders") shouldBe 1
+                }
+            }
+
+            test("受け付けを同じトランザクションで監査に記録する(azp・order.create・正規化した本文の SHA-256・Correlation ID・traceparent)") {
+                val db = environment.newDatabase()
+                testApplication {
+                    orderService(db, idp)
+                    val created = place(idp.token(clientId = "client-a"))
+                    created.status shouldBe HttpStatusCode.Created
+                    val orderId = created.headers[HttpHeaders.Location]!!.removePrefix("orders/")
+
+                    val row =
+                        db.superuser { c ->
+                            c
+                                .prepareStatement(
+                                    "SELECT actor_type, actor_id, action, target_type, target_id, outcome, payload_sha256, " +
+                                        "correlation_id, traceparent FROM audit.audit_log",
+                                ).use { st ->
+                                    st.executeQuery().use { rs ->
+                                        rs.next() shouldBe true
+                                        val values = (1..9).map { rs.getString(it) }
+                                        rs.next() shouldBe false
+                                        values
+                                    }
+                                }
+                        }
+                    row.take(6) shouldBe listOf("service", "client-a", "order.create", "order", orderId, "success")
+                    row[6] shouldBe CanonicalBody.sha256Hex("application/json", BODY.toByteArray())
+                    row[7] shouldBe created.headers[CorrelationHeaders.X_CORRELATION_ID]
+                    row[8].shouldNotBeNull() shouldStartWith "00-"
+                }
+            }
+
+            test("監査の本文の SHA-256 は、空白とキーの順序が違うだけの本文なら同じ値(冪等の指紋と同じ正規化)") {
+                val db = environment.newDatabase()
+                testApplication {
+                    orderService(db, idp)
+                    // 同じ内容で、キーの順序を逆にし、前後に空白を足した本文
+                    val entries =
+                        Json
+                            .parseToJsonElement(BODY)
+                            .jsonObject.entries
+                            .reversed()
+                    val reordered = JsonObject(entries.associate { it.toPair() }).toString()
+                    place(idp.token(), key = "key-a").status shouldBe HttpStatusCode.Created
+                    place(idp.token(), key = "key-b", body = "  $reordered  ").status shouldBe HttpStatusCode.Created
+                    db.count("SELECT count(DISTINCT payload_sha256) FROM audit.audit_log") shouldBe 1
+                    db.count("SELECT count(*) FROM audit.audit_log") shouldBe 2
+                }
+            }
+
+            test("再送(Idempotent-Replayed)・検証の違反・本文の構造の不正は、監査に記録しない(業務の更新がない)") {
+                val db = environment.newDatabase()
+                testApplication {
+                    orderService(db, idp)
+                    place(idp.token()).status shouldBe HttpStatusCode.Created
+                    place(idp.token()).headers[IDEMPOTENT_REPLAYED_HEADER] shouldBe "true"
+                    place(idp.token(), key = "key-bad", body = "{").status shouldBe HttpStatusCode.BadRequest
+                    place(idp.token(), key = "key-invalid", body = BODY.replace("\"quantity\":3", "\"quantity\":0")).status shouldBe
+                        HttpStatusCode.UnprocessableEntity
+                    db.count("SELECT count(*) FROM audit.audit_log") shouldBe 1
+                }
+            }
+
+            test("監査の記録に失敗したら、注文も保存しない(同じトランザクション。記録のない業務の更新を残さない)") {
+                val db = environment.newDatabase()
+                db.superuser { c -> c.createStatement().use { it.execute("REVOKE INSERT ON audit.audit_log FROM order_service_app") } }
+                testApplication {
+                    orderService(db, idp)
+                    val failed = place(idp.token())
+                    failed.status.value shouldBeGreaterThanOrEqual 500
+                    db.count("SELECT count(*) FROM orders") shouldBe 0
+                    db.count("SELECT count(*) FROM audit.audit_log") shouldBe 0
+                    // 5xx は保存しない(ADR-0022 §3)。同じキーで再試行できる
+                    db.count("SELECT count(*) FROM idempotency_record") shouldBe 0
                 }
             }
 
