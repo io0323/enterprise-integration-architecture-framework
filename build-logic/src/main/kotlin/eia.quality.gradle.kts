@@ -1,5 +1,7 @@
 import io.eia.buildlogic.coverageMinBound
+import io.eia.buildlogic.hasIntegrationTests
 import io.eia.buildlogic.koverEnforced
+import io.eia.buildlogic.koverWithIntegrationTests
 import io.eia.buildlogic.libs
 import io.eia.buildlogic.version
 
@@ -44,16 +46,21 @@ configurations.matching { it.name == "detekt" }.configureEach {
 }
 
 // 閾値は CODING_STANDARDS に合わせて設定する。強制は P01 から(eia.kover.enforce)。
+// 統合テストを持つモジュール(adapters・platform の一部)の本当の検証は統合テストなので、カバレッジも統合テストを含めて測る(MODULE_DESIGN §5)。
+// - `-Peia.kover.withIntegrationTests=true`(CI の integration ジョブ): integrationTest も計測し、単体テストと合わせて閾値を強制する。
+// - 既定(`./gradlew build`): integrationTest を build に巻き込まない(計測しない)。統合テストを持つモジュールの閾値は目安(警告)にする。
+//   統合テストのテストクラス自体は、どちらの場合も計測の対象外(eia.jvm-library の excludedSourceSets)。
+val withIntegrationTests = koverWithIntegrationTests()
 kover {
     currentProject {
-        // Kover は既定で全 Test タスクを計測・依存に加える。integrationTest を build に巻き込まないよう除外する。
+        // Kover は既定で全 Test タスクを計測・依存に加える。integrationTest を build に巻き込まないよう、既定では除外する。
         instrumentation {
-            disabledForTestTasks.add("integrationTest")
+            if (!withIntegrationTests) disabledForTestTasks.add("integrationTest")
         }
     }
     reports {
         verify {
-            warningInsteadOfFailure = !koverEnforced()
+            warningInsteadOfFailure = !koverEnforced() || (hasIntegrationTests() && !withIntegrationTests)
             rule("行カバレッジ") {
                 minBound(coverageMinBound())
             }

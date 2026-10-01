@@ -19,6 +19,17 @@ internal fun VersionCatalog.version(alias: String): String =
 /** CODING_STANDARDS のカバレッジ目標: domain / application は 90%、それ以外は 75%。 */
 internal fun Project.coverageMinBound(): Int = if (name == "domain" || name == "application") 90 else 75
 
+/**
+ * 統合テスト(`integrationTest`)で実行された本番コードも、Kover のカバレッジに数えるか(Issue #56。MODULE_DESIGN §5)。
+ * CI の `integration` ジョブで `-Peia.kover.withIntegrationTests=true` を付けて `koverVerify` を実行する。
+ * 既定(`./gradlew build`)は false で、統合テストを build に巻き込まない。
+ */
+internal fun Project.koverWithIntegrationTests(): Boolean =
+    providers.gradleProperty("eia.kover.withIntegrationTests").map(String::toBoolean).getOrElse(false)
+
+/** 統合テストを持つモジュールか(`src/integrationTest` がある)。 */
+internal fun Project.hasIntegrationTests(): Boolean = layout.projectDirectory.dir("src/integrationTest").asFile.exists()
+
 /** Kover の閾値を強制するか。P00 では警告のみ、P01 から gradle.properties で true にする。 */
 internal fun Project.koverEnforced(): Boolean =
     providers.gradleProperty("eia.kover.enforce").map(String::toBoolean).getOrElse(false)
