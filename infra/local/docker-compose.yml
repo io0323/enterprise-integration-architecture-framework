@@ -312,7 +312,7 @@ services:
   # - API(8443)は mTLS だけで受ける(クライアント証明書は開発用 CA の署名と SAN の許可の一覧。ADR-0024 §6)。
   #   ホストの 19443 は、mTLS なしの直接接続を拒否することの検査(make verify)と調査のためだけに公開する
   # - ヘルスチェック(8081)は平文で、コンテナの外には公開しない
-  # - 鍵(certs/*.key。0600)を読めるよう、ホストの利用者の uid で動かす(root にはしない。Makefile の EIAF_UID)
+  # - 鍵(certs/*.key。0600)を読めるよう、ホストの利用者の uid で動かす(Makefile の EIAF_UID。root では make up が止まる)
   order-service:
     build: *order-build
     profiles: [order]

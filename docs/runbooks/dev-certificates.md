@@ -16,7 +16,7 @@
 | `order-service.crt` / `.key` | サーバ証明書(SAN `order-service`・`localhost`) | 30 日 | order-service の API のポート(8443) |
 | `apisix.crt` / `.key` | ゲートウェイのクライアント証明書(SAN `apisix`) | 30 日 | APISIX から order-service への接続(P05 ⑤c) |
 
-- 鍵は EC P-256 の PKCS#8(`BEGIN PRIVATE KEY`)で、権限は 0600。
+- 鍵は EC P-256 の PKCS#8(`BEGIN PRIVATE KEY`)で、権限は 0600。コンテナは、`make certs` を実行した利用者の uid で動いて読む。**root(uid 0)では `make up` と `make certs` は止まる**(ADR-0024 §7)。root 以外の利用者で実行する。
 - order-service は、クライアント証明書を CA の署名に加えて SAN の許可の一覧(`ORDER_TLS_ALLOWED_CLIENTS`。既定 `apisix`)でも確かめる。
 
 ## 自動の作り直し

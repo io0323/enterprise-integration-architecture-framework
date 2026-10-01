@@ -1,7 +1,7 @@
 # EIAF ローカル開発用コマンド(CLAUDE.md §7)
 GRADLE := ./gradlew
 
-.PHONY: help setup build check arch-test contract-check integration-test format env certs order-dist up down logs ps verify stats clean e2e audit-verify
+.PHONY: help setup build check arch-test contract-check integration-test format env not-root certs order-dist up down logs ps verify stats clean e2e audit-verify
 
 # ローカル基盤(infra/local。ADR-0016)
 # PROFILE: core / cdc / iot / file / b2b / chaos / order。core は常に含まれる(積み上げ方式)。空白区切りで複数指定できる。
@@ -10,10 +10,10 @@ INFRA := infra/local
 COMPOSE := docker compose -f $(INFRA)/docker-compose.yml --env-file $(INFRA)/images.env --env-file $(INFRA)/.env
 COMPOSE_PROFILES_ARGS := --profile core $(foreach p,$(filter-out core,$(PROFILE)),--profile $(p))
 SERVICE ?=
-# order-service のコンテナは、開発用の鍵(infra/local/certs/*.key。0600)を読むため、ホストの利用者の uid で動かす(root にはしない)。
-# root で実行したときは distroless の nonroot(65532)にし、gen-dev-certs.sh が鍵の所有者を 65532 にする(ADR-0024 §7)
-EIAF_UID := $(shell if [ "$$(id -u)" = 0 ]; then echo 65532; else id -u; fi)
-EIAF_GID := $(shell if [ "$$(id -u)" = 0 ]; then echo 65532; else id -g; fi)
+# order-service のコンテナは、開発用の鍵(infra/local/certs/*.key。0600)を読むため、ホストの利用者の uid で動かす。
+# root(uid 0)では make up と make certs を止める(コンテナが root で動き、distroless の nonroot の意味がなくなるため。ADR-0024 §7)
+EIAF_UID := $(shell id -u)
+EIAF_GID := $(shell id -g)
 export EIAF_UID EIAF_GID
 # 開発用の証明書(infra/local/certs)を読むコンテナ。証明書を作り直したら(certs/.renewed)、make up で作り直す
 CERT_CONSUMERS := order-service
@@ -48,7 +48,15 @@ format: ## ktlint で自動整形
 env: ## infra/local/.env(秘密情報)をランダム生成する。既にあれば不足分だけ追記
 	@$(INFRA)/scripts/init-env.sh
 
-certs: ## 開発用の CA と mTLS の証明書を作る。残りが 7 日を切っていれば作り直す(docs/runbooks/dev-certificates.md)
+not-root:
+	@if [ "$(EIAF_UID)" = 0 ]; then \
+		echo "make up / make certs を root(uid 0)で実行しないでください。" >&2; \
+		echo "ローカルのコンテナはホストの利用者の uid で動き、0600 の開発用の鍵を読みます。root で実行すると" >&2; \
+		echo "コンテナが root で動き、distroless の nonroot の意味がなくなります。root 以外の利用者で実行してください(ADR-0024 §7)。" >&2; \
+		exit 1; \
+	fi
+
+certs: not-root ## 開発用の CA と mTLS の証明書を作る。残りが 7 日を切っていれば作り直す(docs/runbooks/dev-certificates.md)
 	@$(INFRA)/scripts/gen-dev-certs.sh
 
 order-dist: ## order-service のイメージの中身(installDist)を作る
@@ -56,7 +64,7 @@ order-dist: ## order-service のイメージの中身(installDist)を作る
 
 # --build: 自前で組み立てるイメージ(kafka-connect・order-service。ADR-0016 §9)の変更を反映する(変更がなければキャッシュを使う)
 # 証明書の有効期限は毎回確かめる(期限切れの証明書で起動に失敗しないように)
-up: env certs $(if $(filter order,$(PROFILE)),order-dist) ## ローカル基盤を起動し、全コンテナが healthy になるまで待つ(例: make up PROFILE=cdc)
+up: not-root env certs $(if $(filter order,$(PROFILE)),order-dist) ## ローカル基盤を起動し、全コンテナが healthy になるまで待つ(例: make up PROFILE=cdc)
 	@if [ -f $(INFRA)/certs/.renewed ]; then \
 		$(COMPOSE) --profile '*' rm --stop --force $(CERT_CONSUMERS) >/dev/null 2>&1 || true; \
 		rm -f $(INFRA)/certs/.renewed; \
