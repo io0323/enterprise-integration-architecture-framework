@@ -1,5 +1,6 @@
 package io.eia.platform.observability.propagation
 
+import io.eia.platform.observability.context.toTraceParent
 import io.eia.shared.kernel.Result
 import io.eia.shared.resilience.trace.SpanId
 import io.eia.shared.resilience.trace.TraceFlags
@@ -68,13 +69,6 @@ public object EiaTraceContextPropagator : TextMapPropagator {
 
     override fun toString(): String = "EiaTraceContextPropagator"
 
-    private fun SpanContext.toTraceParent(): TraceParent? {
-        val trace = (TraceId.parse(traceId) as? Result.Ok)?.value
-        val span = (SpanId.parse(spanId) as? Result.Ok)?.value
-        val flags = (TraceFlags.of(traceFlags.asByte().toInt() and BYTE_MASK) as? Result.Ok)?.value
-        return if (trace != null && span != null && flags != null) TraceParent(trace, span, flags) else null
-    }
-
     private fun TraceState.encode(): String = buildList { forEach { key, value -> add("$key=$value") } }.joinToString(",")
 
     /** W3C Trace Context §3.3(tracestate): `list-member` を `,` で区切る。前後の OWS と空のメンバーは無視する。不正なら既定値(空)を返す。 */
@@ -103,6 +97,4 @@ public object EiaTraceContextPropagator : TextMapPropagator {
         val separator = member.indexOf('=')
         return if (separator > 0) member.substring(0, separator) to member.substring(separator + 1) else null
     }
-
-    private const val BYTE_MASK = 0xff
 }
