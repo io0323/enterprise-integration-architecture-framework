@@ -14,7 +14,7 @@
 |---|---|---|---|
 | `ca.crt` / `ca.key` | 開発用 CA(`CN=EIAF Local Dev CA`) | 90 日 | 証明書の署名。`ca.key` はコンテナに渡さない |
 | `order-service.crt` / `.key` | サーバ証明書(SAN `order-service`・`localhost`) | 30 日 | order-service の API のポート(8443) |
-| `apisix.crt` / `.key` | ゲートウェイのクライアント証明書(SAN `apisix`) | 30 日 | APISIX から order-service への接続(P05 ⑤c) |
+| `apisix.crt` / `.key` | ゲートウェイのクライアント証明書(SAN `apisix`) | 30 日 | APISIX から order-service への接続(ADR-0023 §3)。APISIX はこの CA で order-service のサーバ証明書も検証する |
 
 - 鍵は EC P-256 の PKCS#8(`BEGIN PRIVATE KEY`)で、権限は 0600。コンテナは、`make certs` を実行した利用者の uid で動いて読む。**root(uid 0)では `make up` と `make certs` は止まる**(ADR-0024 §7)。root 以外の利用者で実行する。
 - order-service は、クライアント証明書を CA の署名に加えて SAN の許可の一覧(`ORDER_TLS_ALLOWED_CLIENTS`。既定 `apisix`)でも確かめる。
@@ -53,6 +53,7 @@ make verify PROFILE=order  # mTLS なしの接続を拒否すること・ゲー�
 
 ## ゲートウェイからの接続が失敗する
 - order-service のログに「許可の一覧にないクライアント証明書の接続を閉じました」が出る: クライアント証明書の SAN が `ORDER_TLS_ALLOWED_CLIENTS` にない。`openssl x509 -in infra/local/certs/apisix.crt -noout -ext subjectAltName` で確かめる。
+- ゲートウェイが 502 を返し、APISIX のログ(`make logs SERVICE=apisix`)に `upstream SSL certificate verify error` が出る: APISIX が order-service のサーバ証明書を、知っている CA で検証できない。
 - CA を作り直した後に、片方のコンテナだけが古い CA を使っている: `make up` で入れ替える(`.renewed` が消えていたら、`docker compose ... rm --stop --force order-service` の後に `make up`)。
 
 ## 本番では

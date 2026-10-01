@@ -55,7 +55,7 @@ Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)�
 
 | ホスト | コンテナ内のアドレス | サービス | profile | 用途 |
 |---|---|---|---|---|
-| 19080 | `apisix:9080` | APISIX | core | API Gateway(公開パス `/{domain}/v{n}/`。ヘルス `/_gateway/health`) |
+| 19080 | `apisix:9080` | APISIX | core | API Gateway(公開パス `/{domain}/v{n}/`。`/sales/v1/*` → order-service(order profile)。ヘルス `/_gateway/health`) |
 | 19081 | `apicurio:8080` | Apicurio Registry | core | REST API(`/apis/registry/v3`、Confluent 互換 `/apis/ccompat/v7`) |
 | 19083 | `kafka-connect:8083` | Kafka Connect(Debezium) | cdc | Connect REST API |
 | 19090 | `prometheus:9090` | Prometheus | core | UI / API(OTLP 受信 `/api/v1/otlp`) |
@@ -87,6 +87,7 @@ Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)�
 | PostgreSQL(CDC) | `debezium`(REPLICATION) | `DEBEZIUM_DB_PASSWORD` |
 | Keycloak 管理 | `admin` | `KEYCLOAK_ADMIN_PASSWORD` |
 | Keycloak client credentials | `eiaf-e2e`(スコープ `sales.order:read` / `sales.order:write`、`aud` = `order-api`) | `EIAF_E2E_CLIENT_SECRET` |
+| Keycloak client credentials(2 つ目) | `eiaf-e2e-b`(`eiaf-e2e` と同じ設定。クライアントごとの Rate Limit・冪等の範囲の確認用。ADR-0023 §5) | `EIAF_E2E_B_CLIENT_SECRET`。**P05 ⑤c より前に作ったボリュームには無いので、`make clean` が必要** |
 | Grafana | `admin` | `GRAFANA_ADMIN_PASSWORD` |
 | MQTT | `MQTT_USERNAME` | `MQTT_PASSWORD` |
 | S3(管理者) | `eiaf`(Admin)。バケットとポリシーの作成用 | `S3_ACCESS_KEY` / `S3_SECRET_KEY` |
@@ -109,7 +110,10 @@ curl -s -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token
 - **Apicurio**: ストレージは PostgreSQL。既定のグローバルルールは `COMPATIBILITY=FULL_TRANSITIVE`、`VALIDITY=FULL`(ADR-0014)。
 - **Keycloak**: `iss` は常に `http://localhost:19180/realms/eiaf`。コンテナ内のサービスも JWKS は `http://keycloak:8080` から取れる。
 - **PostgreSQL**: `wal_level=logical`(CDC)。初期化スクリプト(`postgres/init/`)はボリュームが空のときだけ実行される。
-- **APISIX**: standalone(`apisix/apisix.yaml`)。業務ルートは P05 以降で追加する。
+- **APISIX(ADR-0023)**: standalone(`apisix/apisix.yaml`)。`/sales/v1/*` を order-service の `/v1/*` に mTLS で送る(上流のタイムアウト 15 秒・再送なし)。
+  - JWT はゲートウェイでも検証する(署名・exp・iss・aud・azp)。iss は `http://localhost:19180/realms/eiaf`、JWKS はコンテナから `http://keycloak:8080` で取る。
+  - クライアント(azp)ごとの Rate Limit(60 件 / 60 秒。超えたら 429 + `Retry-After`)。外部の `traceparent` は捨て、ゲートウェイでトレースを始める。`X-Correlation-Id` がなければ付ける。
+  - コンテナは鍵(`certs/apisix.key`)を読むため、ホストの利用者の uid とグループ 0 で動く。証明書は起動時に読み込むので、作り直したら `make up` で入れ替える(`docs/runbooks/dev-certificates.md`)。
 - **Observability**: アプリは OTLP を `otel-collector` に送る。traces → Tempo、metrics → Prometheus、logs → Loki。Grafana のデータソースは provisioning 済み(trace ↔ log ↔ metric のリンクつき)。
   - アプリ(`platform/observability`。ADR-0018)の環境変数: `OTEL_SERVICE_NAME`、`OTEL_EXPORTER_OTLP_ENDPOINT`(OTLP/HTTP。ホストのアプリは `http://localhost:19318`、コンテナのアプリは `http://otel-collector:4318`。未設定なら OTLP に送らず標準出力だけ)、`OTEL_TRACES_SAMPLER_ARG`(起点のサンプリング率。既定 1.0)、`EIA_ENVIRONMENT`(既定 `local`)。
   - 標準出力のログの形式は `EIA_LOG_FORMAT` で切り替える。既定は `json`(Loki と同じ項目)。手元で読むときは `EIA_LOG_FORMAT=console ./gradlew :services:order:app:run` のように `console` にする。

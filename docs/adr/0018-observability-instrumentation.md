@@ -128,8 +128,9 @@ P06・P07 で自前で実装する範囲(`platform/messaging-kafka` / `platform/
 - ログは Collector が止まっている間は OTLP 側で欠けうる(標準出力には残る)。
 - 初期化前のログの上限(1,000 件)を超えた分は OTLP には送られない(標準出力には残り、捨てた件数は WARN で分かる)。
 - ログの trace は、記録した時点の現在の span(フラグを含む)を優先し、なければ MDC の trace_id / span_id を使う。MDC だけから作った場合、trace flags は既定値(00)になる。
-- **外部から受け取った sampled フラグを信じる。** サンプラは ParentBased のため、外部の呼び出し元が sampled=1 を送れば記録される。社外に公開する入口では、Gateway(APISIX)で外部の `traceparent` を捨てて付け直すか、信じるかを P05 で決める(ROADMAP P05)。
+- **外部から受け取った sampled フラグを信じる。** サンプラは ParentBased のため、外部の呼び出し元が sampled=1 を送れば記録される。社外に公開する入口では、Gateway(APISIX)で外部の `traceparent` を捨てて付け直す(ADR-0023 §4。P05 ⑤c で決めた)。
 - **OTLP の送信は、ローカル参照実装では平文で、認証もない。** 本番の構成では TLS(可能なら mTLS)と送信先の認証が要る。ローカル基盤の転送路の暗号化と合わせて Issue #29 で扱う。資格情報は ③ security の `SecretProvider` から渡す。
 
 ## 改訂履歴
 - 2026-10-01: P05 ⑤a で、タイムアウトを応答で返す部品のための `markTimedOut()` を `ServerObservability` に加えた(§5。リクエストの予算切れの 503 も `error.type=timeout` で数える。ADR-0024 §3)。
+- 2026-10-01: P05 ⑤c で、Gateway が外部の `traceparent` / `tracestate` を捨て、ゲートウェイでトレースを始めることにした(ADR-0023 §4)。APISIX の `opentelemetry` が `plugin_metadata` を読まずに何もしていなかった不具合を直し、Tempo に apisix の span が記録されることを `make verify PROFILE=order` で確かめるようにした。
