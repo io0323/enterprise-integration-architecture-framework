@@ -328,7 +328,7 @@ verify_audit_bucket() {
   local output line
   output="$(docker run --rm --network eiaf \
     -e ADMIN_ACCESS_KEY="$S3_ACCESS_KEY" -e ADMIN_SECRET_KEY="$S3_SECRET_KEY" \
-    -e AUDIT_ACCESS_KEY="$AUDIT_S3_ACCESS_KEY" -e AUDIT_SECRET_KEY="$AUDIT_S3_SECRET_KEY" \
+    -e ORDER_ACCESS_KEY="$ORDER_AUDIT_S3_ACCESS_KEY" -e ORDER_SECRET_KEY="$ORDER_AUDIT_S3_SECRET_KEY" \
     -e VERIFY_ACCESS_KEY="$AUDIT_VERIFY_S3_ACCESS_KEY" -e VERIFY_SECRET_KEY="$AUDIT_VERIFY_S3_SECRET_KEY" \
     -e RUN_ID="$(date +%s)-$$" -e S3_ENDPOINT=http://seaweedfs:8333 \
     -v "$here/scripts/s3-audit.sh:/s3-audit.sh:ro" --entrypoint bash "$AWS_CLI_IMAGE" /s3-audit.sh 2>&1 || true)"

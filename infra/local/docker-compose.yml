@@ -165,16 +165,17 @@ services:
     profiles: [file, b2b]
     # S3 の認証情報(.env)から設定ファイルを生成してから起動する。
     # - eiaf: 管理者(バケットとポリシーの作成用)
-    # - eiaf-audit: 監査のアンカー専用。操作はバケット eiaf-audit に限る。Write に含まれる管理操作(Object Lock の設定の変更など)は、
-    #   seaweedfs-init が設定するバケットポリシーで拒否する(ADR-0017)
+    # - eiaf-audit-{service}: サービスごとの監査のアンカーの書込み用(Issue #43。ADR-0017 §7)。Write は anchors/{service}/ の下だけ
+    #   (プレフィックスに限った Write はバケットの管理操作も含まない)。自分のプレフィックスの Legal Hold と削除は、seaweedfs-init が
+    #   設定するバケットポリシーで拒否する。アンカーを書くサービスを足すときは、ここ・env.example・バケットポリシーに同じ形で足す
     # - eiaf-audit-verify: 監査の検査(make audit-verify)専用。バケット eiaf-audit の Read / List だけ
     entrypoint:
       - sh
       - -c
       - >-
         mkdir -p /etc/seaweedfs &&
-        printf '{"identities":[{"name":"eiaf","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","Write","List","Tagging"]},{"name":"eiaf-audit","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Read:eiaf-audit","Write:eiaf-audit","List:eiaf-audit"]},{"name":"eiaf-audit-verify","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Read:eiaf-audit","List:eiaf-audit"]}]}'
-        "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY" "$$AUDIT_S3_ACCESS_KEY" "$$AUDIT_S3_SECRET_KEY"
+        printf '{"identities":[{"name":"eiaf","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","Write","List","Tagging"]},{"name":"eiaf-audit-order","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Read:eiaf-audit","List:eiaf-audit","Write:eiaf-audit/anchors/order/*"]},{"name":"eiaf-audit-verify","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Read:eiaf-audit","List:eiaf-audit"]}]}'
+        "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY" "$$ORDER_AUDIT_S3_ACCESS_KEY" "$$ORDER_AUDIT_S3_SECRET_KEY"
         "$$AUDIT_VERIFY_S3_ACCESS_KEY" "$$AUDIT_VERIFY_S3_SECRET_KEY" > /etc/seaweedfs/s3.json &&
         exec weed server -dir=/data -ip=seaweedfs -ip.bind=0.0.0.0
         -master.volumeSizeLimitMB=256 -volume.max=32
@@ -182,8 +183,8 @@ services:
     environment:
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:?make env を実行してください}
       S3_SECRET_KEY: ${S3_SECRET_KEY:?}
-      AUDIT_S3_ACCESS_KEY: ${AUDIT_S3_ACCESS_KEY:?make env を実行してください}
-      AUDIT_S3_SECRET_KEY: ${AUDIT_S3_SECRET_KEY:?}
+      ORDER_AUDIT_S3_ACCESS_KEY: ${ORDER_AUDIT_S3_ACCESS_KEY:?make env を実行してください}
+      ORDER_AUDIT_S3_SECRET_KEY: ${ORDER_AUDIT_S3_SECRET_KEY:?}
       AUDIT_VERIFY_S3_ACCESS_KEY: ${AUDIT_VERIFY_S3_ACCESS_KEY:?make env を実行してください}
       AUDIT_VERIFY_S3_SECRET_KEY: ${AUDIT_VERIFY_S3_SECRET_KEY:?}
     ports:

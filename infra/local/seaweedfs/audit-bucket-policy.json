@@ -2,9 +2,9 @@
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "AuditIdentityCannotManageBucketOrDelete",
+      "Sid": "OrderAuditIdentityCannotManageBucketOrDelete",
       "Effect": "Deny",
-      "Principal": { "AWS": "arn:aws:iam::*:user/eiaf-audit" },
+      "Principal": { "AWS": "arn:aws:iam::*:user/eiaf-audit-order" },
       "Action": [
         "s3:PutBucketObjectLockConfiguration",
         "s3:PutBucketVersioning",
