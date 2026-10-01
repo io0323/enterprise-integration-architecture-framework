@@ -1,5 +1,6 @@
-# ルート定義(standalone)。業務ルート /{domain}/v{n}/ は P05 以降で追加する(ADR-0005)。
-# ファイル末尾の `#END` は APISIX が読み込み完了を判定する印なので消さないこと。
+# ルート定義(standalone。ADR-0005・ADR-0023)。ファイル末尾の `#END` は APISIX が読み込み完了を判定する印なので消さないこと。
+# 環境変数の参照(ドル記号と二重の波括弧)は APISIX の起動時に置き換わる。コメントの中でも置き換えるので、コメントには書かない。
+# 証明書と鍵は docker-compose.yml の apisix の entrypoint が環境変数に読み込む。
 routes:
   - id: gateway-health
     uri: /_gateway/health
@@ -9,13 +10,144 @@ routes:
         response_status: 200
         content_type: application/json
         response_example: '{"status":"UP"}'
+
+  # 受注 API(INT-SALES-001)。公開パス /sales/v1/... → order-service の /v1/...(ADR-0005)
+  - id: sales-order-api
+    uri: /sales/v1/*
+    plugins:
+      # JWT の検証(ADR-0023 §2)。署名(JWKS)・exp・iss・aud・azp を確かめる。スコープは order-service が確かめる。
+      # - discovery(JWKS の取得)はコンテナから届く URL、期待する iss はトークンに入っている値(ホストから見た URL)
+      # - bearer_only + use_jwks のため client_id / client_secret は使わない(スキーマの必須項目なので置く。資格情報ではない)
+      # - claim_schema を満たさないトークンは 401 invalid_token(aud に order-api を含み、azp がある)
+      openid-connect:
+        _meta:
+          error_response:
+            type: https://eiaf.example/problems/unauthorized
+            title: Unauthorized
+            status: 401
+        client_id: order-api
+        client_secret: not-used-bearer-only
+        discovery: http://keycloak:8080/realms/eiaf/.well-known/openid-configuration
+        bearer_only: true
+        use_jwks: true
+        realm: eiaf
+        # 検証したトークンのクレームを X-Userinfo に入れる(クライアントが送った X-Userinfo はプラグインが先に消す)
+        set_userinfo_header: true
+        claim_validator:
+          issuer:
+            valid_issuers: ["http://localhost:19180/realms/eiaf"]
+        claim_schema:
+          type: object
+          required: [aud, azp]
+          properties:
+            azp: {type: string, minLength: 1}
+            aud:
+              anyOf:
+                - {const: order-api}
+                - {type: array, contains: {const: order-api}}
+      # ADR-0023 §5(独自のコード 2): 検証したトークンの azp を X-Eiaf-Client-Id に入れ、Rate Limit のキーにする。
+      # openid-connect(優先度 2599)の後、limit-count(1002)の前に動かす。外部から来た X-Eiaf-Client-Id は proxy-rewrite が
+      # 先に(rewrite のフェーズで)消すので、ここで入れた値だけが使われる。X-Userinfo は上流に送らない。
+      serverless-pre-function:
+        _meta:
+          priority: 2000
+        phase: access
+        functions:
+          - |
+            return function(conf, ctx)
+              local core = require("apisix.core")
+              local info = core.request.header(ctx, "X-Userinfo")
+              core.request.set_header(ctx, "X-Userinfo", nil)
+              local decoded = info and ngx.decode_base64(info)
+              local claims = decoded and core.json.decode(decoded)
+              local azp = type(claims) == "table" and claims.azp or nil
+              if type(azp) ~= "string" or azp == "" then
+                return 401, {type = "https://eiaf.example/problems/unauthorized", title = "Unauthorized", status = 401}
+              end
+              core.request.set_header(ctx, "X-Eiaf-Client-Id", azp)
+            end
+      # クライアント(azp)ごとの Rate Limit(Framework 5.4)。超えたら 429 + Retry-After(Problem Details)
+      limit-count:
+        _meta:
+          error_response:
+            type: https://eiaf.example/problems/rate-limited
+            title: Too many requests
+            status: 429
+            detail: The rate limit was exceeded.
+        count: 60
+        time_window: 60
+        key_type: var
+        key: http_x_eiaf_client_id
+        rejected_code: 429
+        policy: local
+      # /sales/v1/... → /v1/...(ADR-0005)。外部から来た X-Eiaf-Client-Id を、azp を入れる前に消す(ADR-0023 §5)
+      proxy-rewrite:
+        regex_uri: ["^/sales(/v[0-9]+/.*)", "$1"]
+        headers:
+          remove: [X-Eiaf-Client-Id]
+      # ADR-0023 §5(独自のコード 3): ゲートウェイ自身が返した 401 / 429 を application/problem+json にし、429 には
+      # Retry-After(整数の秒。RFC 9110 §10.2.3。limit-count の X-RateLimit-Reset を切り上げる)を付ける。上流の応答は変えない
+      serverless-post-function:
+        phase: header_filter
+        functions:
+          - |
+            return function(conf, ctx)
+              if ngx.var.upstream_status then return end
+              local status = ngx.status
+              if status == 401 or status == 429 then
+                ngx.header["Content-Type"] = "application/problem+json"
+                ngx.header["Cache-Control"] = "no-store"
+              end
+              if status == 429 then
+                local reset = tonumber(ngx.header["X-RateLimit-Reset"])
+                ngx.header["Retry-After"] = tostring(math.max(1, math.ceil(reset or 1)))
+              end
+            end
+    upstream:
+      type: roundrobin
+      scheme: https
+      # SNI とサーバ証明書の名前の検証に、上流のホスト名(order-service)を使う
+      pass_host: node
+      # POST を二重に送らない(冪等はサービスが保証するが、ゲートウェイでは再送しない)
+      retries: 0
+      # 上流のタイムアウトはリクエストの予算(10 秒)より長くする(ADR-0024 §3 の表)
+      timeout: {connect: 2, send: 15, read: 15}
+      nodes:
+        "order-service:8443": 1
+      # mTLS のクライアント証明書(SAN apisix。order-service の許可の一覧。ADR-0024 §6)
+      tls:
+        client_cert: "${{GATEWAY_CLIENT_CERT}}"
+        client_key: "${{GATEWAY_CLIENT_KEY}}"
+
 global_rules:
   - id: observability
     plugins:
+      # X-Correlation-Id がなければ付ける(Framework 14.1)。サービスが形式を確かめ、不正なら採番し直す(ADR-0018 §3)
+      request-id:
+        header_name: X-Correlation-Id
+        include_in_response: true
+        algorithm: uuid
+      # ADR-0023 §4(独自のコード 1): 外部から受け取った traceparent / tracestate を捨て、ゲートウェイでトレースを始める。
+      # opentelemetry(優先度 12009)は受信したヘッダを無条件に親にするため、その前(12010)に消す
+      serverless-pre-function:
+        _meta:
+          priority: 12010
+        phase: rewrite
+        functions:
+          - "return function(conf, ctx) ngx.req.clear_header('traceparent'); ngx.req.clear_header('tracestate') end"
       prometheus: {}
       opentelemetry:
         sampler:
           name: always_on
         additional_header_prefix_attributes:
           - x-correlation-id
+
+plugin_metadata:
+  - id: opentelemetry
+    trace_id_source: random
+    resource:
+      service.name: apisix
+    collector:
+      address: otel-collector:4318
+      request_timeout: 3
 #END

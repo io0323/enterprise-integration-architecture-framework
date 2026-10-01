@@ -16,7 +16,7 @@ EIAF_UID := $(shell id -u)
 EIAF_GID := $(shell id -g)
 export EIAF_UID EIAF_GID
 # 開発用の証明書(infra/local/certs)を読むコンテナ。証明書を作り直したら(certs/.renewed)、make up で作り直す
-CERT_CONSUMERS := order-service
+CERT_CONSUMERS := order-service apisix
 
 help: ## コマンド一覧
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'

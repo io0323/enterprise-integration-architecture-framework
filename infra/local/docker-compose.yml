@@ -420,8 +420,9 @@ services:
       KC_HEALTH_ENABLED: "true"
       KC_METRICS_ENABLED: "true"
       KC_LOG_LEVEL: warn
-      # realm-eiaf.json の ${EIAF_E2E_CLIENT_SECRET} を置換する
+      # realm-eiaf.json の ${EIAF_E2E_CLIENT_SECRET} / ${EIAF_E2E_B_CLIENT_SECRET} を置換する
       EIAF_E2E_CLIENT_SECRET: ${EIAF_E2E_CLIENT_SECRET:?}
+      EIAF_E2E_B_CLIENT_SECRET: ${EIAF_E2E_B_CLIENT_SECRET:?make env を実行してください}
       JAVA_OPTS_KC_HEAP: -XX:MaxRAMPercentage=60 -XX:InitialRAMPercentage=25
     ports:
       - 127.0.0.1:19180:8080
@@ -442,9 +443,22 @@ services:
       # start-dev は起動のたびにビルドし直すため、CPU が混んでいると 2 分以上かかることがある
       start_period: 120s
 
+  # API Gateway(ADR-0023)。order-service へは mTLS(クライアント証明書 apisix。ADR-0024 §6)
+  # - 鍵(certs/apisix.key。0600)を読むため、ホストの利用者の uid で動かす。グループは 0(root の利用者ではない):
+  #   APISIX のイメージは conf/ と logs/ をグループ root に書き込み可にしていて、任意の uid で動かす場合はグループ 0 が要る
+  # - 証明書と鍵は起動時にファイルから読み、APISIX のプロセスの環境変数にだけ渡す(apisix.yaml の ${{GATEWAY_CLIENT_*}})。
+  #   compose の environment には書かない(docker inspect に出ない)。YAML の文字列に入れるため、改行を \n にする
   apisix:
     image: ${APISIX_IMAGE:?}
     profiles: [core]
+    user: "${EIAF_UID:-65532}:0"
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        pem() { awk '{printf "%s\\n", $$0}' "$$1"; } &&
+        export GATEWAY_CLIENT_CERT="$$(pem /certs/apisix.crt)" GATEWAY_CLIENT_KEY="$$(pem /certs/apisix.key)" &&
+        exec /docker-entrypoint.sh docker-start
     environment:
       APISIX_STAND_ALONE: "true"
     ports:
@@ -452,6 +466,10 @@ services:
     volumes:
       - ./apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro
       - ./apisix/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro
+      # CA の鍵(ca.key)は渡さない
+      - ./certs/ca.crt:/certs/ca.crt:ro
+      - ./certs/apisix.crt:/certs/apisix.crt:ro
+      - ./certs/apisix.key:/certs/apisix.key:ro
     mem_limit: 256m
     healthcheck:
       <<: *healthcheck
