@@ -10,4 +10,6 @@ contract: contracts/openapi/order-api.v1.yaml
 tier: 1
 dataClassification: confidential
 slo: { availability: "99.95", latencyP99: "500ms" }
+# 監査の記録(ADR-0017 §1)。誰が = 呼び出し元のクライアント(azp)。本文は記録せず、正規化した本文の SHA-256 だけを残す
+audit: { actions: [order.create], dataClassification: confidential, retention: legal }
 lifecycle: active

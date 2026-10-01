@@ -6,8 +6,10 @@ plugins {
 
 dependencies {
     api(project(":services:order:application"))
-    // 監査のテーブルのマイグレーションを、order の DB に同じく適用する(ADR-0017)
+    // 監査のテーブルのマイグレーションと、注文の監査の記録(ADR-0017)
     implementation(project(":platform:audit"))
+    // 監査の記録に、今の処理の Correlation ID と traceparent を入れる(CurrentTrace。ADR-0017 §8 の A17-6)
+    implementation(project(":platform:observability"))
     // 冪等の保存先の Port(IdempotencyStore)を PostgreSQL で実装する(ADR-0022 §3)
     api(project(":platform:api"))
     // REST の認証(eiaJwt)と認可(requireScopes)。JWT の検証は platform/security だけで行う(ADR-0019)
@@ -29,7 +31,6 @@ dependencies {
     integrationTestImplementation(libs.postgresql)
     integrationTestImplementation(libs.kotlinx.coroutines.core)
     // REST の統合テスト: 実際の JWT(テスト用の鍵で署名し、JWKS をローカルの HTTP で配る)と、応答の契約のスキーマでの検証
-    integrationTestImplementation(project(":platform:observability"))
     integrationTestImplementation(libs.ktor.server.test.host)
     integrationTestImplementation(libs.nimbus.jose.jwt)
     integrationTestImplementation(libs.json.schema.validator)

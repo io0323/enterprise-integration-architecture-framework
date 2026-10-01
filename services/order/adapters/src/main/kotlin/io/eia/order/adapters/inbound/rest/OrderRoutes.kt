@@ -1,7 +1,9 @@
 package io.eia.order.adapters.inbound.rest
 
-import io.eia.order.domain.OrderDraft
+import io.eia.order.application.port.inbound.PlaceOrderCommand
+import io.eia.order.application.port.inbound.RequestedBy
 import io.eia.order.domain.OrderId
+import io.eia.platform.api.idempotency.CanonicalBody
 import io.eia.platform.api.idempotency.HttpSnapshot
 import io.eia.platform.api.idempotency.respondIdempotently
 import io.eia.platform.api.problem.Problem
@@ -56,21 +58,31 @@ private suspend fun ApplicationCall.placeOrder(api: OrderApi) {
         response.header(HttpHeaders.WWWAuthenticate, "Bearer error=\"invalid_token\"")
         return respondProblem(Problem(ProblemType.UNAUTHORIZED))
     }
-    respondIdempotently(api.idempotency, clientId, api.transaction) { body -> process(api, body) }
+    respondIdempotently(api.idempotency, clientId, api.transaction) { body -> process(api, body, RequestedBy(clientId)) }
 }
 
 /**
  * 冪等の処理の本体。応答を [HttpSnapshot] で返す(4xx は保存され、5xx は保存されずに注文の保存も取り消される)。
  * 本文の構造の不正は 400、金額と domain の違反は 422。
+ *
+ * 監査には、本文の代わりに、本文を冪等の指紋と同じ形で正規化した SHA-256 を渡す([CanonicalBody]。ADR-0017 §1)。
+ * 空白やキーの順序が違うだけの本文は、同じ値になる。
  */
 private suspend fun ApplicationCall.process(
     api: OrderApi,
     body: ByteArray,
+    requestedBy: RequestedBy,
 ): HttpSnapshot {
     val request = decode(body) ?: return problemSnapshot(Problem(ProblemType.BAD_REQUEST))
     return when (val mapped = OrderDtoMapper.toDraft(request, api.currencies)) {
-        is Result.Ok -> placed(api, mapped.value)
-        is Result.Err -> problemSnapshot(Problem.of(mapped.error))
+        is Result.Ok -> {
+            val digest = CanonicalBody.sha256Hex(this.request.headers[HttpHeaders.ContentType], body)
+            placed(api, PlaceOrderCommand(mapped.value, requestedBy, digest))
+        }
+
+        is Result.Err -> {
+            problemSnapshot(Problem.of(mapped.error))
+        }
     }
 }
 
@@ -86,9 +98,9 @@ private fun decode(body: ByteArray): PlaceOrderRequestDto? =
 
 private suspend fun ApplicationCall.placed(
     api: OrderApi,
-    draft: OrderDraft,
+    command: PlaceOrderCommand,
 ): HttpSnapshot =
-    when (val placed = api.placeOrder(draft)) {
+    when (val placed = api.placeOrder(command)) {
         is Result.Ok -> {
             HttpSnapshot(
                 HttpStatusCode.Created.value,

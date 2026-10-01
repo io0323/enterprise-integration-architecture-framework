@@ -1,5 +1,7 @@
 package io.eia.order.application
 
+import io.eia.order.application.port.inbound.RequestedBy
+import io.eia.order.application.port.outbound.OrderAuditTrail
 import io.eia.order.application.port.outbound.OrderIdGenerator
 import io.eia.order.application.port.outbound.OrderRepository
 import io.eia.order.application.port.outbound.OrderVersionConflict
@@ -116,4 +118,28 @@ internal class SequentialIds : OrderIdGenerator {
     var issued = 0
 
     override fun next(): OrderId = (OrderId.parse("ord-${++issued}") as Result.Ok).value
+}
+
+/** メモリ上の監査の記録。[transaction] が確定したときだけ残す。[failWith] を設定すると、記録を失敗させる。 */
+internal class FakeOrderAuditTrail(
+    private val transaction: FakeTransactionRunner,
+) : OrderAuditTrail {
+    data class Entry(
+        val orderId: OrderId,
+        val requestedBy: RequestedBy,
+        val requestDigest: String?,
+    )
+
+    val entries = mutableListOf<Entry>()
+    var failWith: DomainError? = null
+
+    override suspend fun orderPlaced(
+        order: Order,
+        requestedBy: RequestedBy,
+        requestDigest: String?,
+    ): Result<Unit, DomainError> {
+        failWith?.let { return err(it) }
+        transaction.write { entries += Entry(order.id, requestedBy, requestDigest) }
+        return ok(Unit)
+    }
 }
