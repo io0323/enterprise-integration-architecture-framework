@@ -520,6 +520,7 @@ verify_order() {
   fi
 
   verify_gateway
+  verify_dashboard
 }
 
 # ------------------------------------------------------------------ order: Gateway(APISIX → order-service。ADR-0023)
@@ -634,6 +635,62 @@ print("ok" if roots and children else "ng")' 2>/dev/null || true)"
   fi
   code="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token_b" "$url/ord-none" || true)"
   if [[ "$code" == 404 ]]; then pass "Gateway: ほかのクライアント(eiaf-e2e-b)は 429 にならない"; else fail "Gateway: eiaf-e2e-b が $code"; fi
+}
+
+# ------------------------------------------------------------------ order: RED のダッシュボード(Grafana。P05 ⑥a)
+verify_dashboard() {
+  current="dashboard"
+  local dash
+  dash="$(curl -fsS -u "admin:$GRAFANA_ADMIN_PASSWORD" http://localhost:19300/api/dashboards/uid/eiaf-order-red || true)"
+  if [[ "$(json 'd["meta"]["folderTitle"] + "/" + d["dashboard"]["title"]' <<<"$dash" 2>/dev/null)" == "EIAF/Order API — RED" ]]; then
+    pass "Grafana: ダッシュボード Order API — RED(フォルダ EIAF)を provisioning で読み込んでいる"
+  else
+    fail "Grafana: ダッシュボード eiaf-order-red を読み込めない"
+    return
+  fi
+
+  # caller_deadline のパネルは、order-service が依存先を呼ばない P05 では空なので、合成の値(service.name=eiaf-verify)を
+  # 2 点送り、メトリクスの名前(OTLP → Prometheus の変換)と式が正しいことを確かめる
+  local now prev point
+  now="$(python3 -c 'import time; print(time.time_ns())')"
+  prev=$((now - 30000000000))
+  point() { # point <値> <時刻(ns)>
+    printf '{"asInt":"%s","startTimeUnixNano":"%s","timeUnixNano":"%s","attributes":[{"key":"kind","value":{"stringValue":"caller_deadline"}},{"key":"eia.dependency.name","value":{"stringValue":"verify-dependency"}}]}' \
+      "$1" "$((prev - 1000000000))" "$2"
+  }
+  check "OTel Collector: 合成の eia.resilience.timeouts(caller_deadline)を受け付ける" curl -fsS -X POST http://localhost:19318/v1/metrics -H 'Content-Type: application/json' \
+    -d "{\"resourceMetrics\":[{\"resource\":{\"attributes\":[{\"key\":\"service.name\",\"value\":{\"stringValue\":\"eiaf-verify\"}}]},\"scopeMetrics\":[{\"metrics\":[{\"name\":\"eia.resilience.timeouts\",\"unit\":\"{call}\",\"sum\":{\"aggregationTemporality\":2,\"isMonotonic\":true,\"dataPoints\":[$(point 1 "$prev"),$(point 3 "$now")]}}]}]}]}"
+
+  # すべてのパネルの式を Prometheus で評価する。式がエラーにならず、データを返すこと
+  # (エラーの種類別のパネルは、エラーがなければ空でよい)。メトリクスの送信は 10 秒ごとなので、少し待ってやり直す
+  local result=""
+  for _ in $(seq 1 12); do
+    result="$(json 'json.dumps([[p["title"], t["expr"]] for p in d["dashboard"]["panels"] if p["type"] != "row" for t in p["targets"]])' <<<"$dash" |
+      python3 -c '
+import json, sys, urllib.error, urllib.parse, urllib.request
+allowed_empty = ("Errors(error.type 別)",)
+bad = []
+for title, expr in json.load(sys.stdin):
+    q = urllib.parse.urlencode({"query": expr.replace("$__rate_interval", "2m")})
+    try:
+        with urllib.request.urlopen("http://localhost:19090/api/v1/query?" + q) as r:
+            d = json.load(r)
+    except urllib.error.HTTPError as e:  # 式の誤りは 400
+        d = json.load(e)
+    if d["status"] != "success":
+        bad.append(title + "(式のエラー)")
+    elif not d["data"]["result"] and title not in allowed_empty:
+        bad.append(title + "(データなし)")
+print("; ".join(bad) if bad else "ok")
+' 2>&1 || true)"
+    [[ "$result" == ok ]] && break
+    sleep 10
+  done
+  if [[ "$result" == ok ]]; then
+    pass "Grafana: RED のダッシュボードの全パネルの式が、Prometheus でデータを返す(Gateway・order-service・caller_deadline)"
+  else
+    fail "Grafana: パネルの式が想定外: $result"
+  fi
 }
 
 verify_health
