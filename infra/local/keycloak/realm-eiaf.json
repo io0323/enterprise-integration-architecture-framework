@@ -54,6 +54,22 @@
       "fullScopeAllowed": false,
       "defaultClientScopes": ["order-api-audience"],
       "optionalClientScopes": ["sales.order:read", "sales.order:write"]
+    },
+    {
+      "clientId": "eiaf-e2e-b",
+      "name": "E2E / 開発用の 2 つ目の client-credentials クライアント(クライアントごとの Rate Limit・冪等の範囲の確認)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${EIAF_E2E_B_CLIENT_SECRET}",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "fullScopeAllowed": false,
+      "defaultClientScopes": ["order-api-audience"],
+      "optionalClientScopes": ["sales.order:read", "sales.order:write"]
     }
   ]
 }

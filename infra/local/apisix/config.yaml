@@ -1,4 +1,4 @@
-# APISIX standalone(etcd なし・YAML 駆動)。CLAUDE.md §2 / Framework 5.2。
+# APISIX standalone(etcd なし・YAML 駆動)。CLAUDE.md §2 / Framework 5.2。ルートは apisix.yaml(ADR-0023)。
 deployment:
   role: data_plane
   role_data_plane:
@@ -11,10 +11,36 @@ apisix:
   status:
     ip: 127.0.0.1
     port: 7085
+  # 上流(サービス)のサーバ証明書を検証する CA(開発用 CA。infra/local/certs。ADR-0024 §6)
+  ssl:
+    ssl_trusted_certificate: /certs/ca.crt
 
 nginx_config:
   worker_processes: 2
   error_log_level: warn
+  # ADR-0023 §3: APISIX 3.18 の upstream の tls.verify は HTTP の上流に効かない(Kafka だけ)ため、nginx の proxy_ssl_verify で
+  # 上流のサーバ証明書を検証する(CA は上の ssl_trusted_certificate、名前は APISIX が設定する proxy_ssl_name $upstream_host)。
+  # ADR-0023 §6: ゲートウェイ自身の 502 / 504 を Problem Details(about:blank)で返す。error_page の内部の転送で
+  # X-Correlation-Id(request-id プラグインが付けた値)が落ちるので、要求のヘッダの値を応答にも付ける。
+  http_server_configuration_snippet: |
+    proxy_ssl_verify on;
+    proxy_ssl_verify_depth 2;
+    error_page 502 /__eiaf/problems/502;
+    error_page 504 /__eiaf/problems/504;
+    location = /__eiaf/problems/502 {
+      internal;
+      default_type application/problem+json;
+      add_header Cache-Control no-store always;
+      add_header X-Correlation-Id $http_x_correlation_id always;
+      return 502 '{"type":"about:blank","title":"Bad Gateway","status":502}';
+    }
+    location = /__eiaf/problems/504 {
+      internal;
+      default_type application/problem+json;
+      add_header Cache-Control no-store always;
+      add_header X-Correlation-Id $http_x_correlation_id always;
+      return 504 '{"type":"about:blank","title":"Gateway Timeout","status":504}';
+    }
 
 plugins:
   - mocking
@@ -22,18 +48,15 @@ plugins:
   - opentelemetry
   - request-id
   - limit-count
-  - jwt-auth
   - openid-connect
   - proxy-rewrite
+  # ADR-0023 §5: 設定だけでは実現できない 3 つの処理(外部の traceparent の除去・azp の取り出し・Problem Details のヘッダ)
+  - serverless-pre-function
+  - serverless-post-function
 
 plugin_attr:
   prometheus:
     export_addr:
       ip: 0.0.0.0
       port: 9091
-  opentelemetry:
-    resource:
-      service.name: apisix
-    collector:
-      address: otel-collector:4318
-      request_timeout: 3
+# opentelemetry の送信先とリソースは apisix.yaml の plugin_metadata(APISIX 3.18 は plugin_attr ではなく metadata を読む。ADR-0023 §4)
