@@ -74,7 +74,7 @@ services/order/
                     ExposedOutbox.kt(P06)
   adapters/src/main/resources/db/order/                       # Flyway(所有者のロールで適用。アプリのロールには必要な権限だけを付ける)
   app/src/main/kotlin/io/eia/order/app/                       # package io.eia.order.app
-    Main.kt, Modules.kt(Koin), Config.kt
+    Main.kt(migrate / serve), OrderCommands.kt, OrderServer.kt(Netty), OrderModule.kt(Koin), OrderConfig.kt   # ADR-0024
 ```
 
 **永続化の方針**(全サービスで揃える):
