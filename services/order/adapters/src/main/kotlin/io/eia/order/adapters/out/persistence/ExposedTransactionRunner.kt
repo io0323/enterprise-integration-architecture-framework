@@ -3,11 +3,10 @@ package io.eia.order.adapters.out.persistence
 import io.eia.order.application.port.outbound.TransactionRunner
 import io.eia.shared.kernel.DomainError
 import io.eia.shared.kernel.Result
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import org.jetbrains.exposed.v1.jdbc.Database
 import org.jetbrains.exposed.v1.jdbc.JdbcTransaction
-import org.jetbrains.exposed.v1.jdbc.transactions.suspendTransaction
 import java.sql.SQLException
 import java.sql.Savepoint
 
@@ -29,11 +28,7 @@ public class ExposedTransactionRunner(
     }
 
     private suspend fun <T> newTransaction(block: suspend () -> Result<T, DomainError>): Result<T, DomainError> =
-        withContext(Dispatchers.IO) {
-            suspendTransaction(database) {
-                block().also { if (it is Result.Err) rollback() }
-            }
-        }
+        database.newTransaction { block().also { if (it is Result.Err) rollback() } }
 
     @Suppress("TooGenericExceptionCaught") // 例外はセーブポイントまで戻してから、そのまま伝える
     private suspend fun <T> joined(
@@ -44,6 +39,8 @@ public class ExposedTransactionRunner(
         val savepoint: Savepoint = connection.setSavepoint()
         try {
             val result = block()
+            // 打ち切られていれば(コルーチンの打ち切り)、結果を使わずに例外でセーブポイントまで戻す
+            currentCoroutineContext().ensureActive()
             if (result is Result.Err) connection.rollback(savepoint) else connection.releaseSavepoint(savepoint)
             return result
         } catch (e: Throwable) {
