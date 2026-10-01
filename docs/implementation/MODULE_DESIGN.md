@@ -126,3 +126,14 @@ services/order/
 | Contract | 契約 ⇔ 実装の一致、互換性、Canonical ⇔ Avro | tools/contract-check, OpenAPI validator |
 | Integration | Adapter ⇔ 実ミドルウェア | Testcontainers |
 | E2E / Chaos | シナリオ・障害注入 | tests/e2e (kotest) + docker compose + Toxiproxy |
+
+### 5.1 カバレッジ(Kover)の測り方(Issue #56)
+| 対象 | 計測に使うテスト | 閾値の検証 |
+|---|---|---|
+| 統合テストを持たないモジュール(domain・application・kernel など) | 単体テスト | `./gradlew build`(必須のチェック)で強制する |
+| 統合テストを持つモジュール(`src/integrationTest` がある adapters・platform の一部)と、ルートの全体の集約 | 単体テスト + 統合テスト(`integrationTest` で実行された本番コード) | CI の `integration` ジョブ(`./gradlew integrationTest koverVerify -Peia.kover.withIntegrationTests=true`)で強制する。`./gradlew build` では統合テストを動かさず、単体テストだけの値を目安(警告)として出す |
+
+- 閾値は CODING_STANDARDS のとおり(domain / application 90%、それ以外と全体 75%)。統合テストのテストクラス自体は計測の対象外。
+- 理由: adapters の本当の検証は、実際のミドルウェアでの統合テスト(Testcontainers)である。単体テストだけで測ると、閾値を満たすために SQL の呼び出しをモックで模しただけのテストが要り、価値が低い割に保守が増える(P05 ④a-1・#55 の経緯)。一方で、`build` で統合テストを毎回動かすと、Docker が要り、build が遅くなる。
+- adapters の単体テストは、統合テストで再現できない分岐(並行の削除との競合など)と、DB を使わない純粋な処理(SQL のエラーの分類・ID の採番など)だけに使う。
+- `integration` ジョブは、統合テストに関係する変更(ci.yml の paths-filter)があるときだけ動く。動かない PR では、統合テストを持つモジュールの閾値は検証されない(そのモジュールを変えていないため)。

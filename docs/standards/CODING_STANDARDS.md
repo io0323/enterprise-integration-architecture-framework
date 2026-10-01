@@ -42,7 +42,7 @@
 - テスト名は日本語可(`"同一Idempotency-Keyの再送は同一結果を返す"`)。
 - Given/When/Then 構造。Port はフェイク実装を優先し、MockK は adapters 層に限定。
 - `Result.Err(...)` や、`data object` を入れ子に含む値を比べるときは `shouldBeEqual`(`equals` で比べる)を使う。kotest 6.2.5 の `shouldBe` は data class をフィールドごとに比べ、期待する値の側の `data object`(プロパティがない)を差がないものとして扱う。そのため `Err(InvalidToken(...)) shouldBe Err(KeysUnavailable)` が通ってしまう(P04a ③ で確認)。
-- カバレッジ目標: domain/application 90% 以上、全体 75% 以上(Kover で検証)。
+- カバレッジ目標: domain/application 90% 以上、全体 75% 以上(Kover で検証)。統合テストを持つモジュール(adapters など)は、統合テストで実行された本番コードも数え、CI の `integration` ジョブで検証する(MODULE_DESIGN §5.1)。SQL の呼び出しをモックで模しただけの単体テストは書かず、実際のミドルウェアでの統合テストで確かめる。
 
 ## Git
 - Conventional Commits。scope はモジュール名(`feat(order): ...`, `chore(build): ...`)。
