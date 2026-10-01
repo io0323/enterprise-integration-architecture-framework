@@ -130,6 +130,12 @@ internal object E2eEnvironment {
     fun encode(value: String): String = URLEncoder.encode(value, StandardCharsets.UTF_8)
 }
 
+/** 注文の受け付けの本文(1 明細)。 */
+internal const val ORDER_BODY =
+    """{"customerId":"cust-e2e",""" +
+        """"lines":[{"productId":"prod-1","sku":"SKU-1","quantity":1,"unitPrice":{"amount":"100","currency":"JPY"}}],""" +
+        """"shippingAddress":{"countryCode":"JP","postalCode":"100-0001","city":"Chiyoda","line1":"1-1"}}"""
+
 internal fun HttpResponse<*>.header(name: String): String? = headers().firstValue(name).orElse(null)
 
 /** [timeout] の間、[block] が null 以外を返すまで [interval] ごとにやり直す。 */
