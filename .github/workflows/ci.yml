@@ -10,8 +10,10 @@ concurrency:
   cancel-in-progress: true
 
 # アクションはタグではなくコミット SHA で固定し、コメントにバージョンを併記する。
-# 必須チェックは `build` ジョブのみ。`macos` ジョブは shared/** などの変更時だけ、`integration` ジョブは platform/** などの変更時だけ
-# 実行され、スキップされてもマージを妨げない(実行された場合は成功していることをマージの条件とする。CLAUDE.md §6)。
+# 必須チェック(Ruleset「main protection」)は `build`・`changes`・`integration (Testcontainers)`・`macos (macosArm64 tests)`(ADR-0020 §3)。
+# `macos` ジョブは shared/** などの変更時だけ、`integration` ジョブは platform/**・services/** などの変更時だけ実行される。
+# ジョブの `if` でスキップされたジョブは成功に数えられるので、関係のない PR は止まらない。
+# ジョブの `name` を変えるときは、Ruleset の必須チェックの名前も同時に変える(完全一致で照合される)。
 # 統合テストを持つモジュール(adapters・platform の一部)のカバレッジの閾値は、`integration` ジョブで統合テストを含めて検証する
 # (`build` では目安の警告だけ。MODULE_DESIGN §5・Issue #56)。
 jobs:
@@ -73,7 +75,7 @@ jobs:
             integration:
               - 'platform/**'
               - 'shared/**'
-              - 'services/*/adapters/**'
+              - 'services/**'
               - '**/src/integrationTest/**'
               - 'infra/local/images.env'
               - 'build-logic/**'
