@@ -1,4 +1,5 @@
 import io.eia.buildlogic.koverEnforced
+import io.eia.buildlogic.koverWithIntegrationTests
 import io.eia.buildlogic.libs
 import io.eia.buildlogic.requireArm64JdkOnAppleSilicon
 import io.eia.buildlogic.version
@@ -16,7 +17,8 @@ requireArm64JdkOnAppleSilicon()
 kover {
     reports {
         verify {
-            warningInsteadOfFailure = !koverEnforced()
+            // 集約に統合テストを持つモジュール(services/*/adapters)を含むため、統合テストを含めて測るときだけ強制する(MODULE_DESIGN §5)
+            warningInsteadOfFailure = !koverEnforced() || !koverWithIntegrationTests()
             rule("全体の行カバレッジ") {
                 minBound(75)
             }

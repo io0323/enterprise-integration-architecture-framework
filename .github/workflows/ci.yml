@@ -12,6 +12,8 @@ concurrency:
 # アクションはタグではなくコミット SHA で固定し、コメントにバージョンを併記する。
 # 必須チェックは `build` ジョブのみ。`macos` ジョブは shared/** などの変更時だけ、`integration` ジョブは platform/** などの変更時だけ
 # 実行され、スキップされてもマージを妨げない(実行された場合は成功していることをマージの条件とする。CLAUDE.md §6)。
+# 統合テストを持つモジュール(adapters・platform の一部)のカバレッジの閾値は、`integration` ジョブで統合テストを含めて検証する
+# (`build` では目安の警告だけ。MODULE_DESIGN §5・Issue #56)。
 jobs:
   build:
     name: build
@@ -130,8 +132,9 @@ jobs:
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
           cache-provider: basic
-      - name: Integration tests
-        run: ./gradlew integrationTest
+      # 統合テストで実行された本番コードも Kover のカバレッジに数え、閾値を検証する(MODULE_DESIGN §5)
+      - name: Integration tests and coverage
+        run: ./gradlew integrationTest koverVerify -Peia.kover.withIntegrationTests=true
       - name: Test summary
         if: ${{ !cancelled() }}
         run: python3 scripts/ci/test-summary.py >> "$GITHUB_STEP_SUMMARY"
