@@ -9,6 +9,10 @@ import io.eia.platform.api.problem.Problem
 import io.eia.platform.api.problem.ProblemType
 import io.eia.platform.api.problem.installProblemDetails
 import io.eia.platform.api.problem.respondProblem
+import io.eia.platform.audit.AuditError
+import io.eia.platform.audit.anchor.AnchorCycle
+import io.eia.platform.audit.anchor.AnchorOutcome
+import io.eia.platform.audit.anchor.S3AnchorStore
 import io.eia.platform.observability.Observability
 import io.eia.platform.observability.ObservabilityConfig
 import io.eia.platform.observability.ObservabilityRuntime
@@ -52,6 +56,7 @@ import org.koin.dsl.koinApplication
 import org.slf4j.LoggerFactory
 import java.sql.SQLException
 import java.util.concurrent.CountDownLatch
+import kotlin.time.Duration
 
 /**
  * order-service の HTTP サーバ(serve。Ktor の Netty。ADR-0024 §1)。
@@ -94,6 +99,7 @@ internal class OrderServer private constructor(
         if (stopped.count == 0L) return
         server.stop(GRACE_MILLIS, TIMEOUT_MILLIS)
         koin.get<JwtVerifier>().close()
+        koin.getOrNull<S3AnchorStore>()?.close()
         koin.get<HikariDataSource>().close()
         koin.close()
         runtime.close()
@@ -115,11 +121,12 @@ internal class OrderServer private constructor(
          */
         fun start(env: Map<String, String>): Result<OrderServer, ValidationError> =
             serveInputs(env).flatMap { (config, appPassword) ->
+                val secrets = EnvSecretProvider(env)
                 ServerTls.load(config.tls).flatMap { tls ->
                     val observabilityEnv = mapOf(ObservabilityConfig.ENV_SERVICE_NAME to "order-service") + env
                     ObservabilityConfig.fromEnvironment(observabilityEnv).map { observability ->
                         val runtime = Observability.init(observability)
-                        val koin = koinApplication { modules(orderModule(config, appPassword, runtime)) }.koin
+                        val koin = koinApplication { modules(orderModule(config, appPassword, runtime, secrets)) }.koin
                         val server =
                             embeddedServer(Netty, configure = { connectors(config, tls) }) { orderApplication(koin, config) }
                                 .start(wait = false)
@@ -155,9 +162,27 @@ internal class OrderServer private constructor(
                 forbidden.map { FieldViolation(it, "serve には所有者のパスワードを渡さないでください(migrate にだけ渡す)") } +
                     listOf("OIDC_ISSUER", "OIDC_JWKS_URI").filter { env[it].isNullOrBlank() }.map { FieldViolation(it, "serve には必須です") }
             return when {
-                violations.isNotEmpty() -> err(ValidationError(violations))
-                else -> OrderConfig.fromEnvironment(env).flatMap { config -> appPassword(env).map { config to it } }
+                violations.isNotEmpty() -> {
+                    err(ValidationError(violations))
+                }
+
+                else -> {
+                    OrderConfig.fromEnvironment(env).flatMap { config ->
+                        anchorInputs(config, env)
+                            .flatMap { appPassword(env) }
+                            .map { password -> config to password }
+                    }
+                }
             }
+        }
+
+        /** 監査のアンカーの保存が有効なら、S3 の接続先・保持期間・資格情報がそろっていること。 */
+        private fun anchorInputs(
+            config: OrderConfig,
+            env: Map<String, String>,
+        ): Result<Unit, ValidationError> {
+            val violations = config.anchor.serveViolations(EnvSecretProvider(env))
+            return if (violations.isEmpty()) ok(Unit) else err(ValidationError(violations))
         }
 
         private fun appPassword(env: Map<String, String>): Result<Secret, ValidationError> =
@@ -187,6 +212,12 @@ internal class OrderServer private constructor(
                 overTls { authenticate { orderRoutes(koin.get()) } }
             }
             launchPurgeJob(koin.get(), config)
+            val anchorCycle = koin.getOrNull<AnchorCycle>()
+            if (anchorCycle != null) {
+                launchAnchorJob(anchorCycle, koin.get(), config.anchor.interval)
+            } else {
+                logger.warn("監査のアンカーの保存は無効です({}=false)。末尾の記録の改竄と削除は検出できません", AuditAnchorConfig.ENABLED)
+            }
         }
 
         private fun Route.healthRoutes(dataSource: HikariDataSource) {
@@ -204,6 +235,64 @@ internal class OrderServer private constructor(
                     call.respondText("""{"status":"UP"}""", ContentType.Application.Json)
                 } else {
                     call.respondProblem(Problem(ProblemType.SERVICE_UNAVAILABLE))
+                }
+            }
+        }
+
+        /**
+         * 監査のアンカーの検査と保存を、起動の直後と [interval] ごとに行う(ADR-0017 §5)。サーバの停止で止まる。
+         * 改竄の疑いがあれば保存せず ERROR を残す(対応は docs/runbooks/audit-verify.md)。ストレージや DB に届かなければ次の回でやり直す。
+         * 成否はメトリクス(AnchorMetrics)で監視する。
+         */
+        private fun Application.launchAnchorJob(
+            cycle: AnchorCycle,
+            dataSource: HikariDataSource,
+            interval: Duration,
+        ) {
+            launch {
+                while (isActive) {
+                    try {
+                        val result = withContext(Dispatchers.IO) { dataSource.connection.use { cycle.run(it) } }
+                        logAnchorResult(result)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (
+                        @Suppress("TooGenericExceptionCaught") e: Exception,
+                    ) {
+                        logger.warn("監査のアンカーの検査を終えられませんでした(error.type={})", e::class.qualifiedName)
+                    }
+                    delay(interval)
+                }
+            }
+        }
+
+        private fun logAnchorResult(result: Result<AnchorOutcome, AuditError>) {
+            when (result) {
+                is Result.Err -> {
+                    logger.warn("監査のアンカーの検査を終えられませんでした。次の回でやり直します(error.code={}): {}", result.error.code, result.error.message)
+                }
+
+                is Result.Ok -> {
+                    when (val outcome = result.value) {
+                        is AnchorOutcome.Published -> {
+                            logger.info(
+                                "監査のアンカーを保存しました(key={}, seq={}, 検証した記録 {} 件)",
+                                outcome.anchor.key,
+                                outcome.anchor.anchor.seq,
+                                outcome.verifiedRecords,
+                            )
+                        }
+
+                        is AnchorOutcome.Rejected -> {
+                            // seq とアンカーのキーだけを出す(記録の中身は出さない)
+                            outcome.findings.forEach { logger.error("監査記録に改竄の疑いがあります({}): {}", it.code, it.describe()) }
+                            logger.error("改竄の疑いがあるため、監査のアンカーを保存しません(対応: docs/runbooks/audit-verify.md)")
+                        }
+
+                        AnchorOutcome.Empty, is AnchorOutcome.Unchanged -> {
+                            logger.debug("監査の記録は前回のアンカーから増えていません({})", outcome.label)
+                        }
+                    }
                 }
             }
         }

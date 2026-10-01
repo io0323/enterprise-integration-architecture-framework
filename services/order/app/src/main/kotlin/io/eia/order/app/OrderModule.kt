@@ -22,16 +22,25 @@ import io.eia.platform.api.idempotency.IdempotencyHandler
 import io.eia.platform.api.idempotency.IdempotencyStore
 import io.eia.platform.api.idempotency.TransactionBoundary
 import io.eia.platform.audit.AuditMetrics
+import io.eia.platform.audit.anchor.AnchorCycle
+import io.eia.platform.audit.anchor.AnchorMetrics
+import io.eia.platform.audit.anchor.AnchorPublisher
+import io.eia.platform.audit.anchor.S3AnchorStore
+import io.eia.platform.audit.anchor.S3AnchorStoreConfig
+import io.eia.platform.audit.anchor.ServiceName
 import io.eia.platform.audit.jdbc.AuditLog
 import io.eia.platform.observability.ObservabilityRuntime
 import io.eia.platform.reliability.ResilienceMetrics
 import io.eia.platform.security.jwt.JwtVerifier
 import io.eia.platform.security.jwt.JwtVerifierConfig
 import io.eia.platform.security.secret.Secret
+import io.eia.platform.security.secret.SecretProvider
+import io.eia.shared.kernel.getOrNull
 import org.jetbrains.exposed.v1.jdbc.Database
 import org.koin.core.module.Module
 import org.koin.dsl.module
 import kotlin.time.Clock
+import kotlin.time.toJavaDuration
 
 /**
  * order-service の配線(Koin)。リクエストを処理するプロセス(serve)の部品だけで、所有者の資格情報は持たない(ADR-0024 §2)。
@@ -43,6 +52,7 @@ internal fun orderModule(
     config: OrderConfig,
     appPassword: Secret,
     runtime: ObservabilityRuntime,
+    secrets: SecretProvider,
 ): Module =
     module {
         single { runtime }
@@ -64,6 +74,7 @@ internal fun orderModule(
         // 監査の記録(ADR-0017)。追記の所要時間・ロックの待ち・失敗をメトリクスにする(A17-5)
         single { AuditLog(listener = AuditMetrics(runtime.meter)) }
         single<OrderAuditTrail> { ExposedOrderAuditTrail(get(), get()) }
+        if (config.anchor.enabled) anchorBeans(config.anchor, runtime, secrets)
         single<PlaceOrderUseCase> { PlaceOrderService(get(), get(), get(), Clock.System, get()) }
         single<GetOrderUseCase> { GetOrderService(get()) }
         single<IdempotencyStore> { PostgresIdempotencyStore(get()) }
@@ -83,3 +94,36 @@ internal fun orderModule(
             )
         }
     }
+
+/**
+ * 監査のアンカーの定期的な保存(ADR-0017 §5)。保存の前に、前回のアンカーからの差分を検証する([AnchorCycle])。
+ * S3 には order の書込み用の identity(`eiaf-audit-order`。`anchors/order/` の下にだけ書ける)で接続する。
+ */
+private fun Module.anchorBeans(
+    anchor: AuditAnchorConfig,
+    runtime: ObservabilityRuntime,
+    secrets: SecretProvider,
+) {
+    val service = requireNotNull(ServiceName.parse("order").getOrNull())
+    single {
+        S3AnchorStore(
+            S3AnchorStoreConfig(
+                endpoint = requireNotNull(anchor.endpoint) { "${AuditAnchorConfig.ENDPOINT} が必要です" },
+                bucket = anchor.bucket,
+                accessKeyName = AuditAnchorConfig.ACCESS_KEY,
+                secretKeyName = AuditAnchorConfig.SECRET_KEY,
+            ),
+            secrets,
+        )
+    }
+    single { AnchorMetrics(runtime.meter, anchor.interval.toJavaDuration()) }
+    single {
+        val retention = requireNotNull(anchor.retention) { "${AuditAnchorConfig.RETENTION} が必要です" }
+        AnchorCycle(
+            service,
+            get<S3AnchorStore>(),
+            AnchorPublisher(service, get<S3AnchorStore>(), retention.toJavaDuration()),
+            get<AnchorMetrics>(),
+        )
+    }
+}

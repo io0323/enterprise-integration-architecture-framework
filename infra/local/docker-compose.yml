@@ -158,11 +158,12 @@ services:
         - CMD-SHELL
         - mosquitto_sub -h 127.0.0.1 -u "$$MQTT_USERNAME" -P "$$MQTT_PASSWORD" -t '$$SYS/broker/uptime' -C 1 -W 5 >/dev/null
 
-  # ---------------------------------------------------------------- file / b2b
+  # ---------------------------------------------------------------- file / b2b / order
   # S3 互換オブジェクトストレージ(ADR-0015)。master・volume・filer・S3 ゲートウェイを 1 プロセスで動かす
+  # order profile では、order-service が監査のアンカーを保存する(ADR-0017 §5)
   seaweedfs:
     image: ${SEAWEEDFS_IMAGE:?}
-    profiles: [file, b2b]
+    profiles: [file, b2b, order]
     # S3 の認証情報(.env)から設定ファイルを生成してから起動する。
     # - eiaf: 管理者(バケットとポリシーの作成用)
     # - eiaf-audit-{service}: サービスごとの監査のアンカーの書込み用(Issue #43。ADR-0017 §7)。Write は anchors/{service}/ の下だけ
@@ -200,7 +201,7 @@ services:
   # 完了はヘルスチェック(完了のファイル)で示す。終了させると、Compose v2.38 の up --wait が失敗として扱うため
   seaweedfs-init:
     image: ${AWS_CLI_IMAGE:?}
-    profiles: [file, b2b]
+    profiles: [file, b2b, order]
     depends_on:
       seaweedfs:
         condition: service_healthy
@@ -324,9 +325,19 @@ services:
         condition: service_completed_successfully
       otel-collector:
         condition: service_healthy
+      # 監査のアンカーのバケット(eiaf-audit)とポリシーができてから起動する
+      seaweedfs-init:
+        condition: service_healthy
     environment:
       ORDER_DB_URL: jdbc:postgresql://postgres:5432/order_service
       ORDER_APP_DB_PASSWORD: ${ORDER_APP_DB_PASSWORD:?make env を実行してください}
+      # 監査のアンカーの保存(ADR-0017 §5)。order の書込み用の identity(eiaf-audit-order)で、anchors/order/ の下にだけ書ける。
+      # 間隔は、ローカルで確かめやすいよう 1 分(既定は 1 時間)。保持期間は make audit-verify の既定の最小値(P1D)と同じ
+      ORDER_AUDIT_S3_ENDPOINT: http://seaweedfs:8333
+      ORDER_AUDIT_S3_ACCESS_KEY: ${ORDER_AUDIT_S3_ACCESS_KEY:?make env を実行してください}
+      ORDER_AUDIT_S3_SECRET_KEY: ${ORDER_AUDIT_S3_SECRET_KEY:?}
+      ORDER_AUDIT_ANCHOR_INTERVAL: 1m
+      ORDER_AUDIT_ANCHOR_RETENTION: P1D
       # iss はトークンに入っている値(ホストから見た URL)、JWKS はコンテナから届く URL(ADR-0019)
       OIDC_ISSUER: http://localhost:19180/realms/eiaf
       OIDC_JWKS_URI: http://keycloak:8080/realms/eiaf/protocol/openid-connect/certs
