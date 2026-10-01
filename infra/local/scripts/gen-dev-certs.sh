@@ -20,6 +20,10 @@ leaves=(
   "apisix:apisix"
 )
 
+if [[ "$(id -u)" == 0 ]]; then
+  echo "root(uid 0)で実行しないでください。コンテナはホストの利用者の uid で動き、この利用者が作った 0600 の鍵を読みます(ADR-0024 §7)" >&2
+  exit 2
+fi
 command -v openssl >/dev/null || { echo "openssl が見つかりません。インストールしてから make certs を実行してください" >&2; exit 2; }
 
 umask 077
@@ -98,11 +102,7 @@ for entry in "${leaves[@]}"; do
   fi
 done
 
-# root で実行した場合(CI のコンテナなど)、コンテナの利用者(distroless の nonroot = 65532)が鍵を読めるようにする。
-# root 以外で実行した場合は、コンテナをその利用者の uid で動かす(Makefile の EIAF_UID。docker-compose.yml の order-service)
-if [[ "$(id -u)" == 0 ]]; then
-  for entry in "${leaves[@]}"; do chown 65532:65532 "$dir/${entry%%:*}.key"; done
-fi
+# 鍵は 0600 のまま。コンテナはこの利用者の uid で動いて読む(Makefile の EIAF_UID。docker-compose.yml の order-service)
 chmod 755 "$dir"
 
 if $renewed; then

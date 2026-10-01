@@ -86,7 +86,10 @@ P05 ④b-2 で、最初のサービス(order-service)を起動できる形にす
 - ベースは distroless の Java 21 の nonroot(`gcr.io/distroless/java21-debian12:nonroot`)。images.env の `JAVA_RUNTIME_IMAGE` にタグとダイジェストで固定する(ADR-0016 §2)。シェルとパッケージマネージャがなく、攻撃面が小さい。uid 65532 で動く。
 - シェルがないので、Gradle の起動スクリプトは使わず、`java -cp '/app/lib/*' io.eia.order.app.MainKt` で起動する。中身は `installDist` の出力で、`make up PROFILE=order` が先に作る(`make order-dist`)。
 - ヘルスチェックは、ほかのシェルのないイメージと同じく、BusyBox の wget を `/probe` にマウントして使う(ADR-0016 §4)。
-- **root で動かさない**。compose では、開発用の鍵(`infra/local/certs/*.key`。0600)を読むため、ホストの利用者の uid:gid で動かす(Makefile の `EIAF_UID` / `EIAF_GID`)。ホストで root として実行した場合は 65532 にし、`gen-dev-certs.sh` が鍵の所有者を 65532 にする。本番では Secret の配布の仕組みで鍵を渡し、イメージの既定の 65532 で動かす。
+- **root で動かさない**。
+  - **ローカルでは、ホストの利用者の uid で動かして 0600 の鍵を読む**(compose の `user` に Makefile の `EIAF_UID` / `EIAF_GID` を渡す)。鍵(`infra/local/certs/*.key`)は、`make certs` を実行した利用者だけが読める。
+  - ホストの uid が 0(root)なら、`make up` と `make certs` は起動を止めて理由を表示する。root で実行すると、コンテナも root で動き、distroless の nonroot の意味がなくなるため。
+  - **本番では、イメージの固定の nonroot の uid(65532)で動かし、鍵の読み取り権限は Secret の配置で与える**(例: Secret を読み取り専用でマウントし、ファイルのグループをコンテナのグループにして 0440 にする。Kubernetes なら `fsGroup` と Secret の `defaultMode`)。ホストの uid に合わせる形は使わない。
 
 ## Alternatives Considered
 - **Ktor の CIO**: 依存は軽いが、Server は TLS を扱えず、⑤ でエンジンを替えることになる。不採用。
@@ -103,6 +106,7 @@ P05 ④b-2 で、最初のサービス(order-service)を起動できる形にす
 - **キーストア(PKCS#12)のファイルを渡す**: キーストアのパスワードという秘密情報が増え、APISIX(PEM を使う)と形式が分かれる。不採用。
 - **eclipse-temurin の JRE に root 以外の利用者を加える**: シェルとパッケージがあり攻撃面が大きい。不採用(P05 ⑤ の計画で決めた)。
 - **鍵を 0644 にして、イメージの既定の uid 65532 で動かす**: 同じホストのほかの利用者が鍵を読める。ホストの利用者の uid で動かす形にした。不採用。
+- **ホストで root として実行した場合は、65532 で動かし、鍵の所有者を 65532 に変える**: ⑤b ではこの形にしたが、root で運用する手順を残すことになり、鍵の所有者がホストの利用者と食い違う。root では止める形に変えた(P05 ⑤c)。不採用。
 
 ## Consequences(トレードオフ)
 - デプロイの手順が 2 段階(migrate → serve)になる。compose(§2)と、本番の配備の仕組み(Job・init container など)で順序を守る必要がある。
@@ -117,3 +121,4 @@ P05 ④b-2 で、最初のサービス(order-service)を起動できる形にす
 - 2026-10-01: 作成(P05 ④b-2)。
 - 2026-10-01: P05 ⑤a で、予算切れの応答を Ktor の既定の 504 から 503 `deadline-exceeded`(Problem Details、`Retry-After`)に変えた(§3 の表)。契約(order-api.v1 の `ServiceUnavailable`)と INTEGRATION_STANDARDS §6 にも加えた。
 - 2026-10-01: P05 ⑤b で、§6(API は mTLS だけで受け、SAN の許可の一覧を確かめる。ヘルスチェックは平文のポート。証明書の有効期限の確認と、7 日を切ったときの作り直し)と §7(distroless の nonroot のイメージ)を加えた。compose の `order-migrate` → `order-service` の順序を実装した(§2)。
+- 2026-10-01: P05 ⑤c で、§7 を直した。ホストの uid が 0(root)なら `make up` / `make certs` を止める(以前は 65532 で動かし、鍵の所有者を変えていた)。本番では固定の nonroot の uid で動かし、鍵の読み取り権限は Secret の配置で与えることを書いた。
