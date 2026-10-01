@@ -19,6 +19,12 @@ public interface AnchorStore {
 
     /** [prefix] の下のすべての版(削除マーカーを含む)を、内容と保持の設定とともに返す。 */
     public fun listVersions(prefix: String): Result<List<AnchorVersion>, AuditError>
+
+    /**
+     * [prefix] の下で最後に保存された版(削除マーカーを除く)を、内容と保持の設定とともに返す。版がなければ null。
+     * 一覧は版の情報だけを読み、内容はこの 1 版だけを読む(アンカーの保存の起点を得るため。AnchorCycle)。
+     */
+    public fun latest(prefix: String): Result<AnchorVersion?, AuditError>
 }
 
 /**

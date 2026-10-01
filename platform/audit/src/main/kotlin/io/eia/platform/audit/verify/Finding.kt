@@ -78,6 +78,19 @@ public sealed interface Finding {
         override fun describe(): String = "表の件数 $tableRows 件のうち、検証できたのは $verifiedRows 件です(seq か hash が NULL の行、または (seq, hash) まで同じ行がある)"
     }
 
+    /**
+     * 差分の検証(アンカーの保存の前。AnchorCycle)で、末尾の記録まで読めない(末尾の `seq` や `hash` が NULL・重複など)。
+     * 全体の検証(`make audit-verify`)では、[RowCountMismatch] などで報告する。
+     */
+    public data class HeadNotReached(
+        val headSeq: Long,
+        val verifiedSeq: Long?,
+    ) : Finding {
+        override val code: String get() = "head_not_reached"
+
+        override fun describe(): String = "末尾の seq=$headSeq まで検証できません(最後に検証できた seq=${verifiedSeq ?: "なし"})"
+    }
+
     // ---- アンカー ----
 
     /** アンカーの `seq` の記録のハッシュが、アンカーのハッシュと一致しない。 */

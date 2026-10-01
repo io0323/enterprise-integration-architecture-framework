@@ -53,7 +53,7 @@ internal fun FakeAuditDb.appendAll(
 
 internal fun FakeAuditDb.verify(pageSize: Int = AuditLogReader.DEFAULT_PAGE_SIZE): List<Finding> {
     val verifier = ChainVerifier()
-    AuditLogReader.forEachRow(connection(), pageSize, verifier::accept).getOrNull()!!
+    AuditLogReader.forEachRow(connection(), pageSize, consumer = verifier::accept).getOrNull()!!
     return verifier.result().findings
 }
 

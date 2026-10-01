@@ -2,7 +2,9 @@
 
 package io.eia.platform.audit
 
+import io.eia.platform.audit.anchor.AnchorCycle
 import io.eia.platform.audit.anchor.AnchorKeys
+import io.eia.platform.audit.anchor.AnchorOutcome
 import io.eia.platform.audit.anchor.AnchorPublisher
 import io.eia.platform.audit.anchor.PublishedAnchor
 import io.eia.platform.audit.anchor.S3AnchorStore
@@ -21,6 +23,7 @@ import io.kotest.matchers.comparables.shouldBeLessThan
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldMatch
+import io.kotest.matchers.types.shouldBeInstanceOf
 import software.amazon.awssdk.core.interceptor.Context
 import software.amazon.awssdk.core.interceptor.ExecutionAttributes
 import software.amazon.awssdk.core.interceptor.ExecutionInterceptor
@@ -35,6 +38,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 private const val FORBIDDEN = 403
@@ -130,6 +134,62 @@ class AuditAnchorIT :
 
             db.tamper("DELETE FROM audit.audit_log WHERE seq >= 4")
             db.verify(service).findings shouldContainExactly listOf(Finding.AnchorRecordMissing(second.key, second.versionId, 5, 3))
+        }
+
+        test("AnchorCycle: 差分を検証して保存し、増えなければ保存しない。再起動の後は S3 の最新の版を起点にし、差分の改竄は保存しない") {
+            val db = env.newDatabase()
+            val service = newService()
+
+            fun cycle() = AnchorCycle(service, storeFor(service), AnchorPublisher(service, storeFor(service), RETENTION))
+
+            fun AnchorCycle.check(): AnchorOutcome = db.app.connection.use { run(it).getOrNull().shouldNotBeNull() }
+            val first = cycle()
+            first.check() shouldBe AnchorOutcome.Empty
+            (1..3).forEach { db.append(log, it) }
+            first.check().shouldBeInstanceOf<AnchorOutcome.Published>().verifiedRecords shouldBe 3
+            first.check() shouldBe AnchorOutcome.Unchanged(3)
+
+            // 再起動したプロセス: S3 で最後に保存された版(seq=3)を起点にし、差分の 2 件だけを検証する
+            val restarted = cycle()
+            restarted.check() shouldBe AnchorOutcome.Unchanged(3)
+            (4..5).forEach { db.append(log, it) }
+            restarted.check().shouldBeInstanceOf<AnchorOutcome.Published>().verifiedRecords shouldBe 2
+            db
+                .verify(service)
+                .also { it.anchorVersionCount shouldBe 2 }
+                .findings
+                .shouldBeEmpty()
+
+            db.append(log, 6)
+            db.tamper("UPDATE audit.audit_log SET actor_id = 'tampered' WHERE seq = 6")
+            restarted.check() shouldBe AnchorOutcome.Rejected(listOf(Finding.HashMismatch(6)))
+            env.admin.listObjectVersions { it.bucket(AuditEnvironment.BUCKET).prefix(AnchorKeys.prefix(service)) }.versions() shouldHaveSize
+                2
+        }
+
+        test("AnchorCycle: サービスが追記を続けている間に繰り返しても、拒否にならない(1 つのスナップショットで読む)") {
+            val db = env.newDatabase()
+            val service = newService()
+            val cycle = AnchorCycle(service, storeFor(service), AnchorPublisher(service, storeFor(service), RETENTION))
+            (1..20).forEach { db.append(log, it) }
+            val running = AtomicBoolean(true)
+            val appended = AtomicInteger()
+            val writer =
+                Thread {
+                    while (running.get()) db.append(log, 1_000 + appended.incrementAndGet())
+                }.apply { start() }
+            try {
+                repeat(5) {
+                    db.app.connection
+                        .use { cycle.run(it) }
+                        .getOrNull()
+                        .shouldBeInstanceOf<AnchorOutcome.Published>()
+                }
+            } finally {
+                running.set(false)
+                writer.join()
+            }
+            db.verify(service).findings.shouldBeEmpty()
         }
 
         test("superuser がトリガーを外して末尾の記録の hash を書き換えると、チェーンとアンカーの照合で検出する") {

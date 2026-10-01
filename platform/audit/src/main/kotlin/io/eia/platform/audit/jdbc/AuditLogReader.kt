@@ -24,6 +24,14 @@ public object AuditLogReader {
         val seq: Long,
         val hash: String,
         val canonicalVersion: Int,
+    ) {
+        val position: Position get() = Position(seq, hash)
+    }
+
+    /** チェーンの中の位置(記録の `seq` と保存された `hash`)。差分の読み込み・検証の起点にする。 */
+    public data class Position(
+        val seq: Long,
+        val hash: String,
     )
 
     public fun readHead(connection: Connection): Result<Head?, AuditError> = sqlCatching { ok(head(connection)) }
@@ -33,7 +41,8 @@ public object AuditLogReader {
     internal fun head(connection: Connection): Head? =
         connection.prepareStatement(SELECT_HEAD).use { statement ->
             statement.executeQuery().use { rows ->
-                if (rows.next()) Head(rows.getLong("seq"), rows.getString("hash"), rows.getInt("canonical_version")) else null
+                // hash を NULL にする改竄でも例外にしない(空の値は検証で一致しない)
+                if (rows.next()) Head(rows.getLong("seq"), rows.getString("hash").orEmpty(), rows.getInt("canonical_version")) else null
             }
         }
 
@@ -43,15 +52,18 @@ public object AuditLogReader {
      *
      * ページングのキーを `seq` だけにすると、主キーを外して `seq` を重複させた行がページの境界で読み飛ばされるため、`hash` と組にする。
      * `seq` や `hash` を NULL にした行はここでは読めないので、[countRows] の件数と照合する(AuditVerification)。
+     *
+     * [after] を指定すると、`(seq, hash)` がその位置より後の行だけを読む(前回のアンカーからの差分。AnchorCycle)。
      */
     public fun forEachRow(
         connection: Connection,
         pageSize: Int = DEFAULT_PAGE_SIZE,
+        after: Position? = null,
         consumer: (StoredRow) -> Unit,
     ): Result<Long, AuditError> =
         sqlCatching {
-            var afterSeq = Long.MIN_VALUE
-            var afterHash = ""
+            var afterSeq = after?.seq ?: Long.MIN_VALUE
+            var afterHash = after?.hash ?: ""
             var count = 0L
             do {
                 val page = page(connection, afterSeq, afterHash, pageSize)

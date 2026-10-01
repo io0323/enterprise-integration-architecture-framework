@@ -74,30 +74,59 @@ public class S3AnchorStore internal constructor(
 
     override fun listVersions(prefix: String): Result<List<AnchorVersion>, AuditError> =
         s3Catching {
-            val versions = mutableListOf<AnchorVersion>()
-            var keyMarker: String? = null
-            var versionIdMarker: String? = null
-            do {
-                val request =
-                    ListObjectVersionsRequest
-                        .builder()
-                        .bucket(config.bucket)
-                        .prefix(prefix)
-                        .keyMarker(keyMarker)
-                        .versionIdMarker(versionIdMarker)
-                        .build()
-                val page = client.listObjectVersions(request)
-                page.deleteMarkers().forEach { marker ->
-                    versions += AnchorVersion(marker.key(), marker.versionId(), marker.lastModified(), true, null, null, null)
+            val versions =
+                listEntries(prefix).map { entry ->
+                    if (entry.isDeleteMarker) {
+                        AnchorVersion(entry.key, entry.versionId, entry.lastModified, true, null, null, null)
+                    } else {
+                        readVersion(entry.key, entry.versionId, entry.lastModified)
+                    }
                 }
-                page.versions().forEach { version -> versions += readVersion(version.key(), version.versionId(), version.lastModified()) }
-                keyMarker = page.nextKeyMarker()
-                versionIdMarker = page.nextVersionIdMarker()
-                // 続きがあると言いながらマーカーを返さない互換ストレージで、同じページを取り続けないようにする
-                val hasNext = page.isTruncated == true && keyMarker != null
-            } while (hasNext)
             ok(versions.sortedWith(compareBy(AnchorVersion::key, AnchorVersion::lastModified, AnchorVersion::versionId)))
         }
+
+    override fun latest(prefix: String): Result<AnchorVersion?, AuditError> =
+        s3Catching {
+            // キーは日付(yyyy-MM-dd)なので、最大のキーの、最も新しい版(同じ時刻なら最新の印のある版)
+            val newest =
+                listEntries(prefix)
+                    .filterNot { it.isDeleteMarker }
+                    .maxWithOrNull(compareBy(VersionEntry::key, VersionEntry::lastModified, VersionEntry::isLatest))
+            ok(newest?.let { readVersion(it.key, it.versionId, it.lastModified) })
+        }
+
+    /** 版の一覧(内容は読まない)。 */
+    private class VersionEntry(
+        val key: String,
+        val versionId: String,
+        val lastModified: Instant,
+        val isDeleteMarker: Boolean,
+        val isLatest: Boolean,
+    )
+
+    private fun listEntries(prefix: String): List<VersionEntry> {
+        val entries = mutableListOf<VersionEntry>()
+        var keyMarker: String? = null
+        var versionIdMarker: String? = null
+        do {
+            val request =
+                ListObjectVersionsRequest
+                    .builder()
+                    .bucket(config.bucket)
+                    .prefix(prefix)
+                    .keyMarker(keyMarker)
+                    .versionIdMarker(versionIdMarker)
+                    .build()
+            val page = client.listObjectVersions(request)
+            page.deleteMarkers().forEach { entries += VersionEntry(it.key(), it.versionId(), it.lastModified(), true, it.isLatest == true) }
+            page.versions().forEach { entries += VersionEntry(it.key(), it.versionId(), it.lastModified(), false, it.isLatest == true) }
+            keyMarker = page.nextKeyMarker()
+            versionIdMarker = page.nextVersionIdMarker()
+            // 続きがあると言いながらマーカーを返さない互換ストレージで、同じページを取り続けないようにする
+            val hasNext = page.isTruncated == true && keyMarker != null
+        } while (hasNext)
+        return entries
+    }
 
     @Suppress("ReturnCount") // 本文を取得できない・読めないときは理由つきの版を返す
     private fun readVersion(

@@ -10,9 +10,7 @@ import io.eia.platform.audit.verify.AuditVerification
 import io.eia.platform.audit.verify.Finding
 import io.eia.platform.audit.verify.VerificationReport
 import io.eia.shared.kernel.Result
-import io.eia.shared.kernel.err
 import io.eia.shared.kernel.getOrNull
-import io.eia.shared.kernel.ok
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
@@ -28,28 +26,6 @@ import java.time.ZoneOffset
 
 private val SERVICE = ServiceName.parse("order").getOrNull()!!
 private val RETENTION: Duration = Duration.ofDays(1)
-
-/** メモリ上のアンカーの保存先。ストレージの時刻は [clock]、保持モードは COMPLIANCE として記録する。 */
-private class InMemoryAnchorStore(
-    private val clock: Clock,
-) : AnchorStore {
-    val versions = mutableListOf<AnchorVersion>()
-    var failure: AuditError? = null
-
-    override fun put(
-        key: String,
-        body: ByteArray,
-        retainUntil: Instant,
-    ): Result<String, AuditError> {
-        failure?.let { return err(it) }
-        val id = "v${versions.size + 1}"
-        versions += AnchorVersion(key, id, clock.instant(), false, body, "COMPLIANCE", retainUntil)
-        return ok(id)
-    }
-
-    override fun listVersions(prefix: String): Result<List<AnchorVersion>, AuditError> =
-        failure?.let { err(it) } ?: ok(versions.filter { it.key.startsWith(prefix) })
-}
 
 class AnchorFlowSpec :
     FunSpec({

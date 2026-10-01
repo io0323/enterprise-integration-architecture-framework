@@ -1,14 +1,12 @@
 package io.eia.platform.audit.verify
 
 import io.eia.platform.audit.AuditError
-import io.eia.platform.audit.AuditMisuse
 import io.eia.platform.audit.anchor.AnchorKeys
 import io.eia.platform.audit.anchor.AnchorStore
 import io.eia.platform.audit.anchor.ServiceName
 import io.eia.platform.audit.jdbc.AuditLogReader
-import io.eia.platform.audit.jdbc.sqlCatching
+import io.eia.platform.audit.jdbc.inReadOnlySnapshot
 import io.eia.shared.kernel.Result
-import io.eia.shared.kernel.err
 import io.eia.shared.kernel.flatMap
 import io.eia.shared.kernel.map
 import io.eia.shared.kernel.ok
@@ -43,7 +41,7 @@ public class AuditVerification(
             }
         val chainVerifier = ChainVerifier(anchorVerifier.checkpoints(versions))
         val (read, tableRows) =
-            when (val result = inSnapshot(connection) { readChain(connection, chainVerifier) }) {
+            when (val result = inReadOnlySnapshot(connection) { readChain(connection, chainVerifier) }) {
                 is Result.Ok -> result.value
                 is Result.Err -> return result
             }
@@ -67,30 +65,6 @@ public class AuditVerification(
     ): Result<Pair<Long, Long>, AuditError> =
         AuditLogReader.forEachRow(connection, consumer = chainVerifier::accept).flatMap { read ->
             AuditLogReader.countRows(connection).map { tableRows -> read to tableRows }
-        }
-
-    /** [block] を 1 つの REPEATABLE READ の読み取り専用トランザクションで実行し、最後に巻き戻して接続の設定を戻す。 */
-    private fun <T> inSnapshot(
-        connection: Connection,
-        block: () -> Result<T, AuditError>,
-    ): Result<T, AuditError> =
-        sqlCatching {
-            if (!connection.autoCommit) {
-                return@sqlCatching err(AuditMisuse("検証は、自動コミットが有効な検証専用の接続で行ってください"))
-            }
-            val isolation = connection.transactionIsolation
-            val readOnly = connection.isReadOnly
-            connection.autoCommit = false
-            try {
-                connection.transactionIsolation = Connection.TRANSACTION_REPEATABLE_READ
-                connection.isReadOnly = true
-                block()
-            } finally {
-                connection.rollback()
-                connection.transactionIsolation = isolation
-                connection.isReadOnly = readOnly
-                connection.autoCommit = true
-            }
         }
 }
 

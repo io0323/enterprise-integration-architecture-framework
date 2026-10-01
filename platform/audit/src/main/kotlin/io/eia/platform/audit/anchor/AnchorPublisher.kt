@@ -14,7 +14,7 @@ import java.time.temporal.ChronoUnit
 /**
  * チェーンの先頭(末尾の記録の `seq` と `hash`)を `anchors/{service}/{date}.json`(date は UTC)に保存する(ADR-0017)。
  *
- * 日次などのスケジュールへの結線は各サービス(P05 以降)で行う。同じ日に何度呼んでもよい(同じキーの版として残る)。
+ * 定期的な保存は [AnchorCycle] が行う(保存の前に、前回のアンカーからの差分を検証する)。同じ日に何度呼んでもよい(同じキーの版として残る)。
  * 保持期限は呼ぶたびに `now + [retention]` とし、COMPLIANCE を明示する(バケットの既定の保持設定には頼らない)。
  */
 public class AnchorPublisher(
@@ -27,14 +27,15 @@ public class AnchorPublisher(
         require(!retention.isNegative && !retention.isZero) { "retention は正の期間にしてください" }
     }
 
-    /** 保存したアンカー。記録が 1 件もなければ null(保存しない)。 */
-    @Suppress("ReturnCount") // 読み込みの失敗・記録なし・保存の結果で返す
-    public fun publish(connection: Connection): Result<PublishedAnchor?, AuditError> {
-        val head =
-            when (val read = AuditLogReader.readHead(connection)) {
-                is Result.Ok -> read.value ?: return ok(null)
-                is Result.Err -> return read
-            }
+    /** 今のチェーンの末尾を保存する(検証しない)。記録が 1 件もなければ null(保存しない)。 */
+    public fun publish(connection: Connection): Result<PublishedAnchor?, AuditError> =
+        when (val read = AuditLogReader.readHead(connection)) {
+            is Result.Ok -> read.value?.let(::publish) ?: ok(null)
+            is Result.Err -> read
+        }
+
+    /** [head](検証を済ませた末尾)を保存する。 */
+    public fun publish(head: AuditLogReader.Head): Result<PublishedAnchor, AuditError> {
         val now = clock.instant().truncatedTo(ChronoUnit.MICROS)
         val anchor =
             Anchor(
