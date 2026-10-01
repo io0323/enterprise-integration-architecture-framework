@@ -16,6 +16,7 @@ import io.ktor.server.application.createApplicationPlugin
 import io.ktor.server.routing.RoutingNode
 import io.ktor.server.routing.RoutingRoot
 import io.ktor.util.AttributeKey
+import io.opentelemetry.api.common.AttributeKey.booleanKey
 import io.opentelemetry.api.common.AttributeKey.stringKey
 import io.opentelemetry.api.trace.Span
 import io.opentelemetry.api.trace.SpanKind
@@ -45,6 +46,9 @@ import kotlin.time.TimeSource
  *   タイムアウトは `error.type=timeout` でエラーに数え、Ktor が返す 504 を記録し、WARN を 1 回残す(ADR-0018 §5)。
  * - タイムアウトを例外ではなく応答(リクエストの予算切れの 503 など)で返す部品は、[markTimedOut] で印を付ける。
  *   返したステータスを記録したうえで、例外の場合と同じく `error.type=timeout` で数え、WARN を 1 回残す(ADR-0024 §3)。
+ * - 応答を返し始めた後に予算を超えた場合は、[markDeadlineOverrun] で印を付ける。クライアントは応答を受け取っているので、
+ *   RED の Errors(`error.type`)には数えず、返したステータスのとおりに記録する。予算を超えたことは、別のカウンタ
+ *   `eia.http.server.deadline_overruns` と span の属性 `eia.deadline.overrun` で数え、WARN を 1 回残す(ADR-0024 §3)。
  */
 public val ServerObservability: ApplicationPlugin<ServerObservabilityConfig> =
     createApplicationPlugin("EiaServerObservability", ::ServerObservabilityConfig) {
@@ -97,10 +101,13 @@ private val logger = LoggerFactory.getLogger("io.eia.platform.observability.ktor
 private val IN_FLIGHT = AttributeKey<InFlight>("eia.observability.in-flight")
 private val ROUTE = AttributeKey<String>("eia.observability.route")
 private val TIMED_OUT = AttributeKey<Unit>("eia.observability.timed-out")
+private val DEADLINE_OVERRUN = AttributeKey<Unit>("eia.observability.deadline-overrun")
+private val DEADLINE_OVERRUN_ATTRIBUTE = booleanKey("eia.deadline.overrun")
 private val CORRELATION_ID = stringKey(LogKeys.CORRELATION_ID)
 private const val SERVER_ERROR = 500
 private const val GATEWAY_TIMEOUT = 504
 private const val TIMED_OUT_MESSAGE = "処理がタイムアウトしました(error.type={})"
+private const val OVERRUN_MESSAGE = "応答を返し始めた後に、リクエストの予算を超えました(エラーには数えない。eia.http.server.deadline_overruns)"
 
 /**
  * この処理がタイムアウトし、例外ではなく応答で返したことを [ServerObservability] に伝える。
@@ -108,6 +115,14 @@ private const val TIMED_OUT_MESSAGE = "処理がタイムアウトしました(e
  */
 public fun ApplicationCall.markTimedOut() {
     attributes.put(TIMED_OUT, Unit)
+}
+
+/**
+ * 応答を返し始めた後に、リクエストの予算を超えたことを [ServerObservability] に伝える。クライアントは応答を受け取っているので、
+ * `error.type` は返したステータスのとおりにし、予算を超えたことは別のカウンタと span の属性で数える(ADR-0024 §3)。
+ */
+public fun ApplicationCall.markDeadlineOverrun() {
+    attributes.put(DEADLINE_OVERRUN, Unit)
 }
 
 /** 処理中のリクエスト(終了時にメトリクスと span を閉じるための情報)。 */
@@ -130,6 +145,7 @@ private suspend fun observe(
     try {
         proceed()
         if (call.attributes.contains(TIMED_OUT)) logger.warn(TIMED_OUT_MESSAGE, HttpMetrics.TIMEOUT)
+        if (call.attributes.contains(DEADLINE_OVERRUN)) logger.warn(OVERRUN_MESSAGE)
     } catch (e: Throwable) {
         failure = e
         // Ktor もこの後に応答・記録するが、それは Correlation ID と trace_id の外になる。追跡できるようにここで 1 回記録する
@@ -171,6 +187,10 @@ private fun complete(
     exchange.errorType?.let {
         span.setAttribute(ErrorAttributes.ERROR_TYPE, it)
         span.setStatus(StatusCode.ERROR)
+    }
+    if (call.attributes.contains(DEADLINE_OVERRUN)) {
+        span.setAttribute(DEADLINE_OVERRUN_ATTRIBUTE, true)
+        metrics.recordDeadlineOverrun(exchange, call.attributes.getOrNull(ROUTE), inFlight.integrationId)
     }
     // 例外のメッセージは個人情報を含みうるため、span のイベント(recordException)には入れず、型だけを error.type に残す
     span.end()

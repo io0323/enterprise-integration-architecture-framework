@@ -43,6 +43,32 @@ public class HttpMetrics(
             .setDescription("不正な X-Correlation-Id を受信し、採番し直した件数")
             .build()
 
+    private val deadlineOverruns: LongCounter =
+        meter
+            .counterBuilder("eia.http.server.deadline_overruns")
+            .setUnit("{request}")
+            .setDescription("応答を返し始めた後にリクエストの予算を超えた件数(クライアントは応答を受け取っているので、エラーには数えない)")
+            .build()
+
+    /**
+     * 応答を返し始めた後に、リクエストの予算を超えた件数を数える(ADR-0024 §3)。RED の Errors(`error.type`)はクライアントが
+     * 受け取った結果に合わせるため、この件数はエラーとは別に数える。属性は [recordServer] と同じ(状態コードとメソッド・ルート)。
+     */
+    public fun recordDeadlineOverrun(
+        exchange: HttpExchange,
+        route: String?,
+        integrationId: String?,
+    ) {
+        val attributes =
+            exchange
+                .attributes()
+                .apply {
+                    route?.let { put(HttpAttributes.HTTP_ROUTE, it) }
+                    integrationId?.let { put(INTEGRATION_ID, it) }
+                }.build()
+        deadlineOverruns.add(1, attributes)
+    }
+
     /** 不正な `X-Correlation-Id` を受信した(採番し直した)件数を数える。 */
     public fun recordInvalidCorrelationId(integrationId: String?) {
         invalidCorrelationIds.add(1, integrationId?.let { Attributes.of(INTEGRATION_ID, it) } ?: Attributes.empty())

@@ -7,6 +7,7 @@ import io.eia.platform.observability.context.ObservabilityContext
 import io.eia.platform.observability.context.withSpan
 import io.eia.platform.observability.ktor.client.ClientObservability
 import io.eia.platform.observability.ktor.server.ServerObservability
+import io.eia.platform.observability.ktor.server.markDeadlineOverrun
 import io.eia.platform.observability.ktor.server.markTimedOut
 import io.eia.platform.observability.ok
 import io.eia.shared.kernel.CorrelationId
@@ -247,6 +248,53 @@ class FailureCasesSpec :
                     warnings.single().spanContext.spanId shouldBe budget.spanId
                     // 印のない 503 は、これまでどおりステータスを error.type にする
                     spans.getValue("/v1/unavailable").attributes.get(ERROR_TYPE) shouldBe "503"
+                }
+            }
+
+            test("応答を返し始めた後に予算を超えた処理(markDeadlineOverrun)は、返したステータスのとおり成功として数え、超過は別に数える") {
+                TestTelemetry().use { telemetry ->
+                    testApplication {
+                        application {
+                            install(ServerObservability) { runtime = telemetry.runtime }
+                            routing {
+                                get("/v1/late") {
+                                    call.respondText("ok")
+                                    call.markDeadlineOverrun()
+                                }
+                            }
+                        }
+                        client.get("/v1/late").status shouldBe HttpStatusCode.OK
+                    }
+                    val span = telemetry.spans.single { it.kind == SpanKind.SERVER }
+                    span.attributes.get(HttpAttributes.HTTP_RESPONSE_STATUS_CODE) shouldBe 200L
+                    span.attributes.get(ERROR_TYPE) shouldBe null
+                    span.status.statusCode shouldBe StatusCode.UNSET
+                    span.attributes.get(
+                        io.opentelemetry.api.common.AttributeKey
+                            .booleanKey("eia.deadline.overrun"),
+                    ) shouldBe true
+
+                    val metrics = telemetry.metrics()
+                    val duration =
+                        metrics
+                            .single { it.name == "http.server.request.duration" }
+                            .histogramData.points
+                            .single()
+                    duration.attributes.get(ERROR_TYPE) shouldBe null
+                    val overruns =
+                        metrics
+                            .single { it.name == "eia.http.server.deadline_overruns" }
+                            .longSumData.points
+                            .single()
+                    overruns.value shouldBe 1L
+                    overruns.attributes.get(HttpAttributes.HTTP_ROUTE) shouldBe "/v1/late"
+                    overruns.attributes.get(HttpAttributes.HTTP_RESPONSE_STATUS_CODE) shouldBe 200L
+                    telemetry.logs.count {
+                        it.bodyValue
+                            ?.asString()
+                            .orEmpty()
+                            .startsWith("応答を返し始めた後に")
+                    } shouldBe 1
                 }
             }
 
