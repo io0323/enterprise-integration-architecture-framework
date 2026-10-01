@@ -135,7 +135,7 @@ class OrderAppIT :
         }
 
         context("リクエストの予算と DB 側の打ち切り(ADR-0024 §3)") {
-            test("予算を超える遅い処理は 504。DB の問い合わせも打ち切られ、注文も冪等の記録も残らない。同じキーで再試行すると 1 回だけ処理する") {
+            test("予算を超える遅い処理は 503 deadline-exceeded。DB の問い合わせも打ち切られ、注文も冪等の記録も残らない。同じキーで再試行すると 1 回だけ処理する") {
                 val db = environment.newDatabase()
                 val server = environment.migratedServer(db, mapOf("ORDER_REQUEST_BUDGET" to "2s"))
                 try {
@@ -152,7 +152,12 @@ class OrderAppIT :
                     val started = TimeSource.Monotonic.markNow()
                     val timedOut = client.place(server, environment.token())
 
-                    timedOut.status shouldBe HttpStatusCode.GatewayTimeout
+                    timedOut.status shouldBe HttpStatusCode.ServiceUnavailable
+                    timedOut.headers[HttpHeaders.ContentType] shouldBe "application/problem+json"
+                    timedOut.headers[HttpHeaders.RetryAfter] shouldBe "1"
+                    val problem = timedOut.bodyAsText()
+                    problem shouldContain "\"type\":\"https://eiaf.example/problems/deadline-exceeded\""
+                    problem shouldContain "\"correlationId\":\"${timedOut.headers["X-Correlation-Id"]}\""
                     // 予算(2 秒)+ DB の打ち切りの余裕(0.5 秒)の後に、pg_sleep(30) を待たずに返る
                     started.elapsedNow().inWholeMilliseconds shouldBeLessThan 6_000
                     // DB の問い合わせも打ち切られている(pg_sleep が残っていない)

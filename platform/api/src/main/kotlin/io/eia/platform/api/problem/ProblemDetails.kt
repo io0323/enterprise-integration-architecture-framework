@@ -26,7 +26,7 @@ import org.slf4j.LoggerFactory
  * | [NotFoundException]・どのルートにも当たらない | 404 `not-found` |
  * | メソッドが許可されていない | 405 `about:blank` |
  * | [UnsupportedMediaTypeException] / [PayloadTooLargeException] | 415 / 413 `about:blank` |
- * | キャンセル(クライアントの切断・タイムアウト) | 扱わずに伝える(Ktor と `ServerObservability` の既定の扱い。タイムアウトは 504) |
+ * | キャンセル(クライアントの切断・タイムアウト) | 扱わずに伝える(Ktor の既定でタイムアウトは 504。入口の予算切れは `installRequestDeadline` が 503 で返す) |
  *
  * ルートの処理で [ApplicationCall.respondProblem] / [ApplicationCall.respondError] で返した応答は、上書きしない。
  *
