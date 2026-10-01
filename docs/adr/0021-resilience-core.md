@@ -235,3 +235,4 @@ Framework 13.1 のタイムバジェットは、入口に配分した時間を�
 ## 改訂履歴
 - 2026-09-30: ② の決定を追記した(§3 の分類の置き場所、§7 のメトリクスの一覧と `retryBudgetTokens`・重複登録の検出、§11 の結線)。
 - 2026-09-30: §12(呼び出し元の締め切りの引き継ぎ。`CallDeadline`)を追記した(P05 ①。Issue #48)。§11 と Consequences の「引き継がない」を改めた。呼び出し元の締め切りで打ち切った試行は Circuit Breaker とリトライバジェットに数えず(`DeadlineExceeded.source`)、メトリクスの `kind=caller_deadline` で数える(§1・§2・§3・§7 に反映した)。
+- 2026-10-01: P05 ⑥a で、`eia.resilience.timeouts{kind=caller_deadline}` を RED のダッシュボードのパネルにした(Prometheus では `eia_resilience_timeouts_total`)。急増したときのアラートの候補とし、しきい値は P14 で SLO と合わせて決める。
