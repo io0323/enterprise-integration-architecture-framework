@@ -61,6 +61,7 @@ jobs:
     outputs:
       shared: ${{ steps.filter.outputs.shared }}
       integration: ${{ steps.filter.outputs.integration }}
+      e2e: ${{ steps.filter.outputs.e2e }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
@@ -80,6 +81,18 @@ jobs:
               - 'infra/local/images.env'
               - 'build-logic/**'
               - 'gradle/libs.versions.toml'
+              - '.github/workflows/ci.yml'
+            # サービス・共通部品・契約・基盤のどれかが変わったら、基盤を起動して E2E を実行する(e2e ジョブ)
+            e2e:
+              - 'services/**'
+              - 'platform/**'
+              - 'shared/**'
+              - 'contracts/**'
+              - 'infra/local/**'
+              - 'tests/e2e/**'
+              - 'build-logic/**'
+              - 'gradle/libs.versions.toml'
+              - 'Makefile'
               - '.github/workflows/ci.yml'
 
   # ADR-0004: macosArm64 は macOS ホストでしか実行できないため、shared/** の変更時のみ検証する。
@@ -148,3 +161,65 @@ jobs:
           path: "**/build/test-results/**/*.xml"
           if-no-files-found: warn
           retention-days: 14
+
+  # E2E(tests/e2e。ROADMAP P05 の DoD)。ローカル基盤(core + order)を起動し、公開されたエンドポイントだけで確かめる。
+  # infra.yml(infra/local/** の変更だけで起動する)とは分け、サービス・契約の変更でも動かす。
+  e2e:
+    name: e2e
+    needs: changes
+    if: needs.changes.outputs.e2e == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          cache-provider: basic
+      # ランナーのディスクを空ける(infra.yml と同じ。イメージの取得で Loki が WAL を止めないように)
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker system prune --all --force >/dev/null
+      - name: Up (core + order)
+        id: up
+        run: |
+          start=$(date +%s)
+          make up PROFILE=order
+          echo "seconds=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
+      - name: E2E
+        id: e2e
+        run: |
+          start=$(date +%s)
+          make e2e
+          echo "seconds=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
+      - name: Summary
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "## e2e"
+            echo
+            echo "| 段階 | 秒 |"
+            echo "|---|---|"
+            echo "| 基盤の起動(make up PROFILE=order) | ${{ steps.up.outputs.seconds }} |"
+            echo "| E2E(make e2e) | ${{ steps.e2e.outputs.seconds }} |"
+            echo
+            python3 scripts/ci/test-summary.py
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload test results (JUnit XML)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results-e2e
+          path: "**/build/test-results/**/*.xml"
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Logs on failure
+        if: ${{ failure() }}
+        run: make ps && docker compose -f infra/local/docker-compose.yml --env-file infra/local/images.env --env-file infra/local/.env --profile '*' logs --tail=200
+      - name: Down
+        if: ${{ always() }}
+        run: make clean
