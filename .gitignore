@@ -11,3 +11,4 @@ local.properties
 infra/local/data/
 *.log
 .vscode/
+infra/local/certs/
