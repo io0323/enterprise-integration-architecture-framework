@@ -1,6 +1,11 @@
 package io.eia.platform.api.deadline
 
 import io.eia.platform.api.problem.installProblemDetails
+import io.eia.platform.observability.Observability
+import io.eia.platform.observability.ObservabilityConfig
+import io.eia.platform.observability.TelemetrySinks
+import io.eia.platform.observability.ktor.server.ServerObservability
+import io.eia.shared.kernel.Result
 import io.eia.shared.resilience.CallDeadline
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
@@ -11,10 +16,13 @@ import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.server.application.install
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
 import io.ktor.server.testing.testApplication
+import io.opentelemetry.api.common.AttributeKey
+import io.opentelemetry.sdk.testing.exporter.InMemoryMetricReader
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
@@ -83,6 +91,42 @@ class RequestDeadlineSpec :
                     routing { get("/inner") { withTimeout(20) { delay(5_000) }.also { call.respondText("late") } } }
                 }
                 client.get("/inner").status shouldBe HttpStatusCode.GatewayTimeout
+            }
+        }
+
+        test("応答を返し始めた後に予算を超えても、クライアントが受け取った 200 のとおり成功として数え、超過は別に数える") {
+            // 以前は error.type=timeout として数え、クライアントが受け取った 200 が RED の Errors に入っていた
+            val reader = InMemoryMetricReader.create()
+            val config = (ObservabilityConfig.of("deadline-test") as Result.Ok).value
+            Observability.init(config, TelemetrySinks(metricReaders = listOf(reader)), installLogAppender = false).use { runtime ->
+                testApplication {
+                    application {
+                        install(ServerObservability) { this.runtime = runtime }
+                        installRequestDeadline(200.milliseconds)
+                        routing {
+                            get("/late") {
+                                call.respondText("ok")
+                                delay(1_000) // 応答の後の処理が予算を超える
+                            }
+                        }
+                    }
+                    val response = client.get("/late")
+                    response.status shouldBe HttpStatusCode.OK
+                    response.bodyAsText() shouldBe "ok"
+                }
+                val metrics = reader.collectAllMetrics()
+                val point =
+                    metrics
+                        .single { it.name == "http.server.request.duration" }
+                        .histogramData.points
+                        .single()
+                point.attributes.get(AttributeKey.longKey("http.response.status_code")) shouldBe 200L
+                point.attributes.get(AttributeKey.stringKey("error.type")) shouldBe null
+                metrics
+                    .single { it.name == "eia.http.server.deadline_overruns" }
+                    .longSumData.points
+                    .single()
+                    .value shouldBe 1L
             }
         }
 
