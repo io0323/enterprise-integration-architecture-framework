@@ -134,3 +134,4 @@ P06・P07 で自前で実装する範囲(`platform/messaging-kafka` / `platform/
 ## 改訂履歴
 - 2026-10-01: P05 ⑤a で、タイムアウトを応答で返す部品のための `markTimedOut()` を `ServerObservability` に加えた(§5。リクエストの予算切れの 503 も `error.type=timeout` で数える。ADR-0024 §3)。
 - 2026-10-01: P05 ⑤c で、Gateway が外部の `traceparent` / `tracestate` を捨て、ゲートウェイでトレースを始めることにした(ADR-0023 §4)。APISIX の `opentelemetry` が `plugin_metadata` を読まずに何もしていなかった不具合を直し、Tempo に apisix の span が記録されることを `make verify PROFILE=order` で確かめるようにした。
+- 2026-10-01: P05 ⑥a で、RED のダッシュボード(`Order API — RED`)を Grafana の provisioning で加えた(`infra/local/grafana/provisioning/dashboards/`)。式は §5 の属性(`http_route`・`http_response_status_code`・`error_type`)と、OTLP から Prometheus への名前の変換(`http.server.request.duration` → `http_server_request_duration_seconds_*`、カウンタは `_total`)に合わせた。
