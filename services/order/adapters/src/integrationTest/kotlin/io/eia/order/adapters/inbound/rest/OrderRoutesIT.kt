@@ -46,6 +46,8 @@ import io.ktor.server.routing.routing
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
 import kotlin.time.Clock
+import kotlin.time.Duration.Companion.nanoseconds
+import kotlin.time.Instant
 
 private val RUNTIME =
     Observability.init(
@@ -63,6 +65,15 @@ private const val BODY =
      "futureField":"未知の項目は無視する"}
     """
 
+/**
+ * ナノ秒の端数を持つ時計(Linux の `Clock.System` と同じ精度)。macOS の時計はマイクロ秒までなので、そのままでは
+ * 「登録の応答の時刻と、保存して読み直した時刻(PostgreSQL はマイクロ秒)の食い違い」を再現できない(PR #60 の CI で発生)。
+ */
+private val NANOSECOND_CLOCK =
+    object : Clock {
+        override fun now(): Instant = Clock.System.now() + 505.nanoseconds
+    }
+
 /** order-service の REST を、実際の PostgreSQL・JWT の検証・Problem Details・冪等の処理で組み立てる(app の配線と同じ順序)。 */
 private fun ApplicationTestBuilder.orderService(
     db: OrderDatabase,
@@ -71,7 +82,7 @@ private fun ApplicationTestBuilder.orderService(
     val repository = ExposedOrderRepository(db.database)
     val api =
         OrderApi(
-            placeOrder = PlaceOrderService(repository, ExposedTransactionRunner(db.database), UuidV7OrderIdGenerator(), Clock.System),
+            placeOrder = PlaceOrderService(repository, ExposedTransactionRunner(db.database), UuidV7OrderIdGenerator(), NANOSECOND_CLOCK),
             getOrder = GetOrderService(repository),
             idempotency = IdempotencyHandler(PostgresIdempotencyStore(db.database)),
             transaction = ExposedTransactionBoundary(db.database),
