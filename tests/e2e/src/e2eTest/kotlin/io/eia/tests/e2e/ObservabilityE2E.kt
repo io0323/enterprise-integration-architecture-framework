@@ -77,6 +77,11 @@ private fun series(expr: String): Int {
         .jsonArray.size
 }
 
+private const val ORDER_BODY =
+    """{"customerId":"cust-e2e",""" +
+        """"lines":[{"productId":"prod-1","sku":"SKU-1","quantity":1,"unitPrice":{"amount":"100","currency":"JPY"}}],""" +
+        """"shippingAddress":{"countryCode":"JP","postalCode":"100-0001","city":"Chiyoda","line1":"1-1"}}"""
+
 /** ROADMAP P05 の DoD「トレースが Tempo で、RED がダッシュボードで確認できる」。 */
 class ObservabilityE2E :
     FunSpec({
@@ -112,6 +117,13 @@ class ObservabilityE2E :
 
         test("RED のダッシュボード(Order API — RED)の order-service と Gateway のパネルにデータが出る") {
             repeat(5) { sendRespectingRateLimit(request("$ORDERS/ord-none").GET()) }
+            // 監査のパネルのデータ(注文の受け付けを 1 件)
+            sendRespectingRateLimit(
+                request(ORDERS)
+                    .header("Idempotency-Key", "e2e-red-${UUID.randomUUID()}")
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(ORDER_BODY)),
+            ).statusCode() shouldBe 201
 
             val dashboard =
                 send(
@@ -131,7 +143,7 @@ class ObservabilityE2E :
                     .filter { it.text("type") != "row" }
 
             // 依存先の呼び出しのパネルは P06・P07 まで空、エラーの種類別はエラーがなければ空
-            val optional = listOf("呼び出し元", "依存先", "error.type 別")
+            val optional = listOf("呼び出し元", "依存先", "error.type 別", "監査の追記の失敗")
             val required = panels.filterNot { panel -> optional.any { panel.text("title").contains(it) } }
             val withoutData = {
                 required
