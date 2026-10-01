@@ -6,15 +6,12 @@ import io.eia.platform.api.idempotency.IdempotencyStore
 import io.eia.platform.api.idempotency.Lease
 import io.eia.platform.api.idempotency.RequestFingerprint
 import io.eia.platform.api.idempotency.StoredResponse
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import org.jetbrains.exposed.v1.jdbc.Database
-import org.jetbrains.exposed.v1.jdbc.transactions.suspendTransaction
 import java.sql.Connection
 import java.sql.PreparedStatement
 import java.sql.ResultSet
@@ -215,15 +212,18 @@ internal class ExposedIdempotencyConnections(
 ) : IdempotencyConnections {
     override suspend fun <T> newTransaction(block: (Connection) -> T): T {
         check(database.currentTransaction() == null) { "この操作は、業務のトランザクションの外で呼んでください(すぐに確定させるため)" }
-        return withContext(Dispatchers.IO) { suspendTransaction(database) { block(jdbcConnection()) } }
+        return database.newTransaction { block(jdbcConnection()) }
     }
 
     override suspend fun <T> joinOrNewTransaction(block: (Connection) -> T): T {
         val current = database.currentTransaction()
-        return if (current != null) {
+        // 処理中の記録の取り消し(打ち切られた後の後始末)に使うので、リクエストの締め切りを DB に設定しない
+        return if (current !=
+            null
+        ) {
             block(current.jdbcConnection())
         } else {
-            withContext(Dispatchers.IO) { suspendTransaction(database) { block(jdbcConnection()) } }
+            database.newTransaction(applyDeadline = false) { block(jdbcConnection()) }
         }
     }
 
