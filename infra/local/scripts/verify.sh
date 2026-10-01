@@ -662,13 +662,13 @@ verify_dashboard() {
     -d "{\"resourceMetrics\":[{\"resource\":{\"attributes\":[{\"key\":\"service.name\",\"value\":{\"stringValue\":\"eiaf-verify\"}}]},\"scopeMetrics\":[{\"metrics\":[{\"name\":\"eia.resilience.timeouts\",\"unit\":\"{call}\",\"sum\":{\"aggregationTemporality\":2,\"isMonotonic\":true,\"dataPoints\":[$(point 1 "$prev"),$(point 3 "$now")]}}]}]}]}"
 
   # すべてのパネルの式を Prometheus で評価する。式がエラーにならず、データを返すこと
-  # (エラーの種類別のパネルは、エラーがなければ空でよい)。メトリクスの送信は 10 秒ごとなので、少し待ってやり直す
+  # (エラーの種類別と、監査の追記の失敗のパネルは、失敗がなければ空でよい)。メトリクスの送信は 10 秒ごとなので、少し待ってやり直す
   local result=""
   for _ in $(seq 1 12); do
     result="$(json 'json.dumps([[p["title"], t["expr"]] for p in d["dashboard"]["panels"] if p["type"] != "row" for t in p["targets"]])' <<<"$dash" |
       python3 -c '
 import json, sys, urllib.error, urllib.parse, urllib.request
-allowed_empty = ("Errors(error.type 別)",)
+allowed_empty = ("Errors(error.type 別)", "監査の追記の失敗(種類別)")
 bad = []
 for title, expr in json.load(sys.stdin):
     q = urllib.parse.urlencode({"query": expr.replace("$__rate_interval", "2m")})
