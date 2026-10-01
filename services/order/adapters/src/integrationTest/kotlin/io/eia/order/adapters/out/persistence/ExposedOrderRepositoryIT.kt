@@ -9,6 +9,8 @@ import io.eia.order.domain.OrderStatus
 import io.eia.shared.kernel.ConflictError
 import io.eia.shared.kernel.NotFoundError
 import io.eia.shared.kernel.UnexpectedError
+import io.eia.shared.kernel.money.Currency
+import io.eia.shared.kernel.money.CurrencyResolver
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.equals.shouldBeEqual
 import io.kotest.matchers.shouldBe
@@ -40,6 +42,30 @@ class ExposedOrderRepositoryIT :
             read?.orderedAt shouldBe ORDERED_AT
             read?.lines?.map { it.lineAmount.minorUnits } shouldBe listOf(3_150L, 99L)
             repository.findById(OrderId.parse("ord-none").ok()).ok() shouldBe null
+        }
+
+        listOf(
+            Triple("通貨を解決できない", "UPDATE orders SET currency = 'XXX'", "currency"),
+            Triple("顧客 ID が不正", "UPDATE orders SET customer_id = ' '", "customer_id"),
+            Triple("配送先が不正", "UPDATE orders SET ship_country_code = 'jp'", "ship_*"),
+            Triple("明細の値が不正", "UPDATE order_lines SET sku = '' WHERE line_number = 2", "sku"),
+        ).forEach { (name, corruption, field) ->
+            test("保存された値が domain の規則を満たさなければ UnexpectedError(理由は項目の名前だけ): $name") {
+                val db = environment.newDatabase()
+                val repository = ExposedOrderRepository(db.database)
+                repository.insert(order()).ok()
+                db.superuser { it.createStatement().use { s -> s.execute(corruption) } }
+
+                repository.findById(order().id).error() shouldBeEqual UnexpectedError("保存された注文の値が不正です($field)")
+            }
+        }
+
+        test("通貨は、注入した CurrencyResolver で戻す(解決できなければ UnexpectedError)") {
+            val db = environment.newDatabase()
+            ExposedOrderRepository(db.database).insert(order()).ok()
+
+            val jpyOnly = ExposedOrderRepository(db.database, CurrencyResolver.of(listOf(Currency.JPY)))
+            jpyOnly.findById(order().id).error() shouldBeEqual UnexpectedError("保存された注文の値が不正です(currency)")
         }
 
         test("同じ ID の注文は ConflictError(明細も書かない)") {
