@@ -94,7 +94,8 @@ REST のエラーは RFC 9457 の Problem Details(`application/problem+json`)で
 | `not-found` | 404 | リソースがない・どのルートにも当たらない |
 | `conflict` | 409 | リソースの状態と矛盾する要求 |
 | `rate-limited` | 429 | Rate Limit の超過(`Retry-After` 付き) |
-| `service-unavailable` | 503 | 依存先が一時的に使えない・締め切りを超えた(分かれば `Retry-After`) |
+| `service-unavailable` | 503 | 依存先が一時的に使えない・呼び出し元の締め切りを超えた(分かれば `Retry-After`) |
+| `deadline-exceeded` | 503 | 入口で決めたリクエストの予算を超えた(`Retry-After` 付き)。処理は確定していないので、同じ `Idempotency-Key` で再試行できる(ADR-0024 §3) |
 | `internal-error` | 500 | 想定外のエラー |
 | `unauthorized` | 401 | トークンがない・不正(理由は返さない。ADR-0019 §5) |
 | `forbidden` | 403 | スコープが足りない |

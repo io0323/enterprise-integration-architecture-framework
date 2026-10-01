@@ -225,7 +225,10 @@ components:
           schema:
             $ref: "#/components/schemas/Problem"
     ServiceUnavailable:
-      description: 一時的に利用できない
+      description: |
+        一時的に利用できない(`service-unavailable`)、
+        またはリクエストの予算(処理の時間の上限)を超えた(`deadline-exceeded`)。
+        どちらも処理は確定していない。`Retry-After` の後に、POST は同じ `Idempotency-Key` で再試行できる。
       headers:
         Retry-After:
           $ref: "#/components/headers/RetryAfter"
