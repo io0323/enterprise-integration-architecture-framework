@@ -3,13 +3,14 @@
 ## 対象
 - 監査記録(`audit.audit_log`)とアンカー(S3 の `eiaf-audit` の `anchors/{service}/{date}.json`)を定期的に検査するとき。
 - `make audit-verify SERVICE=<name>` が終了コード 1(改竄の疑い)か 2(実行できない)を返したとき。
+- order-service のアンカーの定期的な保存が、改竄の疑いで保存を拒否したとき、またはアラートの候補(最後に検査が成功してから間隔の 2 倍)に当たったとき(下の「アンカーの定期的な保存」)。
 
 仕組みは ADR-0017 を参照。
 
 ## 実行
 ```bash
 export JAVA_HOME=<JDK 21 以上>   # Apple Silicon では aarch64 の JDK
-make up PROFILE=file              # PostgreSQL と SeaweedFS
+make up PROFILE=order             # PostgreSQL と SeaweedFS(file / b2b でもよい)
 make audit-verify SERVICE=order   # order / inventory / payment / shipping / batch-etl / legacy-sim
 echo $?                           # 0 = 改竄の疑いなし / 1 = 改竄の疑いあり / 2 = 実行できない
 ```
@@ -36,8 +37,23 @@ echo $?                           # 0 = 改竄の疑いなし / 1 = 改竄の疑
 | `anchor_delete_marker` | アンカーを消そうとした跡(削除マーカー) | 削除マーカーを作った資格情報。audit の資格情報はバケットポリシーで拒否されるため、管理者の資格情報の利用を調べる |
 | `anchor_not_compliance` / `anchor_retention_too_short` | アンカーの保持の設定が弱い | 保存したアプリの設定(保持期間)。バケットの既定の保持設定が書き換えられていないか |
 | `anchor_invalid` | アンカーの形式・キーの不一致・読めない | その版の内容。audit の資格情報で読めるか(バケットポリシー) |
+| `head_not_reached` | (アンカーの保存の前の検証だけ)末尾の記録まで読めない | 末尾の行の `seq` と `hash` が NULL でないか、`seq` の重複。全体の検証(`make audit-verify`)の `row_count_mismatch` などとあわせて見る |
 
 5. 本番では、セキュリティのインシデントとして扱い、所定の連絡先に報告する。ローカルでは、統合テストや手作業による改竄の再現でないかを確かめる。
+
+## アンカーの定期的な保存(order-service。ADR-0017 §5)
+order-service は、起動の直後と `ORDER_AUDIT_ANCHOR_INTERVAL`(既定 1 時間。ローカルは 1 分)ごとに、前回のアンカーからの差分を検証してアンカーを保存する。記録が増えていなければ保存しない。保存の前の検証は差分だけなので、**前回のアンカーより前の改竄は、このページの `make audit-verify` を定期的に行って見つける**。
+
+- **ERROR `監査記録に改竄の疑いがあります(<code>)` と `改竄の疑いがあるため、監査のアンカーを保存しません`**
+  - 保存を拒否した。解消するまで、毎回の検査で拒否し続ける(`eia.audit.anchor.checks` の `outcome=rejected`)。
+  - 上の「終了コード 1 のとき」と同じ手順で保全し、調べる。`<code>` は上の表のとおり。`make audit-verify SERVICE=order` でチェーン全体も検査する。
+  - `anchor_invalid`(最後に保存された版が解釈できない)のときは、起点にできないため保存しない。書込み用の資格情報(`eiaf-audit-order`)が漏れていないかを調べる(ADR-0017 §8)。
+- **アラートの候補に当たった**(ダッシュボード「Order API — RED」の「アンカーの最後の検査の成功からの経過」が、破線の「間隔の 2 倍」を超えた。式は `time() - eia_audit_anchor_last_success_seconds > 2 * eia_audit_anchor_interval_seconds`)
+  - 「アンカーの検査の結果(種類別)」で、`rejected`(上)か `error` かを見る。
+  - `error` なら、order-service の WARN `監査のアンカーの検査を終えられませんでした ... (error.code=...)` を見る。`audit_storage_unavailable` は SeaweedFS(`make ps`・`make logs SERVICE=seaweedfs`)、`audit_storage_rejected` の `AccessDenied` は `ORDER_AUDIT_S3_*` と SeaweedFS の identity(`eiaf-audit-order`)の反映を確かめる。
+  - どちらも出ていなければ、order-service が動いているか(`make ps`)を確かめる。
+  - 注文がないだけでは当たらない(記録が増えていないことの確認も、検査の成功に数える)。「アンカーの最後の保存からの経過」が伸びるのは正常。
+- **起動のときの WARN `監査のアンカーの保存は無効です`**: `ORDER_AUDIT_ANCHOR_ENABLED=false`。S3 のない統合テストのための設定で、本番とローカル基盤では使わない。
 
 ## 終了コード 2(実行できない)のとき
 | 出力 | 対処 |

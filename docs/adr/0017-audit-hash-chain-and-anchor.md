@@ -95,7 +95,7 @@ P04a ④ で `platform/audit` を作る。Framework 14.1 は「誰が・いつ�
   {"format":"eiaf.audit.anchor.v1","service":"order","seq":123,"hash":"<64 桁>","canonical_version":1,"created_at":"2026-09-28T23:59:59.9Z"}
   ```
   - 記録が 1 件もなければ保存しない。
-  - スケジュール(日次など)への結線は各サービス(P05 以降)で行う。
+  - 定期的な保存は `AnchorCycle` が行う(下の「定期的な保存と、保存の前の検証」)。
 - **`{date}` は UTC の日付**で区切る(サービスの場所や夏時間によらず、キーが一意に決まる)。
 - **同じ日付のキーに 2 回以上保存してよい**。バケットのバージョニングにより、上書きされず版として残る。検証は全版を照合する(§6)。
 - **COMPLIANCE と保持期限は、put のたびに明示する**(`x-amz-object-lock-mode` / `x-amz-object-lock-retain-until-date`)。バケットの既定の保持設定には頼らない。既定の保持設定を GOVERNANCE に書き換えても、保存したアンカーが COMPLIANCE になることを、統合テストで確かめた。
@@ -113,7 +113,24 @@ P04a ④ で `platform/audit` を作る。Framework 14.1 は「誰が・いつ�
   - **同期呼び出しの 4 点セット(Framework 13)の扱い**
     - Timeout: 接続 5 秒、呼び出し全体 30 秒を明示する。
     - Retry: SDK の既定の再試行に任せる。
-    - Circuit Breaker と Fallback は付けない。アンカーの保存は日次などのバッチの処理で、利用者の要求の経路にないため。失敗は `AuditStorageUnavailable`(Retryable)で返し、呼び出し側のスケジューラが次の回で再実行する。
+    - Circuit Breaker と Fallback は付けない。アンカーの保存は定期的な処理で、利用者の要求の経路にないため。失敗は `AuditStorageUnavailable`(Retryable)で返し、スケジューラが次の回で再実行する。
+- **定期的な保存と、保存の前の検証(P05 ⑦b。2026-10-02)**
+  - `AnchorCycle`(`platform/audit`)が 1 回分を行い、サービスが間隔ごとに呼ぶ。order-service は serve の中で、起動の直後と `ORDER_AUDIT_ANCHOR_INTERVAL` ごとに呼ぶ。
+    - **間隔の既定は 1 時間**。検出の遅れの上限(§8)と、アンカーの版の数(1 日に最大 24 版)の釣り合いで決めた。本番の間隔は、監査の要件(改竄を何時間以内に固定するか)で環境ごとに決める。
+    - **ローカル基盤(compose)は 1 分**。`make verify`・`make e2e` の中で、保存までを待てるようにするため。
+    - S3 には order の書込み用の identity(`eiaf-audit-order`。§7)で接続する。保持期間は `ORDER_AUDIT_ANCHOR_RETENTION`(既定はなく、有効なら必須。compose は `P1D`)。
+    - S3 のない環境(order の統合テスト)だけ、`ORDER_AUDIT_ANCHOR_ENABLED=false` で止める。止めると、起動のときに WARN を残す。
+  - **記録が増えていなければ保存しない。** 末尾が前回のアンカーと同じなら、検査の成功(`unchanged`)として終える。注文がない間に版が増え続けないようにするため。
+  - **検証の起点**は前回のアンカー。プロセスで最初の回は、ストレージで最後に保存された版を読む(`AnchorStore.latest`。版の一覧は内容を読まずに取り、内容はその 1 版だけを読む)。版がなければ、チェーンの先頭から検証する。最後の版が解釈できなければ、起点にせず保存もしない(`anchor_invalid`)。検証していない記録をアンカーとして固定しないため。
+  - **保存の前の検証は、前回のアンカーからの差分だけ**(A17-3)。
+    - 1 つの REPEATABLE READ の読み取り専用トランザクションで、末尾を読み、前回のアンカーの直後の行から末尾までを `ChainVerifier` で検証する(起点の `seq` と `hash` から始める)。
+    - 差分の中の書き換え・削除・差し込みと、差分の先頭が前回のアンカーにつながらないこと(`broken_link`)を検出する。末尾が前回のアンカーの `seq` 以下に戻った場合(末尾からの削除・前回のアンカーの記録の書き換え)は、`anchor_record_missing` / `anchor_hash_mismatch` にする。末尾の記録まで読めない場合(末尾の行の `hash` が NULL など)は `head_not_reached` にする。
+    - 改竄の疑いがあれば**保存しない**。ERROR のログ(`seq` とアンカーのキーだけ)と、メトリクス(`outcome=rejected`)を残す。起点を変えないので、解消するまで毎回拒否する(対応は `docs/runbooks/audit-verify.md`)。
+    - 保存は、スナップショットを閉じてから行う(S3 への書込みの間、トランザクションを開けたままにしない)。保存するのは検証した末尾で、保存の時点の末尾ではない。
+  - **役割の分担**: **前回のアンカーより前の記録の改竄は、`make audit-verify` の定期的な全体の検証で見つける**(§6)。保存の前の検証を差分だけにするのは、間隔ごとの処理の時間を、チェーンの長さによらず一定にするため。差分の検証は、表の件数との照合(`row_count_mismatch`。`seq` や `hash` を NULL にした行)も行わない。これも全体の検証の役割とする。
+    - ローカルでは、`make verify PROFILE=order` と `make e2e` が、アンカーの保存を待ってから全体の検証を行い、OK でアンカーがあることを確かめる(`scripts/audit-anchored.sh`)。
+    - 本番では、全体の検証を定期的なジョブ(日次など)にする。前回のアンカーより前の改竄が見つかるまでの遅れは、その間隔が上限になる。ジョブの結線は、本番の基盤を決めるときに行う(このリポジトリの範囲の外)。
+  - 統合テスト(`AuditAnchorIT`。PostgreSQL と SeaweedFS)で、差分だけの検証・増えていないときの保存の省略・再起動の後の起点の復元・差分の改竄での保存の拒否・追記を続けている間の繰り返しで誤って拒否しないことを確かめた。
 - **アンカーの JSON は、契約(`contracts/`)には置かない。** このリポジトリの中でだけ書き・読む、ストレージの内部の形式として扱う。形式はこの ADR と `Anchor.FORMAT`(`eiaf.audit.anchor.v1`)で固定する。外部の監査人に渡す形式が必要になったら、`contracts/files/` にスキーマを置いて契約にする。
 
 ### 6. 改竄の検査
@@ -125,6 +142,7 @@ P04a ④ で `platform/audit` を作る。Framework 14.1 は「誰が・いつ�
   - `unknown_canonical_version`: 直列化の方法がない版
   - `malformed_record`: 解釈できない行(details が文字列以外を含む、NOT NULL の列が NULL、時刻が `'infinity'` など記録できる範囲の外)
   - `row_count_mismatch`: 表の件数と検証できた件数が一致しない
+  - `head_not_reached`: 保存の前の差分の検証(§5)で、末尾の記録まで読めない。全体の検証では使わない(`row_count_mismatch` などで報告する)
 
   - ページングのキーは `(seq, hash)` の組にする。`seq` だけだと、主キーを外して `seq` を重複させた行が、ページの境界で読み飛ばされる。
     - 実行計画(2026-09-29、PostgreSQL 18.6、10 万件): 主キーの索引で `seq >= ?` の範囲を絞り、`(seq, hash)` の並べ替えは Incremental Sort になる。1 ページ(1,000 件)あたり 1〜2 ms で、追加の索引は要らない。
@@ -172,7 +190,7 @@ P04a ④ で `platform/audit` を作る。Framework 14.1 は「誰が・いつ�
 - **対策: 書込み用の identity を拒否するバケットポリシー**(`infra/local/seaweedfs/audit-bucket-policy.json`。Principal は `eiaf-audit-order`。サービスを足すときは同じ形で足す。複数の Principal を 1 つの文に並べる形を SeaweedFS が解釈するかは、そのときに確かめる)
   - SeaweedFS 4.47 は、Principal の `{"AWS": "arn:aws:iam::<アカウント>:user/<identity 名>"}` を解釈する。アカウントの部分は `*` でも `000000000000` でも一致した。`"eiaf-audit"`・`{"AWS":"eiaf-audit"}`・`arn:aws:iam:::user/...`(アカウントが空)・アクセスキーでの指定は効かなかった(拒否されない)。
   - 次の 9 つを Deny する: `PutBucketObjectLockConfiguration`・`PutBucketVersioning`・`PutBucketPolicy`・`DeleteBucketPolicy`・`DeleteBucket`・`DeleteObject`・`DeleteObjectVersion`・`PutObjectLegalHold`・`BypassGovernanceRetention`。
-  - 設定は `seaweedfs-init`(AWS CLI のイメージ。file / b2b profile)が、管理者の資格情報で `make up` のたびに行う。何度実行しても結果は同じ。バケットは Object Lock を有効にして作り、既定の保持設定は付けない。
+  - 設定は `seaweedfs-init`(AWS CLI のイメージ。file / b2b / order profile)が、管理者の資格情報で `make up` のたびに行う。何度実行しても結果は同じ。バケットは Object Lock を有効にして作り、既定の保持設定は付けない。
   - ポリシーを設定した後の確認(`make verify PROFILE=file` の `s3-audit.sh` と `AuditAnchorIT`):
     - audit の資格情報では、上の 9 つの操作と、ほかのバケットへの list / put / get / delete、バケットの作成が、すべて AccessDenied になる。
     - 管理者は、Object Lock の設定・バージョニング・ポリシー・Legal Hold の変更を続けられる。
@@ -185,14 +203,21 @@ P04a ④ で `platform/audit` を作る。Framework 14.1 は「誰が・いつ�
   - 保存済みの版の保持期限は、誰も短縮できない。
 
 ### 8. 残るリスク
-- **最後のアンカーより後の記録**は、トリガーを外せるロールなら、次のアンカーまでの間に書き換え・削除して、チェーンをつなぎ直せる。検出の遅れは、アンカーの間隔が上限になる。間隔は各サービスがスケジュールで決める(P05 以降)。
+- **最後のアンカーより後の記録**は、トリガーを外せるロールなら、次のアンカーまでの間に書き換え・削除して、チェーンをつなぎ直せる。検出の遅れは、アンカーの間隔が上限になる。order-service の間隔は既定で 1 時間(§5。A17-2)。
+- **前回のアンカーより前の記録の改竄**は、保存の前の検証(差分だけ。§5)では見つからない。全体の検証(`make audit-verify`)を定期的に行って見つける。本番でその定期的な実行を結線するまでは、全体の検証を行う間隔が、検出の遅れの上限になる。
+- **書込み用の資格情報(`eiaf-audit-order`)を持つ者は、解釈できないアンカーを保存して、以降の保存を止められる**(起点にできない版は、保存を拒否する。§5)。止まったことは下のアラートの候補で、版そのものは全体の検証(`anchor_invalid`)で見つける。記録の改竄の検出が漏れるわけではない。
 - **保持期限が切れたアンカー**は、管理者が削除できる。削除された後は、その時点までの照合ができない。保持期間は、監査証跡の保存期間以上に設定する(本番は環境ごとの設定)。
 - ~~**書込み用の資格情報 `eiaf-audit` は全サービスで共有している**~~(Issue #43 で解消。§7)。以下は P04a ④ の時点の記述。あるサービスの資格情報で、ほかのサービスのプレフィックスにも COMPLIANCE の版を書ける。書いた版は保持期限まで消せないので、そのサービスの検査は保持期限まで `anchor_invalid` か `anchor_hash_mismatch` になりうる。記録そのものは改竄できないため、検出の漏れにはならない。ただし、検査を失敗させ続ける妨害はできる。P04a の時点では、アンカーを書くサービスはまだない。
 - **管理者の S3 の資格情報**(`eiaf`)は、audit のバケットのポリシーを外せる。本番では、管理者の資格情報の利用を監査し、S3 の細かい権限(IAM のポリシー)でアプリ用と管理用を分ける。
 - ローカルの S3 は平文の http(ADR-0008 の「転送路の暗号化」、#29)。
-- **アンカーを保存する前にチェーンを検証していない。** 前回のアンカーより後に改竄されていれば、改竄後の状態をアンカーとして固定する。ただし、前回のアンカーより前の改竄は、その後の検査で検出できる。保存の前の検証は、P05 でスケジュールに結線するときに、処理の時間とあわせて決める。
-- **アンカーが古くなったことを検出しない。** アンカーがない場合は「注意」を出すが、終了コードは 0 のまま。スケジュールの結線漏れや、アンカーの保存の失敗が続く状況は、P05 で最後に成功した時刻のメトリクスとアラートを設けて扱う。
-- **監査のメトリクス**: 追記の所要時間・ロックの待ち・失敗は、P05 ⑦a で `AuditMetrics`(`eia.audit.append.duration`・`eia.audit.lock.wait`・`eia.audit.append.failures`)にし、RED のダッシュボードに置いた(`AuditLog` の `listener`)。アンカーの保存の成否は ⑦b で扱う。
+- ~~**アンカーを保存する前にチェーンを検証していない。**~~(P05 ⑦b で解消。A17-3)保存の前に、前回のアンカーからの差分を検証し、改竄の疑いがあれば保存しない(§5)。
+- ~~**アンカーが古くなったことを検出しない。**~~(P05 ⑦b で解消。A17-4)`AnchorMetrics` で次のメトリクスを出し、RED のダッシュボードの「監査の記録」の行にパネルを置いた。
+  - `eia.audit.anchor.last_success`: **最後に検査が成功した時刻**(記録が増えていないことの確認、または保存の成功)。**監視の対象はこれ**。初期値は起動の時刻(起動してから一度も成功しない場合も、条件に当たる)。
+  - `eia.audit.anchor.last_published`: 最後にアンカーを保存した時刻。記録が増えなければ保存しないので、注文がない間は古くなり続ける。これでアラートを出すと誤報になるため、監視には使わず、別のメトリクスとして残す。
+  - `eia.audit.anchor.interval`: 検査の間隔。`eia.audit.anchor.checks`: 検査の回数(`outcome` = `empty` / `unchanged` / `published` / `rejected` / `error`)。
+  - **アラートの候補**: `time() - eia_audit_anchor_last_success_seconds > 2 * eia_audit_anchor_interval_seconds`(最後に検査が成功してから、間隔の 2 倍を超えた)。保存の失敗・改竄の疑いでの拒否・スケジューラの停止が続くと当たる。注文がない状態で間隔を何度過ぎても当たらないことを、`AnchorMetricsSpec` で確かめた。ローカル基盤には Alertmanager がないので、ルールとしては置かず、式を `make verify` と E2E で評価する。本番の基盤で、アラートのルールにする。
+  - `make audit-verify` は、アンカーがなくても「注意」を出して終了コード 0 のまま(アンカーを保存しないサービスもあるため)。アンカーを保存する order の検証では、`scripts/audit-anchored.sh` でアンカーがあることも確かめる。
+- **監査のメトリクス**: 追記の所要時間・ロックの待ち・失敗は、P05 ⑦a で `AuditMetrics`(`eia.audit.append.duration`・`eia.audit.lock.wait`・`eia.audit.append.failures`)にし、RED のダッシュボードに置いた(`AuditLog` の `listener`)。アンカーの保存の成否は ⑦b で `AnchorMetrics` にした(上)。
 - **traceparent と Correlation ID** は、呼び出し側が `AuditEvent` に渡す。今の処理の値は `platform/observability` の `CurrentTrace.get()` で取れる(P05 ⑦a。order の記録で使う)。
 
 ## Alternatives Considered
@@ -209,10 +234,11 @@ P04a ④ で `platform/audit` を作る。Framework 14.1 は「誰が・いつ�
 ## Consequences(トレードオフ)
 - 1 つのサービスの DB での追記は、直列にした分だけ上限がある(ローカルの目安で毎秒 2,000 件前後)。これを超える量を記録する連携では、記録の粒度(1 件の業務トランザクションに 1 件)を見直すか、チェーンを分ける設計(ADR の改訂)が要る。
 - アプリ用のロールを追加したため、既存のローカル基盤では `make clean` が 1 回必要になる。
-- `file` / `b2b` profile に、初期化のコンテナ(`seaweedfs-init`)が増えた。初期化を終えた後も待機し(メモリの上限 256 MiB)、ヘルスチェックで完了を示す。終了させると、CI の Compose v2.38.2 の `up --wait` が、終了コード 0 でも失敗として扱う(PR #44 の CI で確認)。待機させることで、`make up` は初期化の完了まで待つ。
+- `file` / `b2b` / `order` profile に、初期化のコンテナ(`seaweedfs-init`)が増えた(order は P05 ⑦b から。order-service はバケットの初期化の後に起動する)。初期化を終えた後も待機し(メモリの上限 256 MiB)、ヘルスチェックで完了を示す。終了させると、CI の Compose v2.38.2 の `up --wait` が、終了コード 0 でも失敗として扱う(PR #44 の CI で確認)。待機させることで、`make up` は初期化の完了まで待つ。
 - 監査テーブルのマイグレーションは、各サービスのマイグレーションとは別の履歴で管理される。サービスは起動時に `AuditSchema.migrate` も呼ぶ(P05 以降)。
 - SeaweedFS を更新するときは、バケットポリシーの Principal の解釈と Write の範囲が変わっていないかを、`make verify PROFILE=file` で確かめる。
 
 ## 改訂履歴
 - 2026-10-01: P05 ⑧ で、アンカーの書込み用の identity をサービスごと(`eiaf-audit-{service}`。`Write:eiaf-audit/anchors/{service}/*`)にし、共有の `eiaf-audit` を削除した(§7・§8。Issue #43)。`S3AnchorStoreConfig` の資格情報の名前の既定をやめ、`make audit-verify` は `AUDIT_VERIFY_S3_*` の名前で読む。
 - 2026-10-01: P05 ⑦a で、order-service が注文の受け付けを記録するようにした(§1。誰が = `azp`。利用者のトークンの経路ができたら `sub` も記録する。本文は冪等の指紋と同じ正規化の SHA-256)。監査のメトリクス(`AuditMetrics`)と `CurrentTrace` を加え、§8 の該当の項目を更新した。カタログに `audit`(機密区分と保持期間)を加えた。
+- 2026-10-02: P05 ⑦b で、order-service がアンカーを定期的に保存するようにした(§5。A17-2〜4)。`AnchorCycle` は、記録が増えていなければ保存せず、保存の前に前回のアンカーからの差分だけを検証する。前回のアンカーより前の改竄は、`make audit-verify` の定期的な全体の検証で見つける(役割の分担)。監視は「最後に検査が成功した時刻」で行い、「最後にアンカーを保存した時刻」は別のメトリクスにした(§8)。`AnchorStore.latest`・`head_not_reached` を加え、SeaweedFS を order profile に加えた。
