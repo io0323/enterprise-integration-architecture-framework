@@ -71,8 +71,12 @@ paths:
           $ref: "#/components/responses/UnprocessableContent"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+        "502":
+          $ref: "#/components/responses/BadGateway"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
   /v1/orders/{orderId}:
     get:
       tags: [orders]
@@ -108,8 +112,12 @@ paths:
           $ref: "#/components/responses/NotFound"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+        "502":
+          $ref: "#/components/responses/BadGateway"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
 components:
   securitySchemes:
     oauth2:
@@ -232,6 +240,23 @@ components:
       headers:
         Retry-After:
           $ref: "#/components/headers/RetryAfter"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    BadGateway:
+      description: |
+        ゲートウェイがサービスに接続できなかった(`about:blank`。ゲートウェイが返す)。
+        サービスに届いていないので、POST は同じ `Idempotency-Key` で再試行できる。
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    GatewayTimeout:
+      description: |
+        ゲートウェイの上流のタイムアウト(`about:blank`。ゲートウェイが返す)。**結果は分からない**(サービスが処理を確定したかもしれない)。
+        POST は同じ `Idempotency-Key` で再試行する(確定していれば保存した応答が返り、二重には処理されない)。
+        サービスが予算切れで返す 503 `deadline-exceeded`(確定していない)とは区別する(ADR-0024 §3)。
       content:
         application/problem+json:
           schema:

@@ -100,5 +100,6 @@ REST のエラーは RFC 9457 の Problem Details(`application/problem+json`)で
 | `unauthorized` | 401 | トークンがない・不正(理由は返さない。ADR-0019 §5) |
 | `forbidden` | 403 | スコープが足りない |
 | `about:blank` | 405 / 413 / 415 | 状態コード以上の意味がない応答 |
+| `about:blank` | 502 / 504 | ゲートウェイが返す(サービスに接続できない / 上流のタイムアウト。504 は結果が分からない。ADR-0023) |
 
 種類を追加するときは、`ProblemType`・この表・契約(OpenAPI)の説明を同時に更新する。
