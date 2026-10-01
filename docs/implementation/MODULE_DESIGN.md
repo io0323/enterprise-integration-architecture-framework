@@ -75,6 +75,8 @@ services/order/
   adapters/src/main/resources/db/order/                       # Flyway(所有者のロールで適用。アプリのロールには必要な権限だけを付ける)
   app/src/main/kotlin/io/eia/order/app/                       # package io.eia.order.app
     Main.kt(migrate / serve), OrderCommands.kt, OrderServer.kt(Netty), OrderModule.kt(Koin), OrderConfig.kt   # ADR-0024
+    ServerTls.kt(PEM の鍵と証明書・有効期限), ClientCertificateAllowList.kt(SAN の許可の一覧), TlsRoutes.kt(ポートの分け方)   # ADR-0024 §6
+  app/Dockerfile                                              # distroless の nonroot。ADR-0024 §7
 ```
 
 **永続化の方針**(全サービスで揃える):
