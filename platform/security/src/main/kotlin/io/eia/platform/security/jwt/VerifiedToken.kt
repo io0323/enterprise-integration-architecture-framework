@@ -78,6 +78,9 @@ public enum class JwtRejectionReason(
 
     /** 必須のクレーム(`iss` / `aud` / `exp` / `iat`)がない。 */
     MISSING_CLAIM("missing_claim"),
+
+    /** `azp` も `client_id` もない(`JwtVerifierConfig.requireClientId` が有効なときだけ)。 */
+    MISSING_CLIENT_ID("missing_client_id"),
     BAD_ISSUER("bad_issuer"),
     BAD_AUDIENCE("bad_audience"),
 
