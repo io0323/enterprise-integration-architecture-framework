@@ -1,10 +1,13 @@
 package io.eia.order.app
 
+import io.eia.platform.security.secret.EnvSecretProvider
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.ValidationError
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
+import kotlin.time.Duration.Companion.days
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
@@ -94,5 +97,62 @@ class OrderConfigSpec :
                     ).shouldBeInstanceOf<Result.Ok<OrderConfig>>()
                     .value
             config.tls shouldBe TlsFiles("/certs/order-service.crt", "/certs/order-service.key", "/certs/ca.crt")
+        }
+
+        context("監査のアンカーの保存(ADR-0017 §5)") {
+            test("既定は有効・間隔 1 時間・バケット eiaf-audit。保持期間と接続先には既定がない") {
+                val anchor =
+                    OrderConfig
+                        .fromEnvironment(REQUIRED)
+                        .shouldBeInstanceOf<Result.Ok<OrderConfig>>()
+                        .value.anchor
+                anchor shouldBe
+                    AuditAnchorConfig(enabled = true, interval = 1.hours, retention = null, endpoint = null, bucket = "eiaf-audit")
+            }
+
+            test("有効なら、serve には接続先・保持期間・資格情報(eiaf-audit-order)が必須。値は読まず、取れるかだけを確かめる") {
+                val anchor =
+                    OrderConfig
+                        .fromEnvironment(REQUIRED)
+                        .shouldBeInstanceOf<Result.Ok<OrderConfig>>()
+                        .value.anchor
+                anchor.serveViolations(EnvSecretProvider(emptyMap())).map { it.field } shouldBe
+                    listOf(
+                        "ORDER_AUDIT_S3_ENDPOINT",
+                        "ORDER_AUDIT_ANCHOR_RETENTION",
+                        "ORDER_AUDIT_S3_ACCESS_KEY",
+                        "ORDER_AUDIT_S3_SECRET_KEY",
+                    )
+                val env =
+                    REQUIRED +
+                        mapOf(
+                            "ORDER_AUDIT_S3_ENDPOINT" to "http://seaweedfs:8333",
+                            "ORDER_AUDIT_ANCHOR_RETENTION" to "P1D",
+                            "ORDER_AUDIT_ANCHOR_INTERVAL" to "1m",
+                            "ORDER_AUDIT_S3_ACCESS_KEY" to "access",
+                            "ORDER_AUDIT_S3_SECRET_KEY" to "secret",
+                        )
+                val configured =
+                    OrderConfig
+                        .fromEnvironment(env)
+                        .shouldBeInstanceOf<Result.Ok<OrderConfig>>()
+                        .value.anchor
+                configured.retention shouldBe 1.days
+                configured.interval shouldBe 1.minutes
+                configured.serveViolations(EnvSecretProvider(env)) shouldBe emptyList()
+            }
+
+            test("無効(false)なら、serve でも何も求めない。true / false 以外は違反") {
+                OrderConfig
+                    .fromEnvironment(REQUIRED + mapOf("ORDER_AUDIT_ANCHOR_ENABLED" to "false"))
+                    .shouldBeInstanceOf<Result.Ok<OrderConfig>>()
+                    .value.anchor
+                    .serveViolations(EnvSecretProvider(emptyMap())) shouldBe emptyList()
+                OrderConfig
+                    .fromEnvironment(REQUIRED + mapOf("ORDER_AUDIT_ANCHOR_ENABLED" to "no", "ORDER_AUDIT_ANCHOR_RETENTION" to "-1d"))
+                    .shouldBeInstanceOf<Result.Err<ValidationError>>()
+                    .error.violations
+                    .map { it.field } shouldBe listOf("ORDER_AUDIT_ANCHOR_ENABLED", "ORDER_AUDIT_ANCHOR_RETENTION")
+            }
         }
     })

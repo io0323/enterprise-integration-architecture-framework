@@ -97,6 +97,8 @@ internal class AppEnvironment : AutoCloseable {
             "OIDC_ISSUER" to ISSUER,
             "OIDC_JWKS_URI" to "http://127.0.0.1:${jwks.address.port}/jwks",
             "EIA_LOG_FORMAT" to "console",
+            // 統合テストには S3 がない。アンカーの保存は platform/audit の AuditAnchorIT と E2E で確かめる
+            AuditAnchorConfig.ENABLED to "false",
         ) + tlsEnv(serverCert) + extra
 
     /** サーバ証明書と鍵、クライアント証明書を検証する CA のファイル。 */

@@ -1,6 +1,7 @@
 package io.eia.order.app
 
 import io.eia.platform.security.secret.SecretName
+import io.eia.platform.security.secret.SecretProvider
 import io.eia.shared.kernel.FieldViolation
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.ValidationError
@@ -8,6 +9,7 @@ import io.eia.shared.kernel.err
 import io.eia.shared.kernel.ok
 import java.net.URI
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
@@ -28,6 +30,11 @@ import kotlin.time.Duration.Companion.seconds
  * | `ORDER_REQUEST_BUDGET` | 10s | serve |
  * | `ORDER_IDEMPOTENCY_LEASE` | 60s | serve |
  * | `ORDER_IDEMPOTENCY_PURGE_INTERVAL` | 5m | serve |
+ * | `ORDER_AUDIT_ANCHOR_ENABLED` | `true` | serve(監査のアンカーの定期的な保存。`false` は統合テストなど S3 がない環境だけ。ADR-0017 §5) |
+ * | `ORDER_AUDIT_ANCHOR_INTERVAL` | 1h | serve(アンカーの検査と保存の間隔) |
+ * | `ORDER_AUDIT_ANCHOR_RETENTION` | なし(有効なら serve で必須) | serve(アンカーの COMPLIANCE の保持期間。本番は監査証跡の保存期間で決める) |
+ * | `ORDER_AUDIT_S3_ENDPOINT` / `ORDER_AUDIT_S3_BUCKET` | なし(有効なら serve で必須)/ `eiaf-audit` | serve |
+ * | `ORDER_AUDIT_S3_ACCESS_KEY` / `ORDER_AUDIT_S3_SECRET_KEY`(または `_FILE`) | なし(有効なら serve で必須) | serve(`eiaf-audit-order`。ADR-0017 §7) |
  *
  * 期間は ISO 8601(`PT10S`)か Kotlin の表記(`10s`)で書く。
  */
@@ -45,6 +52,7 @@ internal data class OrderConfig(
     val requestBudget: Duration,
     val idempotencyLease: Duration,
     val purgeInterval: Duration,
+    val anchor: AuditAnchorConfig,
 ) {
     companion object {
         val OWNER_PASSWORD = SecretName("ORDER_DB_PASSWORD")
@@ -79,6 +87,14 @@ internal data class OrderConfig(
                     requestBudget = reader.duration("ORDER_REQUEST_BUDGET", 10.seconds),
                     idempotencyLease = reader.duration("ORDER_IDEMPOTENCY_LEASE", 60.seconds),
                     purgeInterval = reader.duration("ORDER_IDEMPOTENCY_PURGE_INTERVAL", 5.minutes),
+                    anchor =
+                        AuditAnchorConfig(
+                            enabled = reader.boolean(AuditAnchorConfig.ENABLED, default = true),
+                            interval = reader.duration("ORDER_AUDIT_ANCHOR_INTERVAL", 1.hours),
+                            retention = reader.optionalDuration(AuditAnchorConfig.RETENTION),
+                            endpoint = reader.optional(AuditAnchorConfig.ENDPOINT)?.let(URI::create),
+                            bucket = reader.optional("ORDER_AUDIT_S3_BUCKET") ?: "eiaf-audit",
+                        ),
                 )
             if (config.allowedClients.isEmpty()) reader.violation("ORDER_TLS_ALLOWED_CLIENTS", "1 つ以上の名前が必要です")
             if (config.httpsPort != 0 && config.httpsPort == config.healthPort) {
@@ -89,6 +105,35 @@ internal data class OrderConfig(
             }
             return reader.result(config)
         }
+    }
+}
+
+/** 監査のアンカーの定期的な保存(ADR-0017 §5)。serve だけで使う。 */
+internal data class AuditAnchorConfig(
+    val enabled: Boolean,
+    val interval: Duration,
+    val retention: Duration?,
+    val endpoint: URI?,
+    val bucket: String,
+) {
+    /** 有効なときに serve で必須の値の違反。資格情報は値ではなく、[secrets] から取れるかだけを確かめる。 */
+    fun serveViolations(secrets: SecretProvider): List<FieldViolation> {
+        if (!enabled) return emptyList()
+        val hint = "監査のアンカーの保存に必須です(無効にするなら $ENABLED=false)"
+        return listOfNotNull(
+            FieldViolation(ENDPOINT, hint).takeIf { endpoint == null },
+            FieldViolation(RETENTION, hint).takeIf { retention == null },
+        ) + listOf(ACCESS_KEY, SECRET_KEY).filter { secrets.get(it) is Result.Err }.map { FieldViolation(it.value, hint) }
+    }
+
+    companion object {
+        const val ENABLED = "ORDER_AUDIT_ANCHOR_ENABLED"
+        const val RETENTION = "ORDER_AUDIT_ANCHOR_RETENTION"
+        const val ENDPOINT = "ORDER_AUDIT_S3_ENDPOINT"
+
+        /** order のアンカーの書込み用の identity(`eiaf-audit-order`。ADR-0017 §7)。 */
+        val ACCESS_KEY = SecretName("ORDER_AUDIT_S3_ACCESS_KEY")
+        val SECRET_KEY = SecretName("ORDER_AUDIT_S3_SECRET_KEY")
     }
 }
 
@@ -127,12 +172,25 @@ private class EnvReader(
     fun duration(
         name: String,
         default: Duration,
-    ): Duration {
-        val raw = optional(name) ?: return default
+    ): Duration = optionalDuration(name) ?: default
+
+    fun optionalDuration(name: String): Duration? {
+        val raw = optional(name) ?: return null
         val parsed = Duration.parseOrNull(raw)?.takeIf { it.isPositive() }
-        if (parsed == null) violation(name, "正の期間です(例: 10s、PT10S)")
-        return parsed ?: default
+        if (parsed == null) violation(name, "正の期間です(例: 10s、PT10S、P1D)")
+        return parsed
     }
+
+    fun boolean(
+        name: String,
+        default: Boolean,
+    ): Boolean =
+        when (optional(name)) {
+            null -> default
+            "true" -> true
+            "false" -> false
+            else -> default.also { violation(name, "true か false です") }
+        }
 
     fun violation(
         name: String,
