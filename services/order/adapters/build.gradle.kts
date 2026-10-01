@@ -1,5 +1,7 @@
 plugins {
     id("eia.jvm-library")
+    // REST の DTO(契約の PlaceOrderRequest / Order)
+    id("org.jetbrains.kotlin.plugin.serialization")
 }
 
 dependencies {
@@ -8,6 +10,8 @@ dependencies {
     implementation(project(":platform:audit"))
     // 冪等の保存先の Port(IdempotencyStore)を PostgreSQL で実装する(ADR-0022 §3)
     api(project(":platform:api"))
+    // REST の認証(eiaJwt)と認可(requireScopes)。JWT の検証は platform/security だけで行う(ADR-0019)
+    api(project(":platform:security"))
     // 永続化: Exposed はトランザクションの管理に使い、ロックの意味が重要な SQL は PreparedStatement で書く(MODULE_DESIGN §3)
     api(libs.exposed.core)
     api(libs.exposed.jdbc)
@@ -24,4 +28,10 @@ dependencies {
     integrationTestImplementation(libs.testcontainers.postgresql)
     integrationTestImplementation(libs.postgresql)
     integrationTestImplementation(libs.kotlinx.coroutines.core)
+    // REST の統合テスト: 実際の JWT(テスト用の鍵で署名し、JWKS をローカルの HTTP で配る)と、応答の契約のスキーマでの検証
+    integrationTestImplementation(project(":platform:observability"))
+    integrationTestImplementation(libs.ktor.server.test.host)
+    integrationTestImplementation(libs.nimbus.jose.jwt)
+    integrationTestImplementation(libs.json.schema.validator)
+    integrationTestImplementation(libs.jackson3.dataformat.yaml)
 }
