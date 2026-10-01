@@ -484,7 +484,8 @@ verify_order() {
   else
     fail "order-service: ゲートウェイの証明書での応答が ${code:-なし}"
   fi
-  local key="verify-$$-$(date +%s)" body first second
+  local key="verify-$$-$(date +%s)" body first second posted_at
+  posted_at="$(date +%s)"
   body='{"customerId":"cust-verify","lines":[{"productId":"prod-1","sku":"SKU-1","quantity":1,"unitPrice":{"amount":"1000","currency":"JPY"}}],"shippingAddress":{"countryCode":"JP","postalCode":"100-0001","city":"Chiyoda","line1":"1-1"}}'
   first="$("${gw[@]}" -o - -w '\n%{http_code}' -X POST "$orders" -H "Idempotency-Key: $key" -H 'Content-Type: application/json' -d "$body" || true)"
   second="$("${gw[@]}" -D - -o - -X POST "$orders" -H "Idempotency-Key: $key" -H 'Content-Type: application/json' -d "$body" || true)"
@@ -519,8 +520,41 @@ verify_order() {
     fail "order-service: root で動いている (user='$user')"
   fi
 
+  verify_audit_anchor "$posted_at"
   verify_gateway
   verify_dashboard
+}
+
+# 監査のアンカー(ADR-0017 §5)。order-service が 1 分ごと(compose の設定)に、前回のアンカーからの差分を検証して保存する。
+# 上の POST の記録を含むアンカーの保存を待ち、全体の検査(make audit-verify)が OK で、アンカーがあることを確かめる
+verify_audit_anchor() { # verify_audit_anchor <POST した時刻(UNIX 時刻)>
+  local since="$1" prom="http://localhost:19090/api/v1/query" published="" output status=0
+  promql() { curl -fsS --get "$prom" --data-urlencode "query=$1" | json 'd["data"]["result"][0]["value"][1] if d["data"]["result"] else ""'; }
+  for _ in $(seq 1 18); do
+    published="$(promql 'max(eia_audit_anchor_last_published_seconds{job="order-service"})' 2>/dev/null || true)"
+    [[ -n "$published" ]] && python3 -c "import sys; sys.exit(0 if float('$published') >= $since else 1)" && break
+    published=""
+    sleep 10
+  done
+  if [[ -n "$published" ]]; then
+    pass "監査: order-service が POST の後にアンカーを保存した(eia.audit.anchor.last_published)"
+  else
+    fail "監査: POST の後 180 秒のうちに、アンカーの保存がメトリクスに出ない"
+  fi
+  # アラートの候補(最後に検査が成功してから間隔の 2 倍を超えた)の式。ラベルが一致して 1 系列になり、条件には当たらないこと
+  local margin
+  margin="$(promql 'time() - eia_audit_anchor_last_success_seconds{job="order-service"} - 2 * eia_audit_anchor_interval_seconds{job="order-service"}' 2>/dev/null || true)"
+  if [[ -n "$margin" ]] && python3 -c "import sys; sys.exit(0 if float('$margin') < 0 else 1)"; then
+    pass "監査: アラートの候補の式(最後の検査の成功から間隔の 2 倍)を評価でき、条件に当たらない"
+  else
+    fail "監査: アラートの候補の式が想定外 (${margin:-系列なし})"
+  fi
+  output="$("$here/scripts/audit-anchored.sh" order 2>&1)" || status=$?
+  if [[ "$status" == 0 ]]; then
+    pass "監査: make audit-verify SERVICE=order が OK(アンカーあり。$(grep -o -E 'records=[0-9]+ head_seq=[0-9]+ anchor_versions=[0-9]+' <<<"$output"))"
+  else
+    fail "監査: make audit-verify SERVICE=order が OK でないか、アンカーがない ($(grep -E '^(NG|ERROR|注意)|^audit-anchored' <<<"$output" | head -3 | tr '\n' ' '))"
+  fi
 }
 
 # ------------------------------------------------------------------ order: Gateway(APISIX → order-service。ADR-0023)

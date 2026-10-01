@@ -77,11 +77,6 @@ private fun series(expr: String): Int {
         .jsonArray.size
 }
 
-private const val ORDER_BODY =
-    """{"customerId":"cust-e2e",""" +
-        """"lines":[{"productId":"prod-1","sku":"SKU-1","quantity":1,"unitPrice":{"amount":"100","currency":"JPY"}}],""" +
-        """"shippingAddress":{"countryCode":"JP","postalCode":"100-0001","city":"Chiyoda","line1":"1-1"}}"""
-
 /** ROADMAP P05 の DoD「トレースが Tempo で、RED がダッシュボードで確認できる」。 */
 class ObservabilityE2E :
     FunSpec({
@@ -142,8 +137,9 @@ class ObservabilityE2E :
                     .map { it.jsonObject }
                     .filter { it.text("type") != "row" }
 
-            // 依存先の呼び出しのパネルは P06・P07 まで空、エラーの種類別はエラーがなければ空
-            val optional = listOf("呼び出し元", "依存先", "error.type 別", "監査の追記の失敗")
+            // 依存先の呼び出しのパネルは P06・P07 まで空、エラーの種類別はエラーがなければ空。
+            // アンカーの最後の保存は、新しい基盤では最初の保存(次の検査。1 分ごと)まで空(保存は AuditAnchorE2E で確かめる)
+            val optional = listOf("呼び出し元", "依存先", "error.type 別", "監査の追記の失敗", "アンカーの最後の保存")
             val required = panels.filterNot { panel -> optional.any { panel.text("title").contains(it) } }
             val withoutData = {
                 required
