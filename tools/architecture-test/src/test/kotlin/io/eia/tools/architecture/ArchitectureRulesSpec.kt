@@ -116,6 +116,11 @@ class ArchitectureRulesSpec :
                     listOf("UsesNimbus.kt", "UsesNimbusQualified.kt")
             }
 
+            test("services の本番コードで Resilience(...) を直接作る(完全修飾名を含む)") {
+                ArchitectureRules.resilienceOnlyThroughMetrics(violations).fileNames() shouldContainExactlyInAnyOrder
+                    listOf("CreatesResilience.kt", "CreatesResilienceQualified.kt")
+            }
+
             test("services の domain と application(テストを含む)で Canonical Model を import・完全修飾名で参照する") {
                 val found = ArchitectureRules.canonicalModelOutsideDomainAndApplication(violations)
                 found.fileNames() shouldContainExactlyInAnyOrder
@@ -152,6 +157,7 @@ class ArchitectureRulesSpec :
                 ArchitectureRules.otelSdkOnlyInAllowedModules(compliant).shouldBeEmpty()
                 ArchitectureRules.nimbusOnlyInSecurity(compliant).shouldBeEmpty()
                 ArchitectureRules.canonicalModelOutsideDomainAndApplication(compliant).shouldBeEmpty()
+                ArchitectureRules.resilienceOnlyThroughMetrics(compliant).shouldBeEmpty()
             }
 
             test("platform 間の依存は許可した一覧だけで、循環がない(テストの依存とコメントは数えない)") {

@@ -287,6 +287,22 @@ internal object ArchitectureRules {
             .filter { CANONICAL_FORBIDDEN_PATHS.containsMatchIn(it.path) }
             .flatMap { file -> packageUses(file, CANONICAL_PACKAGE, CANONICAL_RULE, "変換は adapters で行う。ADR-0010 Decision 7") }
 
+    private const val RESILIENCE_RULE = "Resilience の作り方"
+    private val RESILIENCE_CONSTRUCTOR = Regex("""(?<![\w.])(io\.eia\.shared\.resilience\.)?Resilience\s*\(""")
+    private val COMMENT = Regex("""//[^\n]*|/\*[\s\S]*?\*/""")
+
+    /**
+     * services の本番コードは `Resilience(...)` を直接作らない。依存先ごとの `Resilience` は、app が `ResilienceMetrics.resilience(...)`
+     * (platform/reliability)で作って Koin で配る(#8 のチェックリスト。ADR-0021 §7・§11)。直接作ると、Circuit Breaker の遷移と
+     * リトライがメトリクスに出ず、呼び出しごとに作れば Circuit Breaker の状態も捨てられる。テストのソースセットは除く。
+     */
+    fun resilienceOnlyThroughMetrics(codeBase: CodeBase): List<Violation> =
+        codeBase
+            .filesUnder("services/")
+            .filter { !TEST_SOURCE_SET.containsMatchIn(it.path) }
+            .filter { RESILIENCE_CONSTRUCTOR.containsMatchIn(it.code.replace(IMPORT_OR_PACKAGE_LINE, "").replace(COMMENT, "")) }
+            .map { Violation(RESILIENCE_RULE, it.path, "Resilience(...) を直接作っています(ResilienceMetrics.resilience(...) で作る)") }
+
     /** [file] が [packageName] を import または完全修飾名で参照していれば、その違反。 */
     private fun packageUses(
         file: SourceFile,
