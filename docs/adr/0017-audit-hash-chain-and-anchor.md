@@ -36,7 +36,11 @@ P04a ④ で `platform/audit` を作る。Framework 14.1 は「誰が・いつ�
 
 - 識別子の欄(actor・target・destination・payload_ref)は伏せない。制御文字と長さだけを検査する(256〜1,024 文字)。ここに個人情報や本文を入れないのは、呼び出し側の責務とする(参照キーを入れる)。
 - 違反は `InvalidAuditEvent` で返し、DB には触れない。
-- `actor_id` などは個人データになりうる。`audit.audit_log` の機密区分と保持期間は、利用するサービスのカタログ(`contracts/catalog/*.yaml`)に記載する(P05 以降。Framework 16)。
+- `actor_id` などは個人データになりうる。`audit.audit_log` の機密区分と保持期間は、利用するサービスのカタログ(`contracts/catalog/*.yaml` の `audit`。INTEGRATION_STANDARDS §5)に記載する(Framework 16)。order(INT-SALES-001)は `confidential`、保持期間は `legal`(法令に従う。期間は環境ごとの設定。Framework 14.1)。
+- **order-service の記録(P05 ⑦a)**: 注文の受け付けを `order.create` で、注文の保存と同じトランザクションで記録する。
+  - **誰が = 呼び出し元のクライアント(トークンの `azp`。`actor_type = service`)**。**将来、利用者個人のトークンで呼ばれる経路ができたら、利用者(`sub`)も記録する。**
+  - 本文の代わり(`payload_sha256`)は、要求の本文を冪等の指紋と同じ形で正規化したバイト列の SHA-256(`platform/api` の `CanonicalBody`。空白やキーの順序の違いで値が変わらない)。
+  - 再送(`Idempotent-Replayed`)・検証の違反(4xx)は、業務の更新がないので記録しない。監査の追記に失敗したら、注文も保存しない。
 
 ### 2. テーブルと権限: 各サービスの DB に置き、チェーンはサービスごとに独立させる
 - テーブルは、各サービスの DB のスキーマ `audit` に `audit.audit_log` として作る。
@@ -188,8 +192,8 @@ P04a ④ で `platform/audit` を作る。Framework 14.1 は「誰が・いつ�
 - ローカルの S3 は平文の http(ADR-0008 の「転送路の暗号化」、#29)。
 - **アンカーを保存する前にチェーンを検証していない。** 前回のアンカーより後に改竄されていれば、改竄後の状態をアンカーとして固定する。ただし、前回のアンカーより前の改竄は、その後の検査で検出できる。保存の前の検証は、P05 でスケジュールに結線するときに、処理の時間とあわせて決める。
 - **アンカーが古くなったことを検出しない。** アンカーがない場合は「注意」を出すが、終了コードは 0 のまま。スケジュールの結線漏れや、アンカーの保存の失敗が続く状況は、P05 で最後に成功した時刻のメトリクスとアラートを設けて扱う。
-- **監査のメトリクス**(追記の失敗・所要時間・ロックの待ち、アンカーの保存の成否): P05 で、`platform/observability` を経由して出す。
-- **traceparent と Correlation ID** は、呼び出し側が `AuditEvent` に渡す。現在のコンテキストから埋めるヘルパは、P05 でサービスに結線するときに用意する。
+- **監査のメトリクス**: 追記の所要時間・ロックの待ち・失敗は、P05 ⑦a で `AuditMetrics`(`eia.audit.append.duration`・`eia.audit.lock.wait`・`eia.audit.append.failures`)にし、RED のダッシュボードに置いた(`AuditLog` の `listener`)。アンカーの保存の成否は ⑦b で扱う。
+- **traceparent と Correlation ID** は、呼び出し側が `AuditEvent` に渡す。今の処理の値は `platform/observability` の `CurrentTrace.get()` で取れる(P05 ⑦a。order の記録で使う)。
 
 ## Alternatives Considered
 - **`SELECT ... FOR UPDATE` でチェーンの先頭の行をロックする**: 先頭を持つ表が 1 つ増え、その行の更新(UPDATE)が必要になり、追記専用の表の権限の設計と合わない。advisory lock なら表を増やさずに済む。不採用。
@@ -211,3 +215,4 @@ P04a ④ で `platform/audit` を作る。Framework 14.1 は「誰が・いつ�
 
 ## 改訂履歴
 - 2026-10-01: P05 ⑧ で、アンカーの書込み用の identity をサービスごと(`eiaf-audit-{service}`。`Write:eiaf-audit/anchors/{service}/*`)にし、共有の `eiaf-audit` を削除した(§7・§8。Issue #43)。`S3AnchorStoreConfig` の資格情報の名前の既定をやめ、`make audit-verify` は `AUDIT_VERIFY_S3_*` の名前で読む。
+- 2026-10-01: P05 ⑦a で、order-service が注文の受け付けを記録するようにした(§1。誰が = `azp`。利用者のトークンの経路ができたら `sub` も記録する。本文は冪等の指紋と同じ正規化の SHA-256)。監査のメトリクス(`AuditMetrics`)と `CurrentTrace` を加え、§8 の該当の項目を更新した。カタログに `audit`(機密区分と保持期間)を加えた。
