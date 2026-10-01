@@ -180,3 +180,4 @@ P04a ③ で `platform/security` を作る。Framework 12.1 は、受信側で�
 - 2026-09-30: §4 のトークンの取得が、呼び出し元の締め切り(`CallDeadline`)を引き継ぐようにした(P05 ①。ADR-0021 §12・Issue #48)。取得中の呼び出しを待つ時間も呼び出し元の残り時間までにし、呼び出し元の締め切りで打ち切った失敗は待っていた呼び出しに共有しない。
 - 2026-09-30: §5 の 401 / 403 / 503 の本文を `platform/api` の Problem Details にした(P05 ②a。ADR-0022 §2)。`type` を `https://eiaf.example/problems/{unauthorized,forbidden,service-unavailable}` にし、`correlationId` を付ける。拒否した理由を返さない方針は変えない。
 - 2026-10-01: `JwtVerifierConfig.requireClientId` を追加した(既定は無効。既存の利用者の振る舞いは変わらない)。有効にすると、`azp` も `client_id` もないトークンを `missing_client_id` で拒否し、401 `invalid_token` を返す。呼び出し元のクライアントでデータを分ける API(Idempotency-Key の範囲。ADR-0022 §3)で有効にする。order-service は有効にする(P05 ④b-1)。
+- 2026-10-01: P05 ⑤c で、Gateway(APISIX)でも JWT を検証することにした(署名・exp・iss・aud・azp。スコープはサービスだけが確かめる。ADR-0023 §2)。Rate Limit の検証用に、2 つ目の client-credentials クライアント `eiaf-e2e-b` を realm に加えた(スコープの扱いは §8 のまま)。

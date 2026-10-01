@@ -22,3 +22,6 @@ INTEGRATION_STANDARDS と CLAUDE.md は `/v{n}/{resource}` だけを規定して
 ## Consequences(トレードオフ)
 - Gateway のルート定義に書き換え設定が 1 つ増える。
 - 設計書 16.1、INTEGRATION_STANDARDS §1、CLAUDE.md §5 を 2 層構成の表記に統一する。
+
+## 改訂履歴
+- 2026-10-01: P05 ⑤c で、APISIX のルート `/sales/v1/*` → order-service の `/v1/*` を実装した(`infra/local/apisix/apisix.yaml`。ADR-0023 §1)。
