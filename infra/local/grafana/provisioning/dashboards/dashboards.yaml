@@ -1,0 +1,12 @@
+# Grafana のダッシュボードの provisioning(Framework 14)。JSON は eiaf/ に置く。
+# 画面で編集しても保存できない(allowUiUpdates: false)。変更は JSON を直してコミットする。
+apiVersion: 1
+
+providers:
+  - name: eiaf
+    folder: EIAF
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/provisioning/dashboards/eiaf
