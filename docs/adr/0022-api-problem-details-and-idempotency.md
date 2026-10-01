@@ -58,7 +58,7 @@ P05 で最初の REST API(order-service の `POST /v1/orders`・`GET /v1/orders/
 - `IdempotencyHandler`: 判定と処理の中核。HTTP の枠組みに依存しない。
 - `respondIdempotently`: Ktor での結線(ヘッダの取り出し・本文の読み込み・指紋・応答)。
 
-**記録**: (クライアント, キー) ごとに 1 件。クライアントは認証したクライアント(JWT の `azp` など)で、別のクライアントが同じキーを使っても影響しない。状態は「処理中」(リースの期限と所有者のトークン)か「完了」(保存した応答と保持期限)。
+**記録**: (クライアント, キー) ごとに 1 件。クライアントは認証したクライアント(JWT の `azp`、なければ `client_id`)で、別のクライアントが同じキーを使っても影響しない。クライアントを決められないトークンは、冪等の範囲を分けられないので受け付けない(JWT の検証で `JwtVerifierConfig.requireClientId = true` にし、401 `invalid_token`。ADR-0019 の改訂履歴 2026-10-01)。状態は「処理中」(リースの期限と所有者のトークン)か「完了」(保存した応答と保持期限)。
 
 **判定**:
 | 既存の記録 | 指紋が同じ | 指紋が違う |
@@ -137,3 +137,4 @@ P05 で最初の REST API(order-service の `POST /v1/orders`・`GET /v1/orders/
 - 2026-09-30: ②a で §1・§2 を作成した。§3(冪等)は ②b で追記する。
 - 2026-09-30: ②b で §3(Idempotency-Key)を追記した。
 - 2026-10-01: P05 ④a-2 で、リースと保持期限を保存先の時刻(PostgreSQL の `clock_timestamp()`)で設定・判定することにした。複数のインスタンスの時計のずれで、有効なリースを横取りしたり、期限の前の記録を消したりしないため。これに合わせて `IdempotencyStore` の `claim` / `complete` / `purgeExpired` は時刻を引数に取らず、期間だけを受け取る形に変え、`IdempotencyHandler` はアプリの時計を使わなくなった。`purgeExpired` は、リースの期限に猶予を足した時刻を過ぎた処理中の記録も消す。指紋が違えば、状態やリースの有効・期限切れに関係なく 422 であることを明記した(PostgreSQL の実装の統合テストで確かめた)。
+- 2026-10-01: P05 ④b-1 で、Idempotency-Key を使う API は、呼び出し元のクライアント(`azp`、なければ `client_id`)のないトークンを 401 `invalid_token` で拒否することにした(`JwtVerifierConfig.requireClientId`)。

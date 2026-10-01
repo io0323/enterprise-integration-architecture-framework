@@ -32,7 +32,7 @@ Ruleset `main protection`(ID 24095263)を設定した。
 | force push | 禁止 |
 | 直線履歴 | 必須(マージコミットを作らない) |
 | PR | 必須。承認の必要数は 0。マージの方式は rebase だけ |
-| 必須チェック | ci の `build`・`integration (Testcontainers)`・`macos (macosArm64 tests)`(GitHub Actions が報告したものだけ有効。§3) |
+| 必須チェック | ci の `build`・`changes`・`integration (Testcontainers)`・`macos (macosArm64 tests)`(GitHub Actions が報告したものだけ有効。§3) |
 | 最新のブランチであること | 求めない(`strict_required_status_checks_policy: false`) |
 | バイパス | なし(管理者も対象) |
 
@@ -42,9 +42,9 @@ Ruleset `main protection`(ID 24095263)を設定した。
 - **pre-push フックは残す**(多層防御)。push の前に手元で止められるため、誤った push が GitHub に届く前に気づける。
 - **バイパスをなしにした理由**: 管理者でも、Ruleset を明示的に変えない限り main を書き換えられないようにする。緊急時は、Ruleset を一時的に無効にしてから対応し、対応が終わったら戻す。
 
-### 3. 必須チェックは ci の `build`・`integration`・`macos` にする(改訂: 2026-10-01)
+### 3. 必須チェックは ci の `build`・`changes`・`integration`・`macos` にする(改訂: 2026-10-01)
 - ci の workflow は、すべての PR で起動する(workflow に `paths` の条件がない)。
-  - `build` は、条件なしに毎回実行される。
+  - `build` と `changes` は、条件なしに毎回実行される。`changes` を必須にするのは、`changes` が失敗したときに `integration` と `macos` がスキップされて成功に数えられる抜け道を塞ぐため。
   - `integration (Testcontainers)` と `macos (macosArm64 tests)` は、ジョブの `if`(`changes` ジョブの paths-filter の結果)で、関係のない変更ではスキップされる。**スキップされたジョブは、必須チェックとしては成功に数えられる**ので、関係のない PR は止まらない。実行されたときは、失敗すれば GitHub がマージを止める。
 - contract-check と infra は必須にしない。workflow の `paths` で起動しなかった workflow は、チェックを報告しない。これを必須にすると、対象外の PR がいつまでもマージできなくなる。実行された場合に成功していることは、運用で確かめる(CLAUDE.md §6)。
 - 必須チェックの名前は、CI の表示名(ジョブの `name`)と完全に一致させる。ジョブの `name` を変えるときは、Ruleset も同時に変える(変えないと、必須チェックが報告されなくなり、すべての PR がマージできなくなる)。
@@ -96,9 +96,10 @@ LICENSE を置いていないため、著作権法上、すべての権利が作
   挙動には影響しないので、この ADR では変えていない。それぞれの workflow を次に変えるときに見直す。
 - 管理者も main を直接書き換えられない。緊急時は、Ruleset を無効にする操作が要る。
 - contract-check と infra は必須ではないので、失敗しても GitHub はマージを止めない。実行されたときの結果を確かめるのは、運用(CLAUDE.md §6)である。
-- `integration` と `macos` は `changes` ジョブ(paths-filter)の結果で動く。`changes` が失敗すると、両方ともスキップされ、必須チェックとしては成功に数えられる。`changes` が失敗していないことは、運用で確かめる(`changes` を必須チェックに加えるかは見直しの候補)。
+- `integration` と `macos` は `changes` ジョブ(paths-filter)の結果で動く。`changes` が失敗すると両方ともスキップされ、成功に数えられる抜け道があったが、**`changes` も必須チェックに加えて解消済み**(2026-10-01)。`changes` は条件なしに毎回実行されるので、必須にしても関係のない PR は止まらない。
 
 ## 改訂履歴
 - 2026-09-28: Ruleset のマージの方式を rebase だけにした(§2)。gitleaks の誤検知 7 件を `.gitleaksignore` に登録し、検査は git が追跡しているファイルだけを対象にすることにした(§4)。
 - 2026-09-28: Secret scanning・push protection・Dependabot alerts・Dependabot security updates を有効にし(validity checks と non-provider patterns は無効のまま)、Actions のアクションの SHA 固定を強制した(`sha_pinning_required`)。リポジトリの設定でマージコミットと squash を無効にして rebase だけを残し、マージ後のブランチの自動削除を有効にした。
 - 2026-10-01: 必須チェックに ci の `integration (Testcontainers)` と `macos (macosArm64 tests)` を加えた(§3)。どちらもジョブの `if` でスキップされる作りで、スキップは成功に数えられるため、関係のない PR を止めない。contract-check と infra は workflow の `paths` で起動しないことがあるため、必須にしない。
+- 2026-10-01: 必須チェックに ci の `changes` も加えた(§3)。`changes` が失敗すると `integration` と `macos` がスキップされ、成功に数えられる抜け道を塞ぐため。
