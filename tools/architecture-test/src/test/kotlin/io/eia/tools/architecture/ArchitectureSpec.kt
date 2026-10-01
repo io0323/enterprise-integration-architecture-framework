@@ -65,6 +65,10 @@ class ArchitectureSpec :
             ArchitectureRules.nimbusOnlyInSecurity(codeBase).assertNone()
         }
 
+        test("services の本番コードは Resilience(...) を直接作らない(ResilienceMetrics 経由。ADR-0021 §7)") {
+            ArchitectureRules.resilienceOnlyThroughMetrics(codeBase).assertNone()
+        }
+
         test("services の domain と application は Canonical Model に依存しない(ADR-0010 Decision 7)") {
             ArchitectureRules.canonicalModelOutsideDomainAndApplication(codeBase).assertNone()
         }
