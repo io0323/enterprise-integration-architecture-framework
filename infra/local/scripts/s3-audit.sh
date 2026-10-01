@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# 監査のアンカー用のバケット(eiaf-audit)と、audit の資格情報の範囲を検査する(ADR-0017)。
+# 監査のアンカー用のバケット(eiaf-audit)と、audit の資格情報の範囲を検査する(ADR-0017 §7。Issue #43)。
 # verify.sh が AWS CLI のコンテナ内で実行する。結果を 1 行ずつ「OK <内容>」「NG <内容>」で出力する。
-# 環境変数: ADMIN_ACCESS_KEY / ADMIN_SECRET_KEY(管理者)、AUDIT_ACCESS_KEY / AUDIT_SECRET_KEY(audit)、
+# 環境変数: ADMIN_ACCESS_KEY / ADMIN_SECRET_KEY(管理者)、ORDER_ACCESS_KEY / ORDER_SECRET_KEY(order の書込み用の eiaf-audit-order)、
 # VERIFY_ACCESS_KEY / VERIFY_SECRET_KEY(検査専用の eiaf-audit-verify)、RUN_ID、S3_ENDPOINT。
 set -uo pipefail
 
@@ -9,15 +9,16 @@ aws configure set default.s3.addressing_style path
 aws configure set default.region us-east-1
 bucket=eiaf-audit
 other="eiaf-verify-other-$RUN_ID"
-key="verify/$RUN_ID.json"
+# order の書込み用の identity は anchors/order/ の下にだけ書ける。検査用の版もそこに書き、最後に管理者が消す
+key="anchors/order/verify-$RUN_ID.json"
 work="$(mktemp -d)"
 echo "{\"verify\":\"$RUN_ID\"}" >"$work/body.json"
 
-as() { # as <admin|audit|verify> <s3api の引数...>
+as() { # as <admin|order|verify> <s3api の引数...>
   local who="$1"; shift
   case "$who" in
     admin) AWS_ACCESS_KEY_ID="$ADMIN_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$ADMIN_SECRET_KEY" aws --endpoint-url "$S3_ENDPOINT" s3api "$@" ;;
-    audit) AWS_ACCESS_KEY_ID="$AUDIT_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$AUDIT_SECRET_KEY" aws --endpoint-url "$S3_ENDPOINT" s3api "$@" ;;
+    order) AWS_ACCESS_KEY_ID="$ORDER_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$ORDER_SECRET_KEY" aws --endpoint-url "$S3_ENDPOINT" s3api "$@" ;;
     verify) AWS_ACCESS_KEY_ID="$VERIFY_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$VERIFY_SECRET_KEY" aws --endpoint-url "$S3_ENDPOINT" s3api "$@" ;;
   esac
 }
@@ -43,43 +44,48 @@ denied() { # denied <内容> <コマンド...>: AccessDenied で失敗すれば 
 # --- バケットの設定 ---
 # 資格情報はコマンドの文字列に埋め込まず、as 関数(環境変数)で渡す
 lock_enabled() { [[ "$(as admin get-object-lock-configuration --bucket "$bucket" --query ObjectLockConfiguration.ObjectLockEnabled --output text)" == Enabled ]]; }
-policy_applied() { as admin get-bucket-policy --bucket "$bucket" --output text | grep -q AuditIdentityCannotManageBucketOrDelete; }
+policy_applied() { as admin get-bucket-policy --bucket "$bucket" --output text | grep -q OrderAuditIdentityCannotManageBucketOrDelete; }
 allowed "バケット $bucket の Object Lock が有効" lock_enabled
-allowed "バケットポリシーが設定されている(audit の管理操作を拒否する)" policy_applied
+allowed "バケットポリシーが設定されている(order の書込み用の identity の Legal Hold と削除を拒否する)" policy_applied
 
-# --- audit の資格情報で必要な操作ができる ---
+# --- order の書込み用の資格情報(eiaf-audit-order)で必要な操作ができる ---
 # 短縮の検査は、短縮後の期限がまだ先のうちに行う(過ぎた日時は権限の前に InvalidRequest で拒否されるため)
 retain_until="$(date -u -d '+60 seconds' +%Y-%m-%dT%H:%M:%SZ)"
 shorter="$(date -u -d '+30 seconds' +%Y-%m-%dT%H:%M:%SZ)"
-version="$(as audit put-object --bucket "$bucket" --key "$key" --body "$work/body.json" \
+version="$(as order put-object --bucket "$bucket" --key "$key" --body "$work/body.json" \
   --object-lock-mode COMPLIANCE --object-lock-retain-until-date "$retain_until" --query VersionId --output text 2>/dev/null)"
-if [[ -n "$version" && "$version" != None ]]; then ok "audit: COMPLIANCE の保持期限つきで put できる"; else ng "audit: COMPLIANCE の保持期限つきで put できる"; fi
-allowed "audit: get-object できる" as audit get-object --bucket "$bucket" --key "$key" --version-id "$version" "$work/got.json"
-allowed "audit: 全版の一覧(list-object-versions)を取得できる" as audit list-object-versions --bucket "$bucket" --prefix verify/
-allowed "audit: 版の保持の設定(get-object-retention)を取得できる" as audit get-object-retention --bucket "$bucket" --key "$key" --version-id "$version"
+if [[ -n "$version" && "$version" != None ]]; then ok "order: 自分のプレフィックス(anchors/order/)に COMPLIANCE の保持期限つきで put できる"; else ng "order: 自分のプレフィックス(anchors/order/)に COMPLIANCE の保持期限つきで put できる"; fi
+allowed "order: get-object できる" as order get-object --bucket "$bucket" --key "$key" --version-id "$version" "$work/got.json"
+allowed "order: 全版の一覧(list-object-versions)を取得できる" as order list-object-versions --bucket "$bucket" --prefix anchors/order/
+allowed "order: 版の保持の設定(get-object-retention)を取得できる" as order get-object-retention --bucket "$bucket" --key "$key" --version-id "$version"
 
-# --- audit の資格情報でできないこと(Issue #6・ADR-0017 の項目 10) ---
-denied "audit: バケットの Object Lock の設定を変更できない" as audit put-object-lock-configuration --bucket "$bucket" \
+# --- order の書込み用の資格情報でできないこと(Issue #6・#43。ADR-0017 §7) ---
+# サービスごとのプレフィックスの外には書けない(ほかのサービスの検査を妨害できない)
+denied "order: ほかのサービスのプレフィックス(anchors/inventory/)に put できない" as order put-object --bucket "$bucket" \
+  --key "anchors/inventory/verify-$RUN_ID.json" --body "$work/body.json" --object-lock-mode COMPLIANCE --object-lock-retain-until-date "$retain_until"
+denied "order: anchors/ の外に put できない" as order put-object --bucket "$bucket" --key "verify/$RUN_ID.json" --body "$work/body.json" \
+  --object-lock-mode COMPLIANCE --object-lock-retain-until-date "$retain_until"
+denied "order: バケットの Object Lock の設定を変更できない" as order put-object-lock-configuration --bucket "$bucket" \
   --object-lock-configuration '{"ObjectLockEnabled":"Enabled","Rule":{"DefaultRetention":{"Mode":"GOVERNANCE","Days":1}}}'
-denied "audit: バージョニングを変更できない" as audit put-bucket-versioning --bucket "$bucket" --versioning-configuration Status=Suspended
-denied "audit: バケットポリシーを変更できない" as audit put-bucket-policy --bucket "$bucket" --policy '{"Version":"2012-10-17","Statement":[]}'
-denied "audit: バケットポリシーを削除できない" as audit delete-bucket-policy --bucket "$bucket"
-denied "audit: バケットを削除できない" as audit delete-bucket --bucket "$bucket"
-denied "audit: 保持期限を短縮できない" as audit put-object-retention --bucket "$bucket" --key "$key" --version-id "$version" \
+denied "order: バージョニングを変更できない" as order put-bucket-versioning --bucket "$bucket" --versioning-configuration Status=Suspended
+denied "order: バケットポリシーを変更できない" as order put-bucket-policy --bucket "$bucket" --policy '{"Version":"2012-10-17","Statement":[]}'
+denied "order: バケットポリシーを削除できない" as order delete-bucket-policy --bucket "$bucket"
+denied "order: バケットを削除できない" as order delete-bucket --bucket "$bucket"
+denied "order: 保持期限を短縮できない" as order put-object-retention --bucket "$bucket" --key "$key" --version-id "$version" \
   --retention "{\"Mode\":\"COMPLIANCE\",\"RetainUntilDate\":\"$shorter\"}"
-denied "audit: Legal Hold を変更できない" as audit put-object-legal-hold --bucket "$bucket" --key "$key" --version-id "$version" --legal-hold Status=OFF
-denied "audit: 削除マーカーを作れない(版を指定しない delete)" as audit delete-object --bucket "$bucket" --key "$key"
-denied "audit: 版を削除できない" as audit delete-object --bucket "$bucket" --key "$key" --version-id "$version"
-denied "audit: バケットを作成できない" as audit create-bucket --bucket "$other-by-audit"
+denied "order: Legal Hold を変更できない" as order put-object-legal-hold --bucket "$bucket" --key "$key" --version-id "$version" --legal-hold Status=OFF
+denied "order: 削除マーカーを作れない(版を指定しない delete)" as order delete-object --bucket "$bucket" --key "$key"
+denied "order: 版を削除できない" as order delete-object --bucket "$bucket" --key "$key" --version-id "$version"
+denied "order: バケットを作成できない" as order create-bucket --bucket "$other-by-order"
 as admin create-bucket --bucket "$other" >/dev/null 2>&1
 as admin put-object --bucket "$other" --key k.txt --body "$work/body.json" >/dev/null 2>&1
-denied "audit: ほかのバケットを list できない" as audit list-objects-v2 --bucket "$other"
-denied "audit: ほかのバケットに put できない" as audit put-object --bucket "$other" --key z.txt --body "$work/body.json"
-denied "audit: ほかのバケットから get できない" as audit get-object --bucket "$other" --key k.txt "$work/other.txt"
-denied "audit: ほかのバケットのオブジェクトを delete できない" as audit delete-object --bucket "$other" --key k.txt
+denied "order: ほかのバケットを list できない" as order list-objects-v2 --bucket "$other"
+denied "order: ほかのバケットに put できない" as order put-object --bucket "$other" --key z.txt --body "$work/body.json"
+denied "order: ほかのバケットから get できない" as order get-object --bucket "$other" --key k.txt "$work/other.txt"
+denied "order: ほかのバケットのオブジェクトを delete できない" as order delete-object --bucket "$other" --key k.txt
 
 # --- 検査専用の資格情報(eiaf-audit-verify)は読むだけ ---
-allowed "verify: 全版の一覧(list-object-versions)を取得できる" as verify list-object-versions --bucket "$bucket" --prefix verify/
+allowed "verify: 全版の一覧(list-object-versions)を取得できる" as verify list-object-versions --bucket "$bucket" --prefix anchors/order/
 allowed "verify: get-object できる" as verify get-object --bucket "$bucket" --key "$key" --version-id "$version" "$work/got-verify.json"
 allowed "verify: 版の保持の設定(get-object-retention)を取得できる" as verify get-object-retention --bucket "$bucket" --key "$key" --version-id "$version"
 denied "verify: put できない" as verify put-object --bucket "$bucket" --key "verify/$RUN_ID-by-verify.json" --body "$work/body.json" \
