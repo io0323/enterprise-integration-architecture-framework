@@ -36,4 +36,5 @@ include(
     ":tools:architecture-test",
     ":tools:audit-verify",
     ":tools:contract-check",
+    ":tests:e2e",
 )
