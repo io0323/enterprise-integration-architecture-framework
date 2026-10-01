@@ -7,6 +7,7 @@ import io.eia.platform.observability.context.ObservabilityContext
 import io.eia.platform.observability.context.withSpan
 import io.eia.platform.observability.ktor.client.ClientObservability
 import io.eia.platform.observability.ktor.server.ServerObservability
+import io.eia.platform.observability.ktor.server.markTimedOut
 import io.eia.platform.observability.ok
 import io.eia.shared.kernel.CorrelationId
 import io.kotest.assertions.throwables.shouldThrow
@@ -208,6 +209,44 @@ class FailureCasesSpec :
                     span.attributes.get(ERROR_TYPE) shouldBe "timeout"
                     span.status.statusCode shouldBe StatusCode.ERROR
                     warning.spanContext.spanId shouldBe span.spanId
+                }
+            }
+
+            test("タイムアウトを応答で返した処理(markTimedOut)は、返したステータスを記録し、error.type=timeout で数えて WARN を 1 回残す") {
+                TestTelemetry().use { telemetry ->
+                    testApplication {
+                        application {
+                            install(ServerObservability) { runtime = telemetry.runtime }
+                            routing {
+                                get("/v1/budget") {
+                                    call.markTimedOut()
+                                    call.respondText("deadline", status = HttpStatusCode.ServiceUnavailable)
+                                }
+                                get("/v1/unavailable") { call.respondText("down", status = HttpStatusCode.ServiceUnavailable) }
+                            }
+                        }
+                        client.get("/v1/budget").status shouldBe HttpStatusCode.ServiceUnavailable
+                        client.get("/v1/unavailable").status shouldBe HttpStatusCode.ServiceUnavailable
+                    }
+                    val spans =
+                        telemetry.spans
+                            .filter { it.kind == SpanKind.SERVER }
+                            .associateBy { it.attributes.get(HttpAttributes.HTTP_ROUTE) }
+                    val budget = spans.getValue("/v1/budget")
+                    val warnings =
+                        telemetry.logs.filter {
+                            it.bodyValue
+                                ?.asString()
+                                .orEmpty()
+                                .startsWith("処理がタイムアウトしました")
+                        }
+
+                    budget.attributes.get(HttpAttributes.HTTP_RESPONSE_STATUS_CODE) shouldBe 503L
+                    budget.attributes.get(ERROR_TYPE) shouldBe "timeout"
+                    budget.status.statusCode shouldBe StatusCode.ERROR
+                    warnings.single().spanContext.spanId shouldBe budget.spanId
+                    // 印のない 503 は、これまでどおりステータスを error.type にする
+                    spans.getValue("/v1/unavailable").attributes.get(ERROR_TYPE) shouldBe "503"
                 }
             }
 
