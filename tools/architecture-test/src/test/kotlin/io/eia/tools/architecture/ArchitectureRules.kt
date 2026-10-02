@@ -261,6 +261,30 @@ internal object ArchitectureRules {
     fun nimbusOnlyInSecurity(codeBase: CodeBase): List<Violation> =
         packageOnlyInAllowedPaths(codeBase, NIMBUS_PACKAGE, NIMBUS_ALLOWED_PATHS, NIMBUS_RULE, "platform/security だけ。ADR-0019 §1")
 
+    private val MESSAGING_ALLOWED_PATHS = listOf(Regex("""^platform/messaging-kafka/"""), Regex("""^services/[^/]+/(adapters|app)/"""))
+    private const val MESSAGING_RULE = "Kafka・Avro の配置"
+    private const val MESSAGING_ALLOWED = "platform/messaging-kafka と services/*/adapters・app だけ。ADR-0025 §5"
+    private const val APICURIO_PACKAGE = "io.apicurio"
+    private const val APICURIO_RULE = "Apicurio の公式のライブラリはテストだけ"
+
+    /**
+     * ADR-0025 §5: Kafka のクライアント(`org.apache.kafka`)と Avro(`com.github.avrokotlin`・`org.apache.avro`)を本番コードで使ってよいのは、
+     * platform/messaging-kafka と services/<name>/adapters・app だけ。`org.apache.avro` は tools(contract-check の互換性の検査)でも使ってよい。
+     * Apicurio の公式のライブラリ(`io.apicurio`)は、相互運用の検査のためにテストのソースセットでだけ使う(本番は自前の wire format)。
+     * services の domain と application は、これとは別に commonMain の禁止 import で守る(ADR-0004)。
+     */
+    fun messagingLibrariesOnlyInAllowedModules(codeBase: CodeBase): List<Violation> =
+        packageOnlyInAllowedPaths(codeBase, "org.apache.kafka", MESSAGING_ALLOWED_PATHS, MESSAGING_RULE, MESSAGING_ALLOWED) +
+            packageOnlyInAllowedPaths(codeBase, "com.github.avrokotlin", MESSAGING_ALLOWED_PATHS, MESSAGING_RULE, MESSAGING_ALLOWED) +
+            packageOnlyInAllowedPaths(
+                codeBase,
+                "org.apache.avro",
+                MESSAGING_ALLOWED_PATHS + Regex("""^tools/"""),
+                MESSAGING_RULE,
+                "$MESSAGING_ALLOWED(org.apache.avro は tools も可)",
+            ) +
+            packageOnlyInAllowedPaths(codeBase, APICURIO_PACKAGE, emptyList(), APICURIO_RULE, "相互運用の検査のテストだけ。ADR-0025 §1")
+
     /** [packageName] を、[allowedPaths] 以外の本番コードから import または完全修飾名で参照していれば違反にする。 */
     private fun packageOnlyInAllowedPaths(
         codeBase: CodeBase,

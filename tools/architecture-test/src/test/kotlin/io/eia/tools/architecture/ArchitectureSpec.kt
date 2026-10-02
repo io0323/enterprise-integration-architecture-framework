@@ -65,6 +65,10 @@ class ArchitectureSpec :
             ArchitectureRules.nimbusOnlyInSecurity(codeBase).assertNone()
         }
 
+        test("Kafka・Avro は platform/messaging-kafka と services の adapters・app だけ、Apicurio の公式のライブラリはテストだけで使う(ADR-0025 §5)") {
+            ArchitectureRules.messagingLibrariesOnlyInAllowedModules(codeBase).assertNone()
+        }
+
         test("services の本番コードは Resilience(...) を直接作らない(ResilienceMetrics 経由。ADR-0021 §7)") {
             ArchitectureRules.resilienceOnlyThroughMetrics(codeBase).assertNone()
         }
