@@ -24,6 +24,7 @@ import io.eia.shared.kernel.ok
 import io.opentelemetry.api.metrics.Meter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.slf4j.LoggerFactory
 import java.io.Closeable
 import java.security.Key
 import java.text.ParseException
@@ -44,7 +45,10 @@ import kotlin.time.Duration
  *
  * - 拒否した理由は DEBUG ログとメトリクス(`eia.security.jwt.rejections`、属性 `reason`)にだけ残す。
  *   トークン・クレームの値・Nimbus の例外のメッセージ(ヘッダやクレームの値を含むことがある)は、ログにも戻り値にも入れない。
- * - JWKS の取得はブロッキングの I/O のため、[verify] は [Dispatchers.IO] で実行する。
+ * - JWKS の取得はブロッキングの I/O のため、[verify] は [Dispatchers.IO] の上限つきの view
+ *   (`limitedParallelism`([JwksConfig.verificationParallelism]))で実行する。共有の [Dispatchers.IO] で実行すると、IdP が遅いときに
+ *   JWKS の取得(とその取得を待つ検証)が IO のスレッドを使い切り、同じスレッドを使う DB の処理まで待たせるため
+ *   (ADR-0019 §3。計測は docs/reports/p05-jwks-dispatcher.md)。view のスレッドは、共有の [Dispatchers.IO] の上限の外で増える。
  * - JWKS のキャッシュ(バックグラウンドの取り直しを含む)を持つため、使い終わったら [close] する。
  */
 public class JwtVerifier internal constructor(
@@ -82,10 +86,11 @@ public class JwtVerifier internal constructor(
     @Volatile
     private var keysUnavailable: Boolean = false
     private val recorder = JwtRejectionRecorder(meter)
+    private val dispatcher = Dispatchers.IO.limitedParallelism(config.jwks.verificationParallelism)
 
     /** [token](`Authorization: Bearer` の値)を検証する。 */
     public suspend fun verify(token: String): Result<VerifiedToken, JwtVerificationError> =
-        withContext(Dispatchers.IO) { verifyBlocking(token) }
+        withContext(dispatcher) { verifyBlocking(token) }
 
     internal fun verifyBlocking(token: String): Result<VerifiedToken, JwtVerificationError> {
         val result = check(token)
@@ -159,7 +164,10 @@ public class JwtVerifier internal constructor(
             // - 直前の取得が失敗していた(IdP が止まり、使える JWKS がない): 検証できないので null(503)
             // - そうでなければ、手元の JWKS に鍵がない: 空(401。未知の kid を送るだけで 503 を返させないため)
             if (keysUnavailable) null else emptyList()
-        } catch (_: KeySourceException) {
+        } catch (e: KeySourceException) {
+            // 取得の失敗(取り直しの頻度の制限の中では起きないので、回数は限られる)。原因の調査のため、例外の型の連なりだけを残す
+            // (メッセージは URL や応答の一部を含みうるため出さない)
+            logger.warn("JWKS を取得できません(error.type={})", causeTypes(e))
             keysUnavailable = true
             null
         }
@@ -212,6 +220,16 @@ public class JwtVerifier internal constructor(
     }
 
     public companion object {
+        private val logger = LoggerFactory.getLogger(JwtVerifier::class.java)
+
+        /** 例外の型の連なり(例 `RemoteKeySourceException <- SocketTimeoutException`)。 */
+        private fun causeTypes(e: Throwable): String =
+            generateSequence(e) { it.cause?.takeIf { cause -> cause !== it } }
+                .take(MAX_CAUSES)
+                .joinToString(" <- ") { it::class.java.simpleName }
+
+        private const val MAX_CAUSES = 5
+
         /** トークンの文字列の長さの上限。解析の前に弾き、巨大な入力の解析に時間とメモリを使わせない。 */
         public const val MAX_TOKEN_LENGTH: Int = 8 * 1024
 
