@@ -28,3 +28,33 @@ dependencies {
     integrationTestImplementation(libs.ktor.client.cio)
     integrationTestImplementation(libs.testcontainers.toxiproxy)
 }
+
+// JWKS の取得をどの dispatcher で行うかの計測(P05 ⑨。docs/reports/p05-jwks-dispatcher.md)。
+// 待ち時間の数値で判断する計測なので、build と CI には含めない(Issue #46)。`./gradlew :platform:security:measureJwksDispatcher` で手動で実行する。
+// コンパイルだけは check に含め、計測のコードが壊れたままにならないようにする。
+val measurement: SourceSet = sourceSets.create("measurement")
+configurations.named(measurement.implementationConfigurationName) { extendsFrom(configurations.testImplementation.get()) }
+configurations.named(measurement.runtimeOnlyConfigurationName) { extendsFrom(configurations.testRuntimeOnly.get()) }
+kotlin.target.compilations.run {
+    // JwtVerifier の internal(verifyBlocking)と、テストの鍵・トークンの部品(TestTokens)を使う
+    getByName("measurement").associateWith(getByName("main"))
+    getByName("measurement").associateWith(getByName("test"))
+}
+kover {
+    currentProject {
+        sources { excludedSourceSets.add(measurement.name) }
+    }
+}
+tasks.named("check") { dependsOn(tasks.named(measurement.classesTaskName)) }
+tasks.register<JavaExec>("measureJwksDispatcher") {
+    description = "JWKS の取得を待つ間に、共有の Dispatchers.IO の DB の処理が待たされるかを、dispatcher の方式ごとに計測する(手動)。"
+    group = "measurement"
+    classpath = measurement.runtimeClasspath
+    mainClass.set("io.eia.platform.security.jwt.JwksDispatcherMeasurementKt")
+    // 方式 D(仮想スレッド)で、JWKS の取得の経路にピン留めがないかを確かめる(JDK 21)
+    jvmArgs("-Djdk.tracePinnedThreads=full")
+    // 条件(-Pjwks.verifications=200 など)。構成キャッシュが値の変化を追えるよう、項目ごとに providers で読む
+    listOf("verifications", "dbTasks", "dbWorkMs", "repeat").forEach { key ->
+        providers.gradleProperty("jwks.$key").orNull?.let { systemProperty("jwks.$key", it) }
+    }
+}
