@@ -11,7 +11,7 @@ concurrency:
 
 # アクションはタグではなくコミット SHA で固定し、コメントにバージョンを併記する。
 # 必須チェック(Ruleset「main protection」)は `build`・`changes`・`integration (Testcontainers)`・`macos (macosArm64 tests)`・`e2e`(ADR-0020 §3)。
-# `macos` ジョブは shared/** などの変更時だけ、`integration` ジョブは platform/**・services/** などの変更時だけ、
+# `macos` ジョブは shared/** などの変更時だけ、`integration` ジョブは platform/**・services/**・tools/**・contracts/** などの変更時だけ、
 # `e2e` ジョブは services/**・platform/**・shared/**・contracts/**・infra/local/** などの変更時だけ実行される。
 # ジョブの `if` でスキップされたジョブは成功に数えられるので、関係のない PR は止まらない。
 # ジョブの `name` を変えるときは、Ruleset の必須チェックの名前も同時に変える(完全一致で照合される)。
@@ -78,6 +78,9 @@ jobs:
               - 'platform/**'
               - 'shared/**'
               - 'services/**'
+              # tools の統合テスト(audit-verify・schema-publish)と、schema-publish が登録するリポジトリの契約
+              - 'tools/**'
+              - 'contracts/**'
               - '**/src/integrationTest/**'
               - 'infra/local/images.env'
               - 'build-logic/**'
