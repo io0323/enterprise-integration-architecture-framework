@@ -60,12 +60,24 @@ P04a ③ で `platform/security` を作る。Framework 12.1 は、受信側で�
 | `outageTolerance` | **15 分** | JWKS を取得できない間、最後に取得した JWKS を使い続ける時間の上限 |
 | `connectTimeout` / `readTimeout` | 2 秒 / 2 秒 | JWKS の HTTP のタイムアウト |
 | `sizeLimitBytes` | 50 KiB | JWKS の応答の大きさの上限 |
+| `verificationParallelism` | 16 | 検証を同時に動かすスレッドの数の上限(下の「検証を動かすスレッド」) |
 
 - **ローテーション**: 未知の `kid` のトークンが来たら、JWKS を取り直して探す。IdP が新旧の鍵を並べて公開する期間に、どちらの鍵のトークンも通る(`JwksRotationSpec`)。
 - **頻度の制限**: 未知の `kid` のトークンを大量に送られても、取り直しは `rateLimitMinInterval` に 1 回まで(Nimbus の制限は、区間の中で 2 回まで取得を試みる)。制限にかかると、Nimbus は `RateLimitReachedException`(`KeySourceException` の子)を投げる。扱いは直前の鍵の取得の結果で分ける。
   - 直前の取得が成功していた(手元に JWKS がある): 鍵が見つからないとして **401(`unknown_key`)** にする。503 にすると、未知の `kid` を送るだけで 503 を返させられるため。
   - 直前の取得が失敗していた(IdP が止まり、使える JWKS がない): 検証できないとして **503** にする。Nimbus は失敗した取得も 1 回と数えるため、区間ごとに 2 件だけが 503、残りが 401 になるのを防ぐ(P04a ③ のレビュー Major 1。`JwksRotationSpec` で、起動直後と `outageTolerance` の経過後の 2 通りを確かめている)。
 - **IdP の障害**: JWKS を取得できず、使える JWKS もない(起動直後か、`outageTolerance` を過ぎた)ときは、トークンの正否を判断できないため **503** を返す。401 にすると、クライアントがトークンを取り直して IdP にさらに負荷をかけるため。
+- **検証を動かすスレッド(P05 ⑨。2026-10-02)**: `JwtVerifier.verify` は、共有の `Dispatchers.IO` ではなく、その上限つきの view(`Dispatchers.IO.limitedParallelism(verificationParallelism)`)で動く。
+  - **理由**: JWKS の取得はブロッキングの I/O で、キャッシュの期限が切れた後の最初の要求が取り直す間、ほかの要求はその取得を待つ(最長で `refreshTimeout`)。
+    - 共有の `Dispatchers.IO` で待つと、待っている検証が IO のスレッドを塞ぐ。同じスレッドで動く DB の処理(order-service の Exposed)まで、IdP の待ち時間だけ待たされた。
+    - 計測では、検証 200 件の同時数で、DB の処理の待ちが p50 で約 30 ms から 1.5〜2 秒になった(`docs/reports/p05-jwks-dispatcher.md`)。
+    - view にすると、DB の処理の待ちはふだんと変わらなかった。view のスレッドは、共有の上限(64)の外で増える。
+  - **上限を 16 にした理由**: キャッシュがあれば検証は CPU だけの処理なので、CPU の数より多ければ足りる(計測で速さは変わらなかった)。IdP が止まっている間に塞ぐスレッドの数も、16 までに抑えられる。上限を超えた検証は、スレッドを持たずにコルーチンの列で待ち、リクエストの予算(ADR-0024 §3)で打ち切られる。
+  - **仮想スレッドの dispatcher は採らなかった**: 計測では、DB の処理を待たせず、JWKS の取得の経路でピン留めも起きなかった(`-Djdk.tracePinnedThreads=full`。JDK 21.0.7・Nimbus 10.10)。
+    - ただし JDK 21 では、経路に `synchronized` の中で待つコードが入ると、ピン留めが起こりうる。Nimbus や JDK の版を上げるたびに確かめる必要がある。
+    - 上限つきの view は標準の部品だけで済むので、こちらを採った。JDK 24 以降(JEP 491)に上げるときに、もう一度比べる。
+  - **CI で確かめること**(`JwtVerifierDispatcherSpec`。待ち時間の数値では判定しない): IdP の取得を止めて多数の検証を待たせても、共有の `Dispatchers.IO` の上限の数の処理を同時に動かせる。未知の `kid` を同時に送り続けても、取得の回数は増えない。
+  - 計測は、手動のタスク `./gradlew :platform:security:measureJwksDispatcher` で行う(build と CI には含めない)。
 - **`iss` と `jwksUri` は別々に設定する**(OIDC の discovery は使わない)。
   - コンテナの中からはバックチャネルの URL(`keycloak:8080`)で JWKS を取得する一方、`iss` はホストから見た URL(`localhost:19180`)に固定している(ADR-0016 §7)。
   - discovery の応答で取得先が変わると、検証の前提が設定の外で変わる。
@@ -170,7 +182,9 @@ P04a ③ で `platform/security` を作る。Framework 12.1 は、受信側で�
 - 拒否した理由を応答に含めないため、クライアントの開発者は、サーバのログかメトリクスで理由を確かめる必要がある。
 - トークンの取得のリトライは、同時の取得をまとめるロックの中で行う。IdP の障害中は、期限内のトークンがない呼び出しが、締め切り(既定 10 秒)まで待たされうる。
 - `EnvSecretProvider` はファイルを毎回読むため、呼び出しの多い経路でキャッシュせずに使うと I/O が増える。トークンの取得はトークンのキャッシュの外側でしか Secret を読まないため、問題にならない。
-- `JwtVerifier.verify` は、共有の `Dispatchers.IO` で動く。JWKS の取得(接続 2 秒 + 読み取り 2 秒)と取り直しの待ち(最長 15 秒)の間、IO のスレッドを占有する。IdP が遅いときに負荷が高いと、同じ IO のスレッドを使うほかの処理(DB など)が待たされうる。P04b の Bulkhead(ADR-0021 §5)は同時実行数の上限(`Semaphore`)で、スレッドは分けない。専用の dispatcher に分けるかは、`JwtVerifier` を使う最初のサービス(P05)で、負荷を見て判断する(改訂履歴 2026-09-30)。
+- ~~`JwtVerifier.verify` は、共有の `Dispatchers.IO` で動く。~~(P05 ⑨ で解消。§3「検証を動かすスレッド」)上限つきの view で動くようになった。
+  - IdP が遅い間は、検証の要求そのものは、取得が終わるまで(最長で `refreshTimeout`)待たされる。これはどの方式でも変わらない。
+  - 上限(16)を超えた検証は、列で待つ。キャッシュがあるときに CPU の数より多くの検証を同時に動かす必要が出たら、`verificationParallelism` を見直す。
 - `scope` のクレームは文字列(空白区切り)だけを受け付ける。配列の `scope`(または `scp`)を出す IdP を足すときは、`TokenClaims` と、この ADR を改訂する。
 - 認証・認可の拒否は、DEBUG ログとメトリクスにだけ残す。B2B や高機密の連携で「誰が・いつ・何を」の監査(Framework 14.1)が要る場合は、`platform/audit` への記録の経路を、その連携のフェーズで追加する。
 - ローカルの Keycloak は http(`sslRequired: none`)のため、トークンと Client Secret は平文で流れる(ADR-0008 の転送路の暗号化の縮退。#29)。本番の構成では https の `tokenEndpoint` と `jwksUri` を使う。
@@ -181,3 +195,4 @@ P04a ③ で `platform/security` を作る。Framework 12.1 は、受信側で�
 - 2026-09-30: §5 の 401 / 403 / 503 の本文を `platform/api` の Problem Details にした(P05 ②a。ADR-0022 §2)。`type` を `https://eiaf.example/problems/{unauthorized,forbidden,service-unavailable}` にし、`correlationId` を付ける。拒否した理由を返さない方針は変えない。
 - 2026-10-01: `JwtVerifierConfig.requireClientId` を追加した(既定は無効。既存の利用者の振る舞いは変わらない)。有効にすると、`azp` も `client_id` もないトークンを `missing_client_id` で拒否し、401 `invalid_token` を返す。呼び出し元のクライアントでデータを分ける API(Idempotency-Key の範囲。ADR-0022 §3)で有効にする。order-service は有効にする(P05 ④b-1)。
 - 2026-10-01: P05 ⑤c で、Gateway(APISIX)でも JWT を検証することにした(署名・exp・iss・aud・azp。スコープはサービスだけが確かめる。ADR-0023 §2)。Rate Limit の検証用に、2 つ目の client-credentials クライアント `eiaf-e2e-b` を realm に加えた(スコープの扱いは §8 のまま)。
+- 2026-10-02: P05 ⑨ で、`JwtVerifier.verify` を共有の `Dispatchers.IO` から、その上限つきの view(`limitedParallelism(16)`。`JwksConfig.verificationParallelism`)に移した(§3「検証を動かすスレッド」・Consequences)。IdP が遅いときに、同じ IO のスレッドで動く DB の処理が待たされることを計測で確かめた(`docs/reports/p05-jwks-dispatcher.md`)。仮想スレッドの方式も効き、ピン留めも起きなかったが、JDK 21 での版への依存を避けて採らなかった。あわせて、JWKS の取得に失敗したとき、例外の型の連なり(値は出さない)を WARN に残すようにした(取得の失敗の原因を調べられるように。取り直しの頻度の制限の中では取得しないので、回数は限られる)。
