@@ -18,6 +18,7 @@ EIAF の参照実装が使うミドルウェア一式を Docker Compose で起�
 make env                      # infra/local/.env と secrets/ を生成(初回。make up も自動で実行する)
 make up                       # core を起動し、全コンテナが healthy になるまで待つ
 make up PROFILE=cdc           # core + cdc(profile は常に core に積み上がる)
+make schemas                  # 契約の Avro スキーマを Apicurio に登録する(make up の後。サービスは自動登録しない。ADR-0025 §2)
 make up PROFILE="file chaos"  # 複数の profile を同時に起動する
 make verify PROFILE=cdc       # healthy と各機能の疎通を検査する(PASS / FAIL を 1 行ずつ出力)
 make up PROFILE=order         # core + order-service(先に installDist でイメージの中身を作り、migrate → serve の順に起動する)

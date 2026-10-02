@@ -1,7 +1,7 @@
 # EIAF ローカル開発用コマンド(CLAUDE.md §7)
 GRADLE := ./gradlew
 
-.PHONY: help setup build check arch-test contract-check integration-test format env not-root certs order-dist up down logs ps verify stats clean e2e audit-verify
+.PHONY: help setup build check arch-test contract-check schemas integration-test format env not-root certs order-dist up down logs ps verify stats clean e2e audit-verify
 
 # ローカル基盤(infra/local。ADR-0016)
 # PROFILE: core / cdc / iot / file / b2b / chaos / order。core は常に含まれる(積み上げ方式)。空白区切りで複数指定できる。
@@ -38,6 +38,9 @@ arch-test: ## Konsist アーキテクチャテストのみ実行
 contract-check: ## 契約の検査(命名・カタログ・構造・main との互換性。ADR-0013)
 	git fetch --quiet origin main
 	$(GRADLE) :tools:contract-check:run
+
+schemas: ## 契約の Avro スキーマを Schema Registry(Apicurio)に登録する。make up の後に実行する(ADR-0025 §2)
+	$(GRADLE) -q :tools:schema-publish:run --args="--registry http://localhost:19081/apis/registry/v3 --root $(CURDIR)"
 
 integration-test: ## Testcontainers 統合テスト
 	$(GRADLE) integrationTest
