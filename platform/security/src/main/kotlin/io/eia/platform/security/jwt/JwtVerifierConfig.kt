@@ -84,6 +84,9 @@ public object SignatureAlgorithms {
  *   鍵の漏洩で鍵を差し替えた直後に JWKS を取得できないと、漏洩した鍵が最長でこの時間受け入れられる(ADR-0019 §3 のトレードオフ)。
  * @param connectTimeout / [readTimeout] JWKS の HTTP の接続と読み取りのタイムアウト。
  * @param sizeLimitBytes JWKS の応答の大きさの上限。
+ * @param verificationParallelism 検証を同時に動かすスレッドの数の上限。検証は、共有の `Dispatchers.IO` ではなく、その上限つきの view
+ *   (`limitedParallelism`)で動く。JWKS の取得を待つ間も、DB など共有の `Dispatchers.IO` の処理を待たせないため
+ *   (ADR-0019 §3。計測は docs/reports/p05-jwks-dispatcher.md)。キャッシュがあれば検証は CPU だけの処理なので、CPU の数より多ければ足りる。
  */
 @Suppress("LongParameterList") // 設定の項目(既定値つき。名前付き引数で指定する)
 public class JwksConfig(
@@ -95,6 +98,7 @@ public class JwksConfig(
     public val connectTimeout: Duration = 2.seconds,
     public val readTimeout: Duration = 2.seconds,
     public val sizeLimitBytes: Int = DEFAULT_SIZE_LIMIT_BYTES,
+    public val verificationParallelism: Int = DEFAULT_VERIFICATION_PARALLELISM,
 ) {
     init {
         listOf(cacheTtl, refreshAhead, refreshTimeout, rateLimitMinInterval, outageTolerance, connectTimeout, readTimeout)
@@ -104,9 +108,13 @@ public class JwksConfig(
         require(rateLimitMinInterval < cacheTtl) { "rateLimitMinInterval は cacheTtl より短くしてください" }
         require(outageTolerance >= cacheTtl) { "outageTolerance は cacheTtl 以上にしてください" }
         require(sizeLimitBytes > 0) { "sizeLimitBytes は正の値にしてください" }
+        require(verificationParallelism > 0) { "verificationParallelism は正の値にしてください" }
     }
 
     public companion object {
         public const val DEFAULT_SIZE_LIMIT_BYTES: Int = 50 * 1024
+
+        /** 検証を同時に動かすスレッドの数の上限の既定値(ADR-0019 §3)。 */
+        public const val DEFAULT_VERIFICATION_PARALLELISM: Int = 16
     }
 }
