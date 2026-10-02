@@ -108,6 +108,7 @@ make up / make down           # infra/local の docker compose 起動・停止
 ./gradlew integrationTest     # Testcontainers 統合テスト
 ./gradlew :services:order:app:run
 make e2e                      # E2E シナリオ (tests/e2e)
+make schemas                  # 契約の Avro スキーマを Schema Registry に登録 (make up の後。ADR-0025)
 ```
 
 ## 8. 禁止事項
