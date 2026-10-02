@@ -52,6 +52,12 @@ postgresql = "42.7.13"
 aws-sdk = "2.55.6"
 # 統合テストの計測(並列の追記)でだけ使うコネクションプール
 hikaricp = "7.1.0"
+# P06 ① Kafka の Producer と Avro(確認日: 2026-10-02。ADR-0025)
+# kafka-clients はブローカー(images.env の apache/kafka:4.3.1)と同じ版にする
+kafka = "4.3.1"
+avro4k = "2.12.0"
+# Apicurio の公式の Serde。自前の wire format との相互運用の検査(テスト)だけで使う。版はサーバ(images.env)と揃える
+apicurio-registry = "3.3.3"
 
 [libraries]
 kotest-framework-engine = { module = "io.kotest:kotest-framework-engine", version.ref = "kotest" }
@@ -86,12 +92,16 @@ aws-sdk-bom = { module = "software.amazon.awssdk:bom", version.ref = "aws-sdk" }
 aws-sdk-s3 = { module = "software.amazon.awssdk:s3" }
 aws-sdk-url-connection-client = { module = "software.amazon.awssdk:url-connection-client" }
 hikaricp = { module = "com.zaxxer:HikariCP", version.ref = "hikaricp" }
+testcontainers-kafka = { module = "org.testcontainers:testcontainers-kafka", version.ref = "testcontainers" }
 testcontainers-postgresql = { module = "org.testcontainers:testcontainers-postgresql", version.ref = "testcontainers" }
 mockk = { module = "io.mockk:mockk", version.ref = "mockk" }
 testcontainers = { module = "org.testcontainers:testcontainers", version.ref = "testcontainers" }
 # Toxiproxy の障害注入(ToxiproxyContainer と toxiproxy-java 2.1.11)。イメージは InfraImages の TOXIPROXY_IMAGE(ADR-0016 §5)
 testcontainers-toxiproxy = { module = "org.testcontainers:testcontainers-toxiproxy", version.ref = "testcontainers" }
 avro = { module = "org.apache.avro:avro", version.ref = "avro" }
+kafka-clients = { module = "org.apache.kafka:kafka-clients", version.ref = "kafka" }
+avro4k-core = { module = "com.github.avro-kotlin.avro4k:avro4k-core", version.ref = "avro4k" }
+apicurio-registry-avro-serde-kafka = { module = "io.apicurio:apicurio-registry-avro-serde-kafka", version.ref = "apicurio-registry" }
 swagger-parser = { module = "io.swagger.parser.v3:swagger-parser", version.ref = "swagger-parser" }
 json-schema-validator = { module = "com.networknt:json-schema-validator", version.ref = "json-schema-validator" }
 jackson3-dataformat-yaml = { module = "tools.jackson.dataformat:jackson-dataformat-yaml", version.ref = "jackson3" }

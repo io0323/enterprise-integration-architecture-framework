@@ -25,8 +25,10 @@ include(
     ":shared:canonical-model",
     ":platform:api",
     ":platform:audit",
+    ":platform:messaging-kafka",
     ":platform:observability",
     ":platform:reliability",
+    ":platform:schema-registry",
     ":platform:security",
     ":platform:test-support",
     ":services:order:domain",
@@ -36,5 +38,6 @@ include(
     ":tools:architecture-test",
     ":tools:audit-verify",
     ":tools:contract-check",
+    ":tools:schema-publish",
     ":tests:e2e",
 )
