@@ -173,13 +173,26 @@ class AuditAnchorIT :
             val cycle = AnchorCycle(service, storeFor(service), AnchorPublisher(service, storeFor(service), RETENTION))
             (1..20).forEach { db.append(log, it) }
             val running = AtomicBoolean(true)
-            val appended = AtomicInteger()
+            val next = AtomicInteger()
+            // 確定した追記の件数(append が戻った後に数える)
+            val committed = AtomicInteger()
             val writer =
                 Thread {
-                    while (running.get()) db.append(log, 1_000 + appended.incrementAndGet())
+                    while (running.get()) {
+                        db.append(log, 1_000 + next.incrementAndGet())
+                        committed.incrementAndGet()
+                    }
                 }.apply { start() }
             try {
+                var seen = committed.get()
                 repeat(5) {
+                    // 前回の検査の後に、追記が確定するまで待つ(待たないと、記録が増えていない回は unchanged になる。仕様どおり)。
+                    // 待つ時間の上限は、追記が止まったときにテストを止めないためのもの
+                    val deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos()
+                    while (committed.get() == seen && System.nanoTime() < deadline) Thread.sleep(1)
+                    (committed.get() > seen) shouldBe true
+                    seen = committed.get()
+                    // 検査の間も追記は続く。保存するのは、スナップショットの中で検証した末尾
                     db.app.connection
                         .use { cycle.run(it) }
                         .getOrNull()
