@@ -39,5 +39,8 @@ Debezium Outbox Event Router で Avro(Apicurio)のイベントを発行する方
 
 ## Consequences(トレードオフ)
 - テーブルに行が残らないため、「何が発行されたか」の確認は Kafka とトレースで行う。行を残したい場合は、保持期間パターンを選ぶ。
-- アプリが Apicurio に依存する(`platform/outbox` に閉じ込める)。Registry の停止中は業務更新も失敗するので、スキーマ ID をキャッシュして緩和する。
+- アプリが Apicurio に依存する。ただし、書き込みに使うスキーマの ID は起動時にすべて解決してメモリに持ち、リクエストの処理中はレジストリに問い合わせない(ADR-0025 §3)。解決するまでは `/health/ready` を失敗にしてトラフィックを受けず、解決した後は Registry を止めても業務の更新(Outbox への保存)は続けられる。Registry に依存するのは、起動時の解決と、新しいスキーマの版の反映(`make schemas` とサービスの再起動)だけになる。
 - ByteArrayConverter を使うため、Connect の SMT でペイロードの中身を加工することはできない(加工しないことを原則とする)。
+
+## 改訂履歴
+- 2026-10-02: P06 ① で、スキーマ ID を埋め込む形式(Apicurio 3 の既定と同じ 4 バイトの contentId)・スキーマの登録(`make schemas`。サービスは自動登録しない)・起動時の ID の解決を ADR-0025 で決めた。Consequences の「Registry の停止中は業務更新も失敗する」を、起動時に解決した ID を使い続ける方式に改めた。
