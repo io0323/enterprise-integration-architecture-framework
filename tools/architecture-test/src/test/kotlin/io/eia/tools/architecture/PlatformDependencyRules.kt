@@ -27,11 +27,14 @@ internal object PlatformDependencyRules {
      * - security → reliability: トークン取得の Retry と Circuit Breaker、Retry-After の解析(ADR-0019 §4・ADR-0021)
      * - security → api: 401 / 403 / 503 を Problem Details で返す(ADR-0019 §5・ADR-0022 §2)
      * - api → observability: Problem Details の correlationId(ADR-0022 §2)
+     * - messaging-kafka → schema-registry: 書き込みのスキーマ ID(起動時に解決したもの)と受信時の書き手のスキーマ(ADR-0025 §3)
+     * - messaging-kafka → observability: PRODUCER の span と Correlation ID(ADR-0025 §4・ADR-0018 §2)
      */
     val ALLOWED: Map<String, Set<String>> =
         mapOf(
             "api" to setOf("observability"),
             "audit" to setOf("security", "observability"),
+            "messaging-kafka" to setOf("schema-registry", "observability"),
             "security" to setOf("reliability", "api"),
         )
 

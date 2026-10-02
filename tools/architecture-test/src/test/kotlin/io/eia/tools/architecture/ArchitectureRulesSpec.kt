@@ -116,6 +116,12 @@ class ArchitectureRulesSpec :
                     listOf("UsesNimbus.kt", "UsesNimbusQualified.kt")
             }
 
+            test("Kafka・Avro を許可したモジュールの外の本番コードで使う・Apicurio の公式のライブラリを本番コードで使う") {
+                ArchitectureRules.messagingLibrariesOnlyInAllowedModules(violations).fileNames() shouldContainExactlyInAnyOrder
+                    // UsesFrameworks.kt は application(commonMain)で Kafka を import する既存の違反の例(commonMainPurity でも検出する)
+                    listOf("UsesKafka.kt", "UsesAvro4kQualified.kt", "UsesAvro.kt", "UsesApicurio.kt", "UsesFrameworks.kt")
+            }
+
             test("services の本番コードで Resilience(...) を直接作る(完全修飾名を含む)") {
                 ArchitectureRules.resilienceOnlyThroughMetrics(violations).fileNames() shouldContainExactlyInAnyOrder
                     listOf("CreatesResilience.kt", "CreatesResilienceQualified.kt")
@@ -158,6 +164,7 @@ class ArchitectureRulesSpec :
                 ArchitectureRules.nimbusOnlyInSecurity(compliant).shouldBeEmpty()
                 ArchitectureRules.canonicalModelOutsideDomainAndApplication(compliant).shouldBeEmpty()
                 ArchitectureRules.resilienceOnlyThroughMetrics(compliant).shouldBeEmpty()
+                ArchitectureRules.messagingLibrariesOnlyInAllowedModules(compliant).shouldBeEmpty()
             }
 
             test("platform 間の依存は許可した一覧だけで、循環がない(テストの依存とコメントは数えない)") {
