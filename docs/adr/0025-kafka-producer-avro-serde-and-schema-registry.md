@@ -58,8 +58,9 @@ P06 では、注文のイベントを Outbox + Debezium で発行する(ADR-0007
 - wire format を自前で持つため、Apicurio の既定が変わった場合は追従が必要になる。版を上げるときは `ApicurioInteropIT` で検知する(公式の Serde の版は images.env の Apicurio と揃える)。
 - イベントの型の `@SerialName` を契約の record 名に揃える必要がある。ずれていればエンコードが失敗する(`EventEncodingFailed`)ので、最初のテストで気付ける。
 - 新しいスキーマの版の反映には、`make schemas` とサービスの再起動の両方が必要になる。
-- `make up` の後に `make schemas` を実行しないと、イベントを書くサービスは ready にならない(P06 ③ で、`make up` から自動で実行するかを決める)。
+- 契約を登録しないと、イベントを書くサービスは ready にならない。ローカル基盤では、compose の `schema-publish`(1 回だけ動くコンテナ。`make schemas` と同じ処理)が登録し、`order-service` はその完了を待って起動する(P06 ③a)。`make schemas` は、基盤を起動したまま契約を変えたときに使う。
 - レジストリの REST はローカルでは未認証(ADR-0008 の「基盤の管理 API の認証」の縮退。対応は #29)。認証を加えるときは `ApicurioRegistryClient` に認証のヘッダ(OIDC の Client Credentials など)を加える。
 
 ## 改訂履歴
 - 2026-10-07: P06 ② で、`ce_id` の採番を UUIDv4 から UUIDv7(`EventIds`)に改めた。Outbox の `id` 列と同じ値にするため(ADR-0007 の改訂履歴 2026-10-07)。
+- 2026-10-07: P06 ③a で、`make up PROFILE=order` から契約を自動で登録するようにした(compose の `schema-publish`)。注文の作成で、解決の後に Apicurio を止めても注文を作れることを確かめた(`OrderEventOutboxIT`)。

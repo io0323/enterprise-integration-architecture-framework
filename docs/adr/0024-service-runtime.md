@@ -22,7 +22,7 @@ P05 ④b-2 で、最初のサービス(order-service)を起動できる形にす
 
 ### 2. コマンドを migrate と serve に分け、所有者の資格情報は migrate にだけ渡す
 - 1 つの実行ファイルに 2 つのサブコマンドを持たせる。
-  - `migrate`: DB の所有者(`{service}`)の資格情報(`ORDER_DB_PASSWORD`)で、サービスの表と監査の表(ADR-0017)をマイグレーションして終わる。
+  - `migrate`: DB の所有者(`{service}`)の資格情報(`ORDER_DB_PASSWORD`)で、サービスの表と監査の表(ADR-0017)と Outbox の表(ADR-0007。P06 ③a)をマイグレーションして終わる。
   - `serve`: アプリのロール(`{service}_app`)の資格情報(`ORDER_APP_DB_PASSWORD`)だけで、リクエストを処理する。**マイグレーションはしない。**
 - **serve の環境に所有者のパスワード(`ORDER_DB_PASSWORD` か `ORDER_DB_PASSWORD_FILE`)があれば、起動しない**(終了コード 2)。誤って渡しても、リクエストを処理するプロセスが所有者の権限(DDL・権限の変更・監査のトリガーの無効化)を持たないことを、起動時の検査で保証する。
 - 順序: ローカル基盤と統合テストでは、`migrate` を実行してから `serve` を起動する。compose(profile `order`)では、`order-migrate` を 1 回だけ動くコンテナにし、`order-service`(serve)は `depends_on: condition: service_completed_successfully` で待たせ、`serve` の環境には `ORDER_APP_DB_PASSWORD` だけを渡す。`make up` の `--wait` は、終了コード 0 で終わった `order-migrate` を失敗と扱わない(Compose v5.5.1 で確かめた。CI の infra ジョブ `verify (order)` でも確かめる)。
@@ -62,7 +62,7 @@ P05 ④b-2 で、最初のサービス(order-service)を起動できる形にす
 - **応答を返し始めた後に予算が切れた場合**(ハンドラが応答のヘッダを送った後、`proceed()` から戻る前)は、状態コードを変えられず、クライアントは返した応答を受け取っている。503 には書き換えず、エラーにも数えない。超過は `markDeadlineOverrun()` で別に数える(`eia.http.server.deadline_overruns`。ADR-0018 §5)。
 
 ### 4. ヘルスチェックと削除のジョブ
-- `/health/live`(プロセスが動いている)と `/health/ready`(DB に接続できる。できなければ 503)。認証しない。平文のヘルスチェックのポートだけで返す(§6)。
+- `/health/live`(プロセスが動いている)と `/health/ready`(DB に接続でき、**書き込むイベントのスキーマ ID をすべて解決し終えている**。どちらかが欠ければ 503。スキーマ ID は ADR-0025 §3。P06 ③a)。認証しない。平文のヘルスチェックのポートだけで返す(§6)。
 - 期限切れの冪等の記録の削除(`IdempotencyStore.purgeExpired`)を、`serve` の中で既定 5 分ごとに行う(`ORDER_IDEMPOTENCY_PURGE_INTERVAL`)。処理中の記録の猶予はリースの長さ(ADR-0022 §3)。失敗しても次の周期でやり直し、サーバの停止で止まる。
 
 ### 5. 設定と秘密情報
@@ -125,3 +125,4 @@ P05 ④b-2 で、最初のサービス(order-service)を起動できる形にす
 - 2026-10-01: P05 ⑤c で、§7 を直した。ホストの uid が 0(root)なら `make up` / `make certs` を止める(以前は 65532 で動かし、鍵の所有者を変えていた)。本番では固定の nonroot の uid で動かし、鍵の読み取り権限は Secret の配置で与えることを書いた。
 - 2026-10-01: P05 ⑤c で、ゲートウェイの上流のタイムアウトを 15 秒にした(§3 の表。ADR-0023 §1)。
 - 2026-10-01: P05 ⑦a の前に、応答を返し始めた後に予算が切れた要求を、エラー(`error.type=timeout`)ではなく、別のカウンタ `eia.http.server.deadline_overruns` で数えることにした(§3。RED の Errors はクライアントが受け取った結果に合わせる)。
+- 2026-10-07: P06 ③a で、`migrate` が Outbox の表と publication も作るようにし(Debezium のロールは `ORDER_CDC_DB_USER`。既定 `debezium`)、`serve` に `ORDER_SCHEMA_REGISTRY_URL`(必須)を加えた。`/health/ready` は、DB に加えて書き込むイベントのスキーマ ID をすべて解決し終えたときだけ UP にする(§4。ADR-0025 §3)。解決は起動の後に繰り返すので、起動の直後は 503 のことがある。compose では `order-service` が `schema-publish`(契約の登録)の完了を待って起動する。
