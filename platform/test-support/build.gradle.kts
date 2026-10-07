@@ -6,3 +6,8 @@ plugins {
 dependencies {
     api(libs.testcontainers)
 }
+
+dependencies {
+    // compose と同じ構成のコンテナ(Kafka Connect)の統合テストで、ブローカーを立てる
+    integrationTestImplementation(libs.testcontainers.kafka)
+}
