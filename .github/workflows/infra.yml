@@ -5,8 +5,8 @@ on:
       - "infra/local/**"
       - "services/*/app/Dockerfile"
       - "services/*/app/.dockerignore"
-      - "tools/schema-publish/Dockerfile"
-      - "tools/schema-publish/.dockerignore"
+      - "tools/*/Dockerfile"
+      - "tools/*/.dockerignore"
       - "Makefile"
       - ".github/workflows/infra.yml"
   push:
@@ -15,8 +15,8 @@ on:
       - "infra/local/**"
       - "services/*/app/Dockerfile"
       - "services/*/app/.dockerignore"
-      - "tools/schema-publish/Dockerfile"
-      - "tools/schema-publish/.dockerignore"
+      - "tools/*/Dockerfile"
+      - "tools/*/.dockerignore"
       - "Makefile"
       - ".github/workflows/infra.yml"
 permissions:
@@ -26,7 +26,9 @@ concurrency:
   cancel-in-progress: true
 
 # ADR-0016: ローカル基盤(infra/local)を profile ごとに起動し、`make verify` で healthy と機能の疎通を検査する。
-# 1 ジョブ 1 profile(core + その profile)とし、ランナーのメモリ(private リポジトリの ubuntu-latest は 7GB 程度)に収める。
+# 1 ジョブ 1 profile(core + その profile)とする。ubuntu-latest は 4 コア・16GB(公開リポジトリの標準ランナー。ADR-0020)。
+# 各コンテナの mem_limit は、ランナーの大きさではなく、開発機(16GB のマシンで Docker に 8〜10GB)で core + 1〜2 の profile を
+# 同時に動かせることを基準にする(ADR-0016 §1)。
 # アクションは ci.yml と同じくコミット SHA で固定する。
 jobs:
   compose-config:
@@ -56,7 +58,7 @@ jobs:
       - name: Self-built images use images.env bases and checksummed downloads
         run: |
           status=0
-          for dockerfile in infra/local/images/*/Dockerfile services/*/app/Dockerfile; do
+          for dockerfile in infra/local/images/*/Dockerfile services/*/app/Dockerfile tools/*/Dockerfile; do
             if grep -n -E '^FROM ' "$dockerfile" | grep -v -E 'FROM \$\{[A-Z0-9_]+_IMAGE\}( AS [a-z0-9-]+)?$'; then
               echo "$dockerfile: FROM は images.env の変数(ARG で受け取る \${..._IMAGE})だけにしてください"; status=1
             fi
@@ -66,6 +68,9 @@ jobs:
             fi
           done
           exit $status
+      # Prometheus のアラートのルールの検査と単体テスト(promtool。P06 ④。閾値が上限に追従することも確かめる)
+      - name: Alert rules (promtool)
+        run: make alerts-test
 
   verify:
     name: verify (${{ matrix.profile }})
