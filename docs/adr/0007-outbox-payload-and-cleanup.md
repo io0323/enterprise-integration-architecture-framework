@@ -15,6 +15,8 @@ Debezium Outbox Event Router で Avro(Apicurio)のイベントを発行する方
   - スキーマ ID は **Kafka ヘッダではなくペイロードの先頭に埋め込む**設定にする(Outbox 経由ではシリアライザが付けたヘッダが Kafka に届かないため)。
 - Outbox テーブルの列:
   `id uuid PK, topic text, aggregate_type text, aggregate_id text, event_type text, payload bytea, traceparent text, correlation_id text, ce_id uuid, ce_source text, ce_time timestamptz, created_at timestamptz`
+  - `id` と `ce_id` には同じ値(イベントの ID。UUIDv7)を入れる(改訂履歴 2026-10-07)。
+- 表はスキーマ `outbox` に置き(`outbox.outbox`)、`platform/outbox` の `OutboxSchema` が専用の履歴の表で作る。アプリのロールには INSERT・DELETE と `id` 列の SELECT だけ、Debezium のロールには SELECT だけを付ける。Debezium が読む publication `eiaf_outbox` は Outbox の表だけを含む(改訂履歴 2026-10-07)。
 - Debezium の設定(キー名は P06 で採用する Debezium のバージョンのドキュメントで確認して固定する):
   - `transforms=outbox`(`io.debezium.transforms.outbox.EventRouter`)
   - `value.converter=org.apache.kafka.connect.converters.ByteArrayConverter`(アプリで Avro にしたバイト列をそのまま流す)
@@ -26,9 +28,11 @@ Debezium Outbox Event Router で Avro(Apicurio)のイベントを発行する方
 - **既定は「挿入直後に削除」パターン**: 業務更新・outbox への INSERT・同じ行の DELETE を、同一のローカルトランザクションで行う。Debezium は WAL から INSERT を読み取って発行し、DELETE イベントは Event Router が発行しない(Event Router の既定動作。コネクタ側も `tombstones.on.delete=false` にして tombstone を出さない)。テーブルには行が残らないため、肥大化も掃除用のジョブも発生しない。
   - 発行の確認は、Debezium の replication slot が WAL の位置を進めることで担保される。slot が進まない間は WAL が保持されるので、欠損は起きない。
   - 監視: replication slot の遅延(`pg_replication_slots` の `confirmed_flush_lsn` の差)と Connect のタスク状態を Prometheus で監視し、閾値超過をアラートにする(Runbook: `docs/runbooks/cdc-outbox-lag.md`)。
+  - 実装は `platform/outbox` の `Outbox.append`(Exposed からは `appendOutbox`)。自動コミットの接続(トランザクションの外)では書かない。
 - **調査・監査のために行を残す必要があるサービスだけ**、次の保持期間パターンを使う(サービスの ADR か設定で選択):
   - `created_at` で日次の RANGE パーティションにし、保持期間(既定 7 日。Kafka 側の保持期間と揃える)を過ぎたパーティションを `DETACH` → `DROP` するジョブを `platform/outbox` で提供する。
   - DROP する前に、該当期間の slot 位置が進んでいることを確認し、進んでいなければ DROP を中止してアラートを出す。
+  - **実装は、行を残す必要のあるサービスが出てきたときに行う**(P06 では既定の方式だけを実装した)。P06 ② で検討した具体(封印した LSN での判定・DEFAULT パーティションを作らない理由・所有者の資格情報で実行すること)は Issue #76 に記録した。
 - 監査の証跡は Outbox ではなく Audit(ADR-0008)に残す。
 
 ## Alternatives Considered
@@ -44,3 +48,7 @@ Debezium Outbox Event Router で Avro(Apicurio)のイベントを発行する方
 
 ## 改訂履歴
 - 2026-10-02: P06 ① で、スキーマ ID を埋め込む形式(Apicurio 3 の既定と同じ 4 バイトの contentId)・スキーマの登録(`make schemas`。サービスは自動登録しない)・起動時の ID の解決を ADR-0025 で決めた。Consequences の「Registry の停止中は業務更新も失敗する」を、起動時に解決した ID を使い続ける方式に改めた。
+- 2026-10-07: P06 ② で `platform/outbox` に既定の方式(INSERT の直後に DELETE)を実装した。
+  - **`id` 列と `ce_id` 列には同じ値を入れ、その値は `EventMetadata.id` を UUIDv7 で作ったものにする**(`EventIds`。表の CHECK 制約で `ce_id = id` を強制する)。イベントの ID を 1 つにして、Outbox・WAL・Kafka(`ce_id` のヘッダ)・受信側(冪等の判定)をまたいで同じ値で追えるようにするため。UUIDv7 は先頭が時刻なので、主キーの B-tree の順序も保てる。列の構成は変えない。
+  - 表はスキーマ `outbox` に置き、権限はアプリのロールに INSERT・DELETE・`id` 列の SELECT、Debezium のロールに SELECT だけを付ける。publication `eiaf_outbox` は Outbox の表だけを含む(Debezium には自動で作らせない)。
+  - 保持期間の方式は実装せず、§2 の設計の記述は残した。実装は行を残す必要のあるサービスが出てきたときに行う(Issue #76)。

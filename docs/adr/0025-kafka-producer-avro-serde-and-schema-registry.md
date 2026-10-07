@@ -39,7 +39,7 @@ P06 では、注文のイベントを Outbox + Debezium で発行する(ADR-0007
 ### 4. Producer(DB の更新を伴わない送信)
 - **DB の更新と組み合わせるイベントは Outbox(ADR-0007)で発行し、`EventProducer` は使わない**(二重書き込みの禁止)。`EventProducer` は、受け取ったイベントを整形して送り直すなど、DB の更新を伴わない送信だけに使う。
 - 設定は `acks=all` と冪等な Producer(`enable.idempotence=true`)。キーと値はバイト列で、キーは集約の ID などのパーティションキー(UTF-8)。
-- 送信ごとに PRODUCER の span(`{topic} publish`)を作り、その `traceparent` と呼び出し元の Correlation ID(なければ採番)をヘッダに入れる。ヘッダは CloudEvents の binary mode(`ce_id` / `ce_source` / `ce_type` / `ce_time` / `ce_specversion`)と `traceparent`・`correlationid` で、値はすべて UTF-8 の文字列(`EventMetadata`)。Outbox 経由の Debezium も同じ名前・同じ形式でヘッダを載せる(ADR-0007 §1)。`ce_type` はトピック名から `.v{n}` を除いたもの。
+- 送信ごとに PRODUCER の span(`{topic} publish`)を作り、その `traceparent` と呼び出し元の Correlation ID(なければ採番)をヘッダに入れる。ヘッダは CloudEvents の binary mode(`ce_id` / `ce_source` / `ce_type` / `ce_time` / `ce_specversion`)と `traceparent`・`correlationid` で、値はすべて UTF-8 の文字列(`EventMetadata`)。Outbox 経由の Debezium も同じ名前・同じ形式でヘッダを載せる(ADR-0007 §1)。`ce_type` はトピック名から `.v{n}` を除いたもの。`ce_id` は UUIDv7(`EventIds`)で採番する。Outbox でも同じ値を `id` 列に入れる(ADR-0007 の改訂履歴 2026-10-07)。
 - 失敗は `PublishFailed` にし、Kafka の `RetriableException` なら Retryable、それ以外は NonRetryable にする。ログ・span・エラーにペイロードの値は入れない。
 
 ### 5. ライブラリの配置(Konsist の `messagingLibrariesOnlyInAllowedModules`)
@@ -60,3 +60,6 @@ P06 では、注文のイベントを Outbox + Debezium で発行する(ADR-0007
 - 新しいスキーマの版の反映には、`make schemas` とサービスの再起動の両方が必要になる。
 - `make up` の後に `make schemas` を実行しないと、イベントを書くサービスは ready にならない(P06 ③ で、`make up` から自動で実行するかを決める)。
 - レジストリの REST はローカルでは未認証(ADR-0008 の「基盤の管理 API の認証」の縮退。対応は #29)。認証を加えるときは `ApicurioRegistryClient` に認証のヘッダ(OIDC の Client Credentials など)を加える。
+
+## 改訂履歴
+- 2026-10-07: P06 ② で、`ce_id` の採番を UUIDv4 から UUIDv7(`EventIds`)に改めた。Outbox の `id` 列と同じ値にするため(ADR-0007 の改訂履歴 2026-10-07)。

@@ -55,6 +55,8 @@ flowchart BT
   | `platform:api` | `platform:observability` | Problem Details の `correlationId`(ADR-0022 §2) |
   | `platform:messaging-kafka` | `platform:schema-registry` | 書き込みのスキーマ ID(起動時に解決したもの)と受信時の書き手のスキーマ(ADR-0025 §3) |
   | `platform:messaging-kafka` | `platform:observability` | PRODUCER の span と Correlation ID(ADR-0025 §4・ADR-0018 §2) |
+  | `platform:outbox` | `platform:messaging-kafka` | 記録のトピック・ヘッダ・ペイロード(`EventTopic`・`EventMetadata`・`AvroEventSerializer`。ADR-0007) |
+  | `platform:outbox` | `platform:observability` | 記録を作るときの PRODUCER の span と Correlation ID(ADR-0018 §2) |
 - Kafka のクライアントと avro4k を本番コードで使ってよいのは `platform:messaging-kafka` と `services:*:adapters`・`app` だけ(`org.apache.avro` は tools も可)。Apicurio の公式のライブラリはテストだけ(ADR-0025 §5。Konsist の `messagingLibrariesOnlyInAllowedModules`)。
 - `platform:test-support` はテストのソースセット(`test` / `integrationTest` など)からだけ参照する。
 - `services` 間のコード依存は禁止(連携は契約経由のみ)。契約モデルは contracts から生成するか `adapters` 内で定義する。
@@ -117,7 +119,7 @@ services/order/
 | test-support | テスト専用。`infra/local/images.env` のイメージを Testcontainers で使う `InfraImages`(ADR-0016 §5)。test / integrationTest からだけ参照する(Konsist) | P04a |
 | api | REST の共通部品: Problem Details(RFC 9457。`installProblemDetails` / `respondError`。`type` の一覧は INTEGRATION_STANDARDS §6)と Idempotency-Key(`respondIdempotently` / `IdempotencyHandler` / Port `IdempotencyStore`。PostgreSQL の実装は各サービスの adapters)(ADR-0022) | P05 |
 | reliability | `shared/resilience` の JVM 向けアダプタ: OTel のメトリクス(`ResilienceMetrics`)、Ktor Client の結果の Retryable / NonRetryable への分類(`HttpCallClassifier`)、`Retry-After` の解析(ADR-0021 §7・§11)。OTel は API だけを使う | P04b |
-| outbox | Outbox 挿入・削除・保持期間ジョブ | P06 |
+| outbox | Transactional Outbox(ADR-0007)。`Outbox.append` / `appendOutbox`(業務と同じ Exposed のトランザクションで INSERT し、同じ行を DELETE する既定の方式。自動コミットでは書かない)、`OutboxEvents`(イベントから記録を作る。`{topic} create` の PRODUCER の span・UUIDv7 の `ce_id` = `id`)、`OutboxSchema`(スキーマ `outbox`・権限・publication `eiaf_outbox`。サービスの migrate で所有者が適用する)、`OutboxMetrics`。保持期間の方式は #76 | P06 |
 | messaging-kafka | Kafka の共通部品(ADR-0025)。P06: CloudEvents binary mode のヘッダ(`EventMetadata`)・トピック名(`EventTopic`)・Avro の Serde(avro4k。スキーマ ID は Apicurio と同じ形式でペイロードの先頭に埋め込む。`ApicurioWireFormat`・`AvroEventSerializer`・`AvroEventDeserializer`)・DB の更新を伴わない送信の Producer(`EventProducer`。PRODUCER の span)。DB の更新と組み合わせるイベントは Outbox で発行する。P07: Consumer・冪等消費・DLQ・Replay | P06, P07 |
 | batch | 軽量 DAG ランナー・Checkpoint・SLA メトリクス | P08 |
 | file-transfer | manifest・checksum・S3 互換ストレージ / SFTP | P09 |
