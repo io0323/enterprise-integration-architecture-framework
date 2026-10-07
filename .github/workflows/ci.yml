@@ -94,6 +94,8 @@ jobs:
               - 'contracts/**'
               - 'infra/local/**'
               - 'tests/e2e/**'
+              # make up PROFILE=order が組み立てる契約の登録のコンテナ(compose の schema-publish)
+              - 'tools/schema-publish/**'
               - 'build-logic/**'
               - 'gradle/libs.versions.toml'
               - 'Makefile'

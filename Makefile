@@ -62,10 +62,10 @@ not-root:
 certs: not-root ## 開発用の CA と mTLS の証明書を作る。残りが 7 日を切っていれば作り直す(docs/runbooks/dev-certificates.md)
 	@$(INFRA)/scripts/gen-dev-certs.sh
 
-order-dist: ## order-service のイメージの中身(installDist)を作る
-	$(GRADLE) :services:order:app:installDist
+order-dist: ## order-service と schema-publish(契約のスキーマの登録)のイメージの中身(installDist)を作る
+	$(GRADLE) :services:order:app:installDist :tools:schema-publish:installDist
 
-# --build: 自前で組み立てるイメージ(kafka-connect・order-service。ADR-0016 §9)の変更を反映する(変更がなければキャッシュを使う)
+# --build: 自前で組み立てるイメージ(kafka-connect・order-service・schema-publish。ADR-0016 §9)の変更を反映する(変更がなければキャッシュを使う)
 # 証明書の有効期限は毎回確かめる(期限切れの証明書で起動に失敗しないように)
 up: not-root env certs $(if $(filter order,$(PROFILE)),order-dist) ## ローカル基盤を起動し、全コンテナが healthy になるまで待つ(例: make up PROFILE=cdc)
 	@if [ -f $(INFRA)/certs/.renewed ]; then \

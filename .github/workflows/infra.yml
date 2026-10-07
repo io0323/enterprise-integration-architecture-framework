@@ -5,6 +5,8 @@ on:
       - "infra/local/**"
       - "services/*/app/Dockerfile"
       - "services/*/app/.dockerignore"
+      - "tools/schema-publish/Dockerfile"
+      - "tools/schema-publish/.dockerignore"
       - "Makefile"
       - ".github/workflows/infra.yml"
   push:
@@ -13,6 +15,8 @@ on:
       - "infra/local/**"
       - "services/*/app/Dockerfile"
       - "services/*/app/.dockerignore"
+      - "tools/schema-publish/Dockerfile"
+      - "tools/schema-publish/.dockerignore"
       - "Makefile"
       - ".github/workflows/infra.yml"
 permissions:

@@ -310,6 +310,23 @@ services:
     mem_limit: 256m
     restart: "no"
 
+  # 契約の Avro スキーマを Schema Registry に登録して終わる(make schemas と同じ。ADR-0025 §2)。
+  # order-service は書き込むイベントのスキーマ ID を起動時に解決し、解決するまで ready にならないため、登録の完了を待ってから起動する(ADR-0025 §3)
+  schema-publish:
+    build:
+      context: ../../tools/schema-publish
+      args:
+        JAVA_RUNTIME_IMAGE: ${JAVA_RUNTIME_IMAGE:?}
+    profiles: [order]
+    command: ["--registry", "http://apicurio:8080/apis/registry/v3", "--root", "/repo"]
+    depends_on:
+      apicurio:
+        condition: service_healthy
+    volumes:
+      - ../../contracts:/repo/contracts:ro
+    mem_limit: 256m
+    restart: "no"
+
   # リクエストの処理(serve)。マイグレーションが成功してから起動する。アプリのロールのパスワードだけを渡す(ADR-0024 §2)
   # - API(8443)は mTLS だけで受ける(クライアント証明書は開発用 CA の署名と SAN の許可の一覧。ADR-0024 §6)。
   #   ホストの 19443 は、mTLS なしの直接接続を拒否することの検査(make verify)と調査のためだけに公開する
@@ -323,6 +340,8 @@ services:
     depends_on:
       order-migrate:
         condition: service_completed_successfully
+      schema-publish:
+        condition: service_completed_successfully
       otel-collector:
         condition: service_healthy
       # 監査のアンカーのバケット(eiaf-audit)とポリシーができてから起動する
@@ -331,6 +350,8 @@ services:
     environment:
       ORDER_DB_URL: jdbc:postgresql://postgres:5432/order_service
       ORDER_APP_DB_PASSWORD: ${ORDER_APP_DB_PASSWORD:?make env を実行してください}
+      # 書き込むイベント(Outbox)のスキーマ ID を起動時に解決する Schema Registry(ADR-0025 §3)
+      ORDER_SCHEMA_REGISTRY_URL: http://apicurio:8080/apis/registry/v3
       # 監査のアンカーの保存(ADR-0017 §5)。order の書込み用の identity(eiaf-audit-order)で、anchors/order/ の下にだけ書ける。
       # 間隔は、ローカルで確かめやすいよう 1 分(既定は 1 時間)。保持期間は make audit-verify の既定の最小値(P1D)と同じ
       ORDER_AUDIT_S3_ENDPOINT: http://seaweedfs:8333
