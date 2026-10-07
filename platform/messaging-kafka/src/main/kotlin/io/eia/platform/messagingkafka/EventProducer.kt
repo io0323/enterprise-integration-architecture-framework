@@ -15,7 +15,6 @@ import org.apache.kafka.common.KafkaException
 import org.apache.kafka.common.errors.RetriableException
 import kotlin.coroutines.resume
 import kotlin.time.Clock
-import kotlin.uuid.Uuid
 
 /**
  * イベントを Kafka に直接送る(Framework 6。ADR-0025 §4)。
@@ -23,6 +22,7 @@ import kotlin.uuid.Uuid
  * **DB の更新と組み合わせるイベントは、これを使わず Outbox(ADR-0007)で発行する**(二重書き込みの禁止。CLAUDE.md §5)。
  * これを使うのは、DB の更新を伴わない送信だけ(例: CDC の Anti-Corruption 変換が、受け取ったイベントを整形して送り直す)。
  *
+ * - `ce_id` は UUIDv7([EventIds])。
  * - 送信ごとに PRODUCER の span(`{topic} publish`)を作り、その `traceparent` と Correlation ID をヘッダに入れる
  *   (CloudEvents binary mode。[EventMetadata])。Correlation ID は呼び出し元のコンテキストのものを引き継ぐ(なければ採番する)。
  * - キーはパーティションキー(集約の ID など)。同じキーのイベントは同じパーティションに入り、順序が保たれる。
@@ -38,6 +38,7 @@ public class EventProducer(
     private val observability: ObservabilityRuntime,
     private val source: String,
     private val clock: Clock = Clock.System,
+    private val ids: EventIds = EventIds(clock),
 ) {
     init {
         require(source.isNotBlank()) { "source が空です" }
@@ -64,7 +65,7 @@ public class EventProducer(
                     val trace = CurrentTrace.get()
                     val metadata =
                         EventMetadata(
-                            id = Uuid.random(),
+                            id = ids.next(),
                             source = source,
                             type = topic.ceType,
                             time = clock.now(),
