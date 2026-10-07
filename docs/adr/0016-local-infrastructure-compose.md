@@ -17,7 +17,7 @@ P03 で `infra/local/` に ADR-0003 のミドルウェア一式を Docker Compos
 | profile | サービス | 用途(フェーズ) |
 |---|---|---|
 | `core` | kafka, apicurio, postgres, keycloak, apisix, otel-collector, prometheus, tempo, loki, grafana | すべて(P04a〜) |
-| `cdc` | kafka-connect(Debezium) | Outbox + CDC(P06)、レガシー CDC |
+| `cdc` | kafka-connect(Debezium), postgres-exporter, kafka-exporter | Outbox + CDC(P06)、レガシー CDC、その監視(P06 ④) |
 | `iot` | mosquitto | IoT(P11) |
 | `file` | seaweedfs, sftp | File(P09)、Audit のアンカー(P04a) |
 | `b2b` | seaweedfs, sftp-b2b | B2B / EDI(P12) |
@@ -146,3 +146,10 @@ Docker のヘルスチェックはコンテナの中で実行されるため、�
 - 2026-10-01: §6 の監査のアンカーの書込み用の資格情報を、サービスごとの `eiaf-audit-{service}`(`{SERVICE}_AUDIT_S3_*`。`anchors/{service}/` の下にだけ書ける)に替え、共有の `eiaf-audit`(`AUDIT_S3_*`)を削除した(P05 ⑧。ADR-0017 §7。Issue #43)。
 - 2026-10-07: P06 ③a で、profile `order` に `schema-publish`(契約の Avro スキーマを Apicurio に登録して終わる 1 回だけのコンテナ。`tools/schema-publish/Dockerfile`。ベースは `JAVA_RUNTIME_IMAGE`、中身は `make up PROFILE=order` が作る installDist、契約は読み取り専用でマウントする)を加えた。`order-service` はその完了を待って起動する(ADR-0025 §3)。
 - 2026-10-07: P06 ③b で、`kafka-connect` を profile `order` でも起動するようにした(注文のイベントを Outbox から Debezium で発行するため。ADR-0007)。`make up PROFILE=order` は起動の後に `scripts/connectors.sh order-outbox` でコネクタ(`kafka-connect/order-outbox.json`)を PUT で登録し、RUNNING を待つ(何度実行しても同じ結果)。PostgreSQL に `max_slot_wal_keep_size=1GB` を加えた。統合テストは `platform/test-support` の `KafkaConnectContainer` で同じイメージを docker の CLI(BuildKit)で組み立てる(Testcontainers の `ImageFromDockerfile` は `ADD --checksum` と `COPY --chmod` を組み立てられないため)。
+- 2026-10-08: P06 ④ で、CDC の監視を加えた。
+  - `postgres-exporter`(v0.20.1)と `kafka-exporter`(v1.10.0)を、`images.env` でタグとダイジェストに固定した(どちらも linux/amd64 と linux/arm64 を含む)。profile は `cdc` と `order`(Connect と同じ)、`mem_limit` は 64m。
+  - postgres-exporter は、`pg_monitor` だけを持つ専用のロール `postgres_exporter` で接続する(`postgres/init/30-monitoring.sh`。パスワードは `make env` が作る `POSTGRES_EXPORTER_DB_PASSWORD`)。初期化スクリプトなので、前のボリュームでは `make clean` が要る。
+  - Kafka Connect のイメージに、JMX exporter(1.7.0)を javaagent として載せた(`:9404`。`images/kafka-connect/jmx-exporter.yml` でコネクタとタスクの状態・Debezium の指標だけを出す)。取得元は GitHub のリリース(§9 の例外)。ディレクトリは `install -d -m 0755` で先に作る(`COPY --chmod` は親のディレクトリにも同じ権限を付け、実行の権限がなくなって JVM が jar を開けなかった)。
+  - Prometheus に `rule_files`(`prometheus/rules/*.rules.yml`)を加えた。Alertmanager は置かない。ルールの単体テスト(`*.test.yml`)は `make alerts-test`(images.env の Prometheus の promtool)で、CI の infra の `compose config` のジョブでも実行する。
+  - core だけで起動したときは exporter の scrape 先が down になる。`make verify` の core の「scrape 先がすべて up」から CDC の 3 つを除き、cdc / order の検査で確かめる。アラートも、その場合に firing しない条件にした(`cdc.rules.yml`)。
+  - CI のランナーのメモリの前提(「private リポジトリの ubuntu-latest は 7GB 程度」)を、今の標準ランナー(4 コア・16GB)に直した。`mem_limit` の基準は §1 のとおり開発機(16GB のマシンで Docker に 8〜10GB)。

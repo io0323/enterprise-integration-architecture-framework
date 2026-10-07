@@ -42,12 +42,12 @@ docker compose -f infra/local/docker-compose.yml --env-file infra/local/images.e
 | profile | サービス | 用途 |
 |---|---|---|
 | `core` | kafka, apicurio, postgres, keycloak, apisix, otel-collector, prometheus, tempo, loki, grafana | 常に起動する |
-| `cdc` | kafka-connect(Debezium) | Outbox + CDC(P06) |
+| `cdc` | kafka-connect(Debezium), postgres-exporter, kafka-exporter | Outbox + CDC(P06)と、その監視(P06 ④) |
 | `iot` | mosquitto | MQTT(P11) |
 | `file` | seaweedfs(S3), sftp | ファイル連携(P09)、Audit のアンカー(P04a) |
 | `b2b` | seaweedfs(S3), sftp-b2b | B2B / EDI(P12) |
 | `chaos` | toxiproxy | 障害注入(P04b, P14) |
-| `order` | order-migrate・schema-publish(1 回だけ動いて終わる), order-service, kafka-connect, seaweedfs, seaweedfs-init | API 連携のサンプル業務サービス(P05。ADR-0024)。SeaweedFS は監査のアンカーの保存先(ADR-0017 §5) |
+| `order` | order-migrate・schema-publish(1 回だけ動いて終わる), order-service, kafka-connect, postgres-exporter, kafka-exporter, seaweedfs, seaweedfs-init | API 連携のサンプル業務サービス(P05。ADR-0024)。SeaweedFS は監査のアンカーの保存先(ADR-0017 §5) |
 
 Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)。
 
@@ -87,6 +87,7 @@ Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)�
 | PostgreSQL(サービス別) | `order_service` / `inventory_service` / `payment_service` / `shipping_service` / `legacy_sim` / `batch_etl`(DB 名と同じ。DB の所有者で、マイグレーションに使う) | `.env` の `<SERVICE>_DB_PASSWORD`。他のサービスの DB には接続できない |
 | PostgreSQL(サービス別のアプリ用) | `<DB 名>_app`(例 `order_service_app`)。表を所有せず、権限は各マイグレーションが付ける(監査記録は INSERT と SELECT だけ。ADR-0017) | `.env` の `<SERVICE>_APP_DB_PASSWORD`。**P04a ④ より前に作ったボリュームには無いので、`make clean` が必要** |
 | PostgreSQL(CDC) | `debezium`(REPLICATION) | `DEBEZIUM_DB_PASSWORD` |
+| PostgreSQL(CDC の監視) | `postgres_exporter`(`pg_monitor` だけ。表のデータは読めない) | `POSTGRES_EXPORTER_DB_PASSWORD`。**P06 ④ より前に作ったボリュームには無いので、`make clean` が必要** |
 | Keycloak 管理 | `admin` | `KEYCLOAK_ADMIN_PASSWORD` |
 | Keycloak client credentials | `eiaf-e2e`(スコープ `sales.order:read` / `sales.order:write`、`aud` = `order-api`) | `EIAF_E2E_CLIENT_SECRET` |
 | Keycloak client credentials(2 つ目) | `eiaf-e2e-b`(`eiaf-e2e` と同じ設定。クライアントごとの Rate Limit・冪等の範囲の確認用。ADR-0023 §5) | `EIAF_E2E_B_CLIENT_SECRET`。**P05 ⑤c より前に作ったボリュームには無いので、`make clean` が必要** |
@@ -127,7 +128,7 @@ curl -s -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token
   - order-service は、1 分ごと(`ORDER_AUDIT_ANCHOR_INTERVAL`。アプリの既定は 1 時間)に、前回のアンカーからの差分を検証してアンカーを保存する(記録が増えていなければ保存しない)。成否はダッシュボード `Order API — RED` の「監査の記録」の行に出る。`make verify PROFILE=order` と `make e2e` は、保存を待ってから `make audit-verify SERVICE=order` が OK でアンカーがあることを確かめる(`scripts/audit-anchored.sh`)。
 - **order-service(ADR-0024)**: `order-migrate` が所有者の資格情報でマイグレーションして終わり、`order-service` は完了を待ってから、アプリのロールの資格情報だけで起動する。API は mTLS だけで受ける。証明書は `infra/local/certs/`(.gitignore 済み。`make certs`)で、仕組みと期限切れのときの対処は `docs/runbooks/dev-certificates.md`。コンテナは開発用の鍵を読むため、ホストの利用者の uid で動く(root にはしない)。
   - `schema-publish` が契約の Avro スキーマを Apicurio に登録して終わり、`order-service` はその完了も待つ。`order-service` は起動の後に書き込むイベントのスキーマ ID を解決し、解決するまで `/health/ready` は 503(ADR-0025 §3)。注文は Outbox(`outbox.outbox`)に書き、行は同じトランザクションで消える(ADR-0007)。
-  - 発行: `make up` が起動の後に `scripts/connectors.sh order-outbox` でコネクタ(`kafka-connect/order-outbox.json`)を登録し、Debezium が WAL の INSERT を `sales.order.created.v1` に発行する。debezium のロールは REPLICATION と Outbox の表の SELECT だけ。heartbeat(10 秒)で、注文のない間もスロットを進める。スロットが保持する WAL の上限は `max_slot_wal_keep_size=1GB`。`make verify PROFILE=order` は、Kafka を止めて(`compose stop`)作った注文のイベントが、再開の後に届くことも確かめる。
+  - 発行: `make up` が起動の後に `scripts/connectors.sh order-outbox` でコネクタ(`kafka-connect/order-outbox.json`)を登録し、Debezium が WAL の INSERT を `sales.order.created.v1` に発行する。debezium のロールは REPLICATION と Outbox の表の SELECT だけ。heartbeat(10 秒)で、注文のない間もスロットを進める。スロットが保持する WAL の上限は `max_slot_wal_keep_size=1GB`。監視: postgres-exporter(スロットの `wal_status`・`safe_wal_size`・遅延と上限)、kafka-exporter(トピックのオフセット)、Connect の JMX exporter(`:9404`。コネクタとタスクの状態)を Prometheus が収集し、`prometheus/rules/cdc.rules.yml` のアラート(閾値は上限に対する割合)と Grafana の **CDC — Outbox** で見る。対応は `docs/runbooks/cdc-outbox-lag.md`。ルールの単体テストは `make alerts-test`。`make verify PROFILE=order` は、Kafka を止めて(`compose stop`)作った注文のイベントが、再開の後に届くことも確かめる。
 - **Toxiproxy**: 起動時に `kafka-host`(19094)、`kafka-internal`(19095)、`postgres`(19433)の proxy を作る(`toxiproxy/toxiproxy.json`)。
 
 ## イメージの更新
@@ -164,6 +165,14 @@ Kafka Connect は公開イメージを使わず、`images/kafka-connect/Dockerfi
    curl -fsSL "$url" | shasum -a 256
    ```
 
+   JMX exporter(`JMX_EXPORTER_*`)は Maven Central ではなく GitHub のリリースから取る(1.1 以降は Maven Central にない。ADR-0016 §9)。
+
+   ```bash
+   url=https://github.com/prometheus/jmx_exporter/releases/download/1.7.0/jmx_prometheus_javaagent-1.7.0.jar
+   curl -fsSL "$url.sha256"; echo
+   curl -fsSL "$url" | shasum -a 256
+   ```
+
 3. Dockerfile の `ARG`(版と SHA-256)を書き換える。
 4. `make up PROFILE=cdc && make verify PROFILE=cdc` を実行し、PR にその結果を載せる(`make up` は `--build` で組み立て直す)。
 
@@ -179,4 +188,5 @@ Kafka Connect は公開イメージを使わず、`images/kafka-connect/Dockerfi
 | otel-collector / loki が healthy にならない | Docker が image マウントに対応していない。Docker Desktop / Engine を更新する |
 | コンテナが再起動を繰り返す(OOM) | `make stats` で使用量を確認し、Docker に割り当てるメモリを増やすか、不要な profile を止める(`make down` して必要な profile だけ `make up`) |
 | ポートが使用中で起動しない | 19000〜19999 を使う他のプロセスを止める(`lsof -iTCP:19092 -sTCP:LISTEN` など) |
+| `make verify` が「Prometheus が postgres-exporter から収集できる」で失敗する | `postgres_exporter` のロールは初期化スクリプト(`postgres/init/30-monitoring.sh`)で作るため、P06 ④ より前のボリュームなら `make clean` が必要 |
 | `make verify PROFILE=cdc` がコネクタの RUNNING で失敗する | `make logs SERVICE=kafka-connect` を確認する。`debezium` ユーザーは初期化スクリプトで作るため、古いボリュームなら `make clean` が必要 |
