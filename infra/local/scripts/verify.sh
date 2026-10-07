@@ -520,9 +520,74 @@ verify_order() {
     fail "order-service: root で動いている (user='$user')"
   fi
 
+  verify_order_cdc "$(sed '$d' <<<"$first" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))' 2>/dev/null || true)" "${gw[@]}"
   verify_audit_anchor "$posted_at"
   verify_gateway
   verify_dashboard
+}
+
+# 注文のイベントの発行(Outbox → Debezium → Kafka。ADR-0007・P06 ③b)
+# verify_order_cdc <上で POST した注文 ID> <ゲートウェイの証明書で API を呼ぶ curl...>
+verify_order_cdc() {
+  local order_id="$1" connect=http://localhost:19083 topic=sales.order.created.v1
+  shift
+  local gw=("$@")
+  check "CDC(order): コネクタ order-outbox とタスクが RUNNING" bash -c \
+    "curl -fsS $connect/connectors/order-outbox/status | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d[\"connector\"][\"state\"]==\"RUNNING\" and d[\"tasks\"] and all(t[\"state\"]==\"RUNNING\" for t in d[\"tasks\"]) else 1)'"
+
+  # debezium のロールは REPLICATION と、Outbox の表の SELECT だけ(superuser ではない。業務の表は読めない)
+  check "CDC(order): debezium は REPLICATION を持ち、superuser ではない" equals "ok" \
+    psql_super "select case when rolreplication and not rolsuper then 'ok' else 'ng' end from pg_roles where rolname = 'debezium'"
+  check "CDC(order): debezium の order_service の表の権限は outbox.outbox の SELECT だけ" equals "outbox.outbox:SELECT" \
+    "${compose[@]}" exec -T postgres psql -U postgres -d order_service -tAc \
+    "select string_agg(table_schema || '.' || table_name || ':' || privilege_type, ',' order by 1) from information_schema.role_table_grants where grantee = 'debezium'"
+  check "CDC(order): debezium は業務の表(orders)を読めない" equals "f" \
+    "${compose[@]}" exec -T postgres psql -U postgres -d order_service -tAc "select has_table_privilege('debezium', 'public.orders', 'SELECT')"
+
+  # スロットは使用中で、保持する WAL に上限がある(コネクタが止まってもディスクを使い切らない)
+  check "CDC(order): レプリケーションスロット order_outbox が使用中" equals "t" \
+    psql_super "select active from pg_replication_slots where slot_name = 'order_outbox'"
+  check "CDC(order): max_slot_wal_keep_size が 1GB" equals "1GB" psql_super "show max_slot_wal_keep_size"
+
+  # 上で POST した注文のイベントが、注文 ID のキーと CloudEvents のヘッダで届く
+  if [[ -n "$order_id" ]] && retry 30 2 order_event_arrived "$topic" "$order_id"; then
+    pass "CDC(order): POST した注文のイベントが $topic に届く(キー = 注文 ID、ce_type・ce_specversion・traceparent のヘッダ付き)"
+  else
+    fail "CDC(order): POST した注文($order_id)のイベントが $topic に届かない"
+  fi
+
+  # Kafka を止めて(compose stop)注文を作り、再開(start)の後に欠けずに届く(再起動を伴う止まり方。docker pause は統合テスト)
+  local key="verify-stop-$$-$(date +%s)" body created stopped_id
+  body='{"customerId":"cust-verify","lines":[{"productId":"prod-1","sku":"SKU-1","quantity":1,"unitPrice":{"amount":"1000","currency":"JPY"}}],"shippingAddress":{"countryCode":"JP","postalCode":"100-0001","city":"Chiyoda","line1":"1-1"}}'
+  "${compose[@]}" stop kafka >/dev/null 2>&1
+  created="$("${gw[@]}" -o - -w '\n%{http_code}' -X POST "https://localhost:19443/v1/orders" -H "Idempotency-Key: $key" -H 'Content-Type: application/json' -d "$body" || true)"
+  "${compose[@]}" start kafka >/dev/null 2>&1
+  if [[ "$(tail -n1 <<<"$created")" == 201 ]]; then
+    pass "CDC(order): Kafka を止めている間も、注文の作成は 201(Outbox に書くだけ)"
+  else
+    fail "CDC(order): Kafka を止めている間の注文の作成が $(tail -n1 <<<"$created")"
+  fi
+  stopped_id="$(sed '$d' <<<"$created" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))' 2>/dev/null || true)"
+  retry 60 2 kafka_cli /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server kafka:9092 >/dev/null 2>&1 || true
+  if [[ -n "$stopped_id" ]] && retry 60 2 order_event_arrived "$topic" "$stopped_id"; then
+    pass "CDC(order): Kafka を再開した後に、止めている間に作った注文のイベントが欠けずに届く"
+  else
+    fail "CDC(order): Kafka を再開した後に、止めている間の注文($stopped_id)のイベントが届かない"
+  fi
+  check "CDC(order): Kafka の再開の後もコネクタのタスクが RUNNING" retry 30 2 bash -c \
+    "curl -fsS $connect/connectors/order-outbox/status | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d[\"tasks\"] and all(t[\"state\"]==\"RUNNING\" for t in d[\"tasks\"]) else 1)'"
+  check "CDC(order): Outbox の表に行が残らない" equals "0" \
+    "${compose[@]}" exec -T postgres psql -U postgres -d order_service -tAc "select count(*) from outbox.outbox"
+}
+
+# トピックに、キーが <注文 ID> で、契約のヘッダを持つイベントがあるか(order_event_arrived <トピック> <注文 ID>)
+order_event_arrived() {
+  local records
+  records="$(kafka_cli /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic "$1" --from-beginning \
+    --timeout-ms 10000 --property print.key=true --property print.headers=true --property print.value=false 2>/dev/null || true)"
+  grep -F -- "$2" <<<"$records" | grep -q 'ce_type:sales.order.created' &&
+    grep -F -- "$2" <<<"$records" | grep -q 'ce_specversion:1.0' &&
+    grep -F -- "$2" <<<"$records" | grep -q 'traceparent:00-'
 }
 
 # 監査のアンカー(ADR-0017 §5)。order-service が 1 分ごと(compose の設定)に、前回のアンカーからの差分を検証して保存する。
