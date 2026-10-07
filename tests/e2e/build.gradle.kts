@@ -3,7 +3,7 @@ plugins {
 }
 
 // E2E(ROADMAP P05。MODULE_DESIGN)。起動したローカル基盤(`make up PROFILE=order`)に、公開されたエンドポイント
-// (Gateway・Keycloak・Tempo・Prometheus・Grafana)だけで接続して確かめる。サービスのコードには依存しない。
+// (Gateway・Keycloak・Tempo・Prometheus・Grafana・Kafka・Schema Registry)だけで接続して確かめる。サービスのコードには依存しない。
 // `make e2e`(`./gradlew :tests:e2e:e2eTest`)で実行し、`build` / `check` には含めない。CI は ci.yml の `e2e` ジョブ。
 val e2eTest: SourceSet = sourceSets.create("e2eTest")
 configurations.named(e2eTest.implementationConfigurationName) {
@@ -15,6 +15,9 @@ configurations.named(e2eTest.runtimeOnlyConfigurationName) {
 
 dependencies {
     "e2eTestImplementation"(libs.kotlinx.serialization.json)
+    // 発行されたイベントを Kafka から読み、契約のスキーマ(Schema Registry から取る)で解釈する(P06。サービスのコードには依存しない)
+    "e2eTestImplementation"(libs.kafka.clients)
+    "e2eTestImplementation"(libs.avro)
 }
 
 // 本番のコードがないモジュールなので、Kover を無効にする(行が 0 のモジュールの閾値の検証が失敗するため)。
