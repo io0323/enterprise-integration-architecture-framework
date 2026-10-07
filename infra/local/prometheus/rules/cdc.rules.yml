@@ -6,19 +6,24 @@
 # 上限なし(-1)のときは、割合の判定をしない(wal_status の判定は残る)。
 #
 # core だけで起動したとき(cdc / order profile なし)は exporter がいない。アラートは、その場合に誤って firing しない条件にする。
+# exporter のメトリクスで判定するアラートは、その exporter が今 UP のとき(and on(instance) (up == 1))だけ判定する。
+# Prometheus を作り直すと、止まった exporter の古いサンプル(5 分以内)に「古い」の印が付かず、評価に残るため。停止は CdcMonitoringDown で知らせる。
 groups:
   - name: cdc
     rules:
       # 無効(lost)になる前に気づく: WAL が上限の内側に収まらなくなった(extended / unreserved)、または上限までの残りが 25% を切った
       - alert: CdcSlotWalAtRisk
         expr: |
-          pg_replication_slots_wal_status{wal_status=~"extended|unreserved"} == 1
-          or
           (
-            pg_replication_slots_safe_wal_size_bytes
-              < on(instance) group_left()
-            (0.25 * pg_settings_max_slot_wal_keep_size_bytes > 0)
+            pg_replication_slots_wal_status{wal_status=~"extended|unreserved"} == 1
+            or
+            (
+              pg_replication_slots_safe_wal_size_bytes
+                < on(instance) group_left()
+              (0.25 * pg_settings_max_slot_wal_keep_size_bytes > 0)
+            )
           )
+          and on(instance) (up == 1)
         for: 1m
         labels:
           severity: warning
@@ -28,7 +33,7 @@ groups:
 
       # スロットが無効になった。読まれていない WAL は消え、Outbox のイベントは戻らない(#80)
       - alert: CdcSlotLost
-        expr: pg_replication_slots_wal_status{wal_status="lost"} == 1
+        expr: pg_replication_slots_wal_status{wal_status="lost"} == 1 and on(instance) (up == 1)
         labels:
           severity: critical
         annotations:
@@ -38,9 +43,12 @@ groups:
       # 発行の遅延(スロットが読み終えていない WAL の量)が、上限の 25% を超えた状態が続く
       - alert: CdcSlotLagHigh
         expr: |
-          pg_replication_slots_pg_wal_lsn_diff
-            > on(instance) group_left()
-          (0.25 * pg_settings_max_slot_wal_keep_size_bytes > 0)
+          (
+            pg_replication_slots_pg_wal_lsn_diff
+              > on(instance) group_left()
+            (0.25 * pg_settings_max_slot_wal_keep_size_bytes > 0)
+          )
+          and on(instance) (up == 1)
         for: 5m
         labels:
           severity: warning
@@ -65,9 +73,12 @@ groups:
       # コネクタかタスクが動いていない、またはスロットが使われていない(Connect が止まっている)
       - alert: CdcConnectorDown
         expr: |
-          kafka_connect_connector_status{status!="running"} == 1
-          or kafka_connect_connector_task_status{status!="running"} == 1
-          or pg_replication_slots_slot_is_active == 0
+          (
+            kafka_connect_connector_status{status!="running"} == 1
+            or kafka_connect_connector_task_status{status!="running"} == 1
+            or pg_replication_slots_slot_is_active == 0
+          )
+          and on(instance) (up == 1)
         for: 1m
         labels:
           severity: critical
