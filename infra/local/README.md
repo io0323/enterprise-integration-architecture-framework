@@ -47,7 +47,7 @@ docker compose -f infra/local/docker-compose.yml --env-file infra/local/images.e
 | `file` | seaweedfs(S3), sftp | ファイル連携(P09)、Audit のアンカー(P04a) |
 | `b2b` | seaweedfs(S3), sftp-b2b | B2B / EDI(P12) |
 | `chaos` | toxiproxy | 障害注入(P04b, P14) |
-| `order` | order-migrate(1 回だけ動いて終わる), order-service, seaweedfs, seaweedfs-init | API 連携のサンプル業務サービス(P05。ADR-0024)。SeaweedFS は監査のアンカーの保存先(ADR-0017 §5) |
+| `order` | order-migrate・schema-publish(1 回だけ動いて終わる), order-service, kafka-connect, seaweedfs, seaweedfs-init | API 連携のサンプル業務サービス(P05。ADR-0024)。SeaweedFS は監査のアンカーの保存先(ADR-0017 §5) |
 
 Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)。
 
@@ -126,7 +126,8 @@ curl -s -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token
 - **監査(ADR-0017)**: `seaweedfs-init`(file / b2b / order profile)が、`make up` のたびにバケット `eiaf-audit`(Object Lock)を作り、`seaweedfs/audit-bucket-policy.json` を設定し、完了のファイルを作って待機する(ヘルスチェックが完了を示すので、`make up` は初期化の完了まで待つ)。改竄の検査は `make audit-verify SERVICE=<name>`(終了コード 0 / 1 / 2。`docs/runbooks/audit-verify.md`)。
   - order-service は、1 分ごと(`ORDER_AUDIT_ANCHOR_INTERVAL`。アプリの既定は 1 時間)に、前回のアンカーからの差分を検証してアンカーを保存する(記録が増えていなければ保存しない)。成否はダッシュボード `Order API — RED` の「監査の記録」の行に出る。`make verify PROFILE=order` と `make e2e` は、保存を待ってから `make audit-verify SERVICE=order` が OK でアンカーがあることを確かめる(`scripts/audit-anchored.sh`)。
 - **order-service(ADR-0024)**: `order-migrate` が所有者の資格情報でマイグレーションして終わり、`order-service` は完了を待ってから、アプリのロールの資格情報だけで起動する。API は mTLS だけで受ける。証明書は `infra/local/certs/`(.gitignore 済み。`make certs`)で、仕組みと期限切れのときの対処は `docs/runbooks/dev-certificates.md`。コンテナは開発用の鍵を読むため、ホストの利用者の uid で動く(root にはしない)。
-  - `schema-publish` が契約の Avro スキーマを Apicurio に登録して終わり、`order-service` はその完了も待つ。`order-service` は起動の後に書き込むイベントのスキーマ ID を解決し、解決するまで `/health/ready` は 503(ADR-0025 §3)。注文は Outbox(`outbox.outbox`)に書き、行は同じトランザクションで消える(ADR-0007)。Kafka への発行(Debezium)は P06 ③b で加える。
+  - `schema-publish` が契約の Avro スキーマを Apicurio に登録して終わり、`order-service` はその完了も待つ。`order-service` は起動の後に書き込むイベントのスキーマ ID を解決し、解決するまで `/health/ready` は 503(ADR-0025 §3)。注文は Outbox(`outbox.outbox`)に書き、行は同じトランザクションで消える(ADR-0007)。
+  - 発行: `make up` が起動の後に `scripts/connectors.sh order-outbox` でコネクタ(`kafka-connect/order-outbox.json`)を登録し、Debezium が WAL の INSERT を `sales.order.created.v1` に発行する。debezium のロールは REPLICATION と Outbox の表の SELECT だけ。heartbeat(10 秒)で、注文のない間もスロットを進める。スロットが保持する WAL の上限は `max_slot_wal_keep_size=1GB`。`make verify PROFILE=order` は、Kafka を止めて(`compose stop`)作った注文のイベントが、再開の後に届くことも確かめる。
 - **Toxiproxy**: 起動時に `kafka-host`(19094)、`kafka-internal`(19095)、`postgres`(19433)の proxy を作る(`toxiproxy/toxiproxy.json`)。
 
 ## イメージの更新

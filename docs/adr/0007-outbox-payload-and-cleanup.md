@@ -16,10 +16,11 @@ Debezium Outbox Event Router で Avro(Apicurio)のイベントを発行する方
 - Outbox テーブルの列:
   `id uuid PK, topic text, aggregate_type text, aggregate_id text, event_type text, payload bytea, traceparent text, correlation_id text, ce_id uuid, ce_source text, ce_time timestamptz, created_at timestamptz`
   - `id` と `ce_id` には同じ値(イベントの ID。UUIDv7)を入れる(改訂履歴 2026-10-07)。
+  - `ce_specversion text NOT NULL DEFAULT '1.0'` を加えた(改訂履歴 2026-10-07 の ③b。アプリは値を書かない)。
 - 表はスキーマ `outbox` に置き(`outbox.outbox`)、`platform/outbox` の `OutboxSchema` が専用の履歴の表で作る。アプリのロールには INSERT・DELETE と `id` 列の SELECT だけ、Debezium のロールには SELECT だけを付ける。Debezium が読む publication `eiaf_outbox` は Outbox の表だけを含む(改訂履歴 2026-10-07)。
-- Debezium の設定(キー名は P06 で採用する Debezium のバージョンのドキュメントで確認して固定する):
+- Debezium の設定(キー名は P06 で採用する Debezium のバージョンのドキュメントで確認して固定する。**確定した設定は `infra/local/kafka-connect/order-outbox.json` と改訂履歴 2026-10-07 の ③b**):
   - `transforms=outbox`(`io.debezium.transforms.outbox.EventRouter`)
-  - `value.converter=org.apache.kafka.connect.converters.ByteArrayConverter`(アプリで Avro にしたバイト列をそのまま流す)
+  - `value.converter=org.apache.kafka.connect.converters.ByteArrayConverter`(アプリで Avro にしたバイト列をそのまま流す)。**③b で `io.debezium.converters.BinaryDataConverter` に改めた**(改訂履歴)
   - `route.by.field=topic`、`route.topic.replacement=${routedByValue}` で、`topic` 列の値(`{domain}.{entity}.{event}.v{n}`)をそのままトピック名にする
   - `table.field.event.key=aggregate_id`(パーティションキー)
   - `table.fields.additional.placement` で `traceparent`, `correlation_id`, `ce_*` を Kafka ヘッダに載せる(CloudEvents binary mode)
@@ -52,3 +53,10 @@ Debezium Outbox Event Router で Avro(Apicurio)のイベントを発行する方
   - **`id` 列と `ce_id` 列には同じ値を入れ、その値は `EventMetadata.id` を UUIDv7 で作ったものにする**(`EventIds`。表の CHECK 制約で `ce_id = id` を強制する)。イベントの ID を 1 つにして、Outbox・WAL・Kafka(`ce_id` のヘッダ)・受信側(冪等の判定)をまたいで同じ値で追えるようにするため。UUIDv7 は先頭が時刻なので、主キーの B-tree の順序も保てる。列の構成は変えない。
   - 表はスキーマ `outbox` に置き、権限はアプリのロールに INSERT・DELETE・`id` 列の SELECT、Debezium のロールに SELECT だけを付ける。publication `eiaf_outbox` は Outbox の表だけを含む(Debezium には自動で作らせない)。
   - 保持期間の方式は実装せず、§2 の設計の記述は残した。実装は行を残す必要のあるサービスが出てきたときに行う(Issue #76)。
+- 2026-10-07: P06 ③b で、order-service の Outbox を Debezium(3.6.3)で発行する設定を確定した(`infra/local/kafka-connect/order-outbox.json`。`make up PROFILE=order` が登録し、`OrderOutboxCdcIT` は同じファイルを登録して確かめる)。
+  - **EventRouter**(3.6 では `debezium-connect-plugins` の jar。Postgres のコネクタの配布物に含まれる): `table.field.event.id=id`、`table.field.event.key=aggregate_id`、`table.field.event.type=event_type`、`table.field.event.payload=payload`、`route.by.field=topic`、`route.topic.replacement=${routedByValue}`。`table.fields.additional.placement` は **すべて header**(`ce_id`・`ce_source`・`event_type→ce_type`・`ce_time`・`ce_specversion`・`traceparent`・`correlation_id→correlationid`)。すべて header にすると、値は封筒(`payload` を持つ Struct)ではなくペイロードのバイト列そのものになる。EventRouter は `id` のヘッダ(`id` 列 = `ce_id`)も付ける。
+  - **`ce_specversion` は列にした**(V2 マイグレーション。既定値 '1.0'、CHECK で '1.0' だけ)。Kafka Connect の `InsertHeader` の `value.literal` は値を型付きで解釈し、"1.0" が数の 1 になる(引用符で囲むと引用符ごと入る)ため、文字列の "1.0" を固定値で出せなかった。
+  - **値の変換器は `io.debezium.converters.BinaryDataConverter`**(バイト列はそのまま、それ以外は `JsonConverter` に委ねる)。heartbeat のレコード(値は Struct)を Kafka に実際に送るため。`ByteArrayConverter` では heartbeat を送れず、`Filter` で落とすと、Debezium は落としたレコードのオフセットで LSN を確定させない(Kafka Connect が確認済みとして扱わない)ため、注文のない間にスロットが進まなかった(統合テストで確かめた)。heartbeat は内部用のトピック `__debezium-heartbeat.order-outbox` に出る。
+  - **heartbeat**: `heartbeat.interval.ms=10000`、`heartbeat.action.query=SELECT pg_logical_emit_message(true, 'eiaf-heartbeat', now()::text)`。ほかの DB の WAL だけが増える間も、order_service の DB にトランザクションを作り、その確定の位置で LSN を進める。**トランザクションの外のメッセージ(第 1 引数 false)では確定の位置が進まなかった。** この関数は追加の権限なしで debezium のロールから呼べるので、debezium の権限は REPLICATION と Outbox の表の SELECT だけのまま。論理デコーディングのメッセージのイベント(`order-outbox.message`)は `Filter`(述語 `TopicNameMatches`)で落とす。
+  - そのほか: `snapshot.mode=no_data`(表は常に空)、`tombstones.on.delete=false`、`publication.autocreate.mode=disabled`(publication は `eiaf_outbox`)、`slot.name=order_outbox`、`extended.headers.enabled=false`(Debezium 3 が付ける `__debezium.context.*` のヘッダは契約にない内部の情報なので出さない)、キーは `StringConverter`、出力先のトピックは Connect が作る(`topic.creation.default.partitions=3`)。
+  - PostgreSQL に `max_slot_wal_keep_size=1GB` を設けた(コネクタが止まっても WAL がディスクを使い切らない)。上限を超えたときの監視と回復は P06 ④(`docs/runbooks/cdc-outbox-lag.md`)。
