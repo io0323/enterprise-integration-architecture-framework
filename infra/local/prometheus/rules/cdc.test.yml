@@ -1,0 +1,278 @@
+# cdc.rules.yml の単体テスト(promtool test rules。make alerts-test)。
+# 合成した時系列に対して、各アラートが条件どおりに firing し、条件を外れれば firing しないことを確かめる。
+# 閾値は上限(pg_settings_max_slot_wal_keep_size_bytes)に対する割合なので、上限の値を変えたときに判定が追従することも確かめる。
+rule_files:
+  - cdc.rules.yml
+
+evaluation_interval: 15s
+
+tests:
+  # ---------------------------------------------------------------- CdcSlotWalAtRisk
+  - name: wal_status が extended なら警告(上限の内側に収まらない)
+    interval: 15s
+    input_series:
+      - series: 'pg_replication_slots_wal_status{instance="pe:9187",job="postgres-exporter",slot_name="order_outbox",slot_type="logical",wal_status="extended"}'
+        values: "1x10"
+      - series: 'pg_settings_max_slot_wal_keep_size_bytes{instance="pe:9187",job="postgres-exporter"}'
+        values: "1073741824x10"
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: CdcSlotWalAtRisk
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: CdcSlotWalAtRisk
+        exp_alerts:
+          - exp_labels: { severity: warning, instance: "pe:9187", job: postgres-exporter, slot_name: order_outbox, slot_type: logical, wal_status: extended }
+            exp_annotations:
+              summary: "レプリケーションスロット order_outbox が保持できる WAL の上限に近づいている"
+              runbook: docs/runbooks/cdc-outbox-lag.md#警告の段階
+
+  - name: wal_status が unreserved でも警告
+    interval: 15s
+    input_series:
+      - series: 'pg_replication_slots_wal_status{instance="pe:9187",job="postgres-exporter",slot_name="order_outbox",slot_type="logical",wal_status="unreserved"}'
+        values: "1x10"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: CdcSlotWalAtRisk
+        exp_alerts:
+          - exp_labels: { severity: warning, instance: "pe:9187", job: postgres-exporter, slot_name: order_outbox, slot_type: logical, wal_status: unreserved }
+            exp_annotations:
+              summary: "レプリケーションスロット order_outbox が保持できる WAL の上限に近づいている"
+              runbook: docs/runbooks/cdc-outbox-lag.md#警告の段階
+
+  - name: 上限 1GiB で safe_wal_size が 200MiB(25% = 256MiB を下回る)なら警告
+    interval: 15s
+    input_series:
+      - series: 'pg_replication_slots_wal_status{instance="pe:9187",job="postgres-exporter",slot_name="order_outbox",slot_type="logical",wal_status="reserved"}'
+        values: "1x10"
+      - series: 'pg_replication_slots_safe_wal_size_bytes{instance="pe:9187",job="postgres-exporter",slot_name="order_outbox",slot_type="logical"}'
+        values: "209715200x10"
+      - series: 'pg_settings_max_slot_wal_keep_size_bytes{instance="pe:9187",job="postgres-exporter"}'
+        values: "1073741824x10"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: CdcSlotWalAtRisk
+        exp_alerts:
+          - exp_labels: { severity: warning, instance: "pe:9187", job: postgres-exporter, slot_name: order_outbox, slot_type: logical }
+            exp_annotations:
+              summary: "レプリケーションスロット order_outbox が保持できる WAL の上限に近づいている"
+              runbook: docs/runbooks/cdc-outbox-lag.md#警告の段階
+
+  - name: 上限を 512MiB に変えると、同じ safe_wal_size 200MiB は 25%(128MiB)を下回らないので警告しない(閾値が上限に追従する)
+    interval: 15s
+    input_series:
+      - series: 'pg_replication_slots_wal_status{instance="pe:9187",job="postgres-exporter",slot_name="order_outbox",slot_type="logical",wal_status="reserved"}'
+        values: "1x10"
+      - series: 'pg_replication_slots_safe_wal_size_bytes{instance="pe:9187",job="postgres-exporter",slot_name="order_outbox",slot_type="logical"}'
+        values: "209715200x10"
+      - series: 'pg_settings_max_slot_wal_keep_size_bytes{instance="pe:9187",job="postgres-exporter"}'
+        values: "536870912x10"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: CdcSlotWalAtRisk
+        exp_alerts: []
+
+  - name: 上限なし(-1)なら割合の判定をしない
+    interval: 15s
+    input_series:
+      - series: 'pg_replication_slots_wal_status{instance="pe:9187",job="postgres-exporter",slot_name="order_outbox",slot_type="logical",wal_status="reserved"}'
+        values: "1x10"
+      - series: 'pg_replication_slots_safe_wal_size_bytes{instance="pe:9187",job="postgres-exporter",slot_name="order_outbox",slot_type="logical"}'
+        values: "0x10"
+      - series: 'pg_settings_max_slot_wal_keep_size_bytes{instance="pe:9187",job="postgres-exporter"}'
+        values: "-1x10"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: CdcSlotWalAtRisk
+        exp_alerts: []
+
+  # ---------------------------------------------------------------- CdcSlotLost
+  - name: wal_status が lost ならすぐに重大
+    interval: 15s
+    input_series:
+      - series: 'pg_replication_slots_wal_status{instance="pe:9187",job="postgres-exporter",slot_name="order_outbox",slot_type="logical",wal_status="lost"}'
+        values: "1x10"
+    alert_rule_test:
+      - eval_time: 0s
+        alertname: CdcSlotLost
+        exp_alerts:
+          - exp_labels: { severity: critical, instance: "pe:9187", job: postgres-exporter, slot_name: order_outbox, slot_type: logical, wal_status: lost }
+            exp_annotations:
+              summary: "レプリケーションスロット order_outbox が無効になった(wal_status=lost)"
+              runbook: docs/runbooks/cdc-outbox-lag.md#lost-になったとき
+
+  # ---------------------------------------------------------------- CdcSlotLagHigh
+  - name: 上限 1GiB で遅延 300MiB(25% = 256MiB を超える)が 5 分続くと警告
+    interval: 15s
+    input_series:
+      - series: 'pg_replication_slots_pg_wal_lsn_diff{instance="pe:9187",job="postgres-exporter",slot_name="order_outbox",database="order_service"}'
+        values: "314572800x40"
+      - series: 'pg_settings_max_slot_wal_keep_size_bytes{instance="pe:9187",job="postgres-exporter"}'
+        values: "1073741824x40"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: CdcSlotLagHigh
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: CdcSlotLagHigh
+        exp_alerts:
+          - exp_labels: { severity: warning, instance: "pe:9187", job: postgres-exporter, slot_name: order_outbox, database: order_service }
+            exp_annotations:
+              summary: "レプリケーションスロット order_outbox の遅延が上限の 25% を超えている"
+              runbook: docs/runbooks/cdc-outbox-lag.md#警告の段階
+
+  - name: 上限を 2GiB に変えると、同じ遅延 300MiB は 25%(512MiB)を超えないので警告しない(閾値が上限に追従する)
+    interval: 15s
+    input_series:
+      - series: 'pg_replication_slots_pg_wal_lsn_diff{instance="pe:9187",job="postgres-exporter",slot_name="order_outbox",database="order_service"}'
+        values: "314572800x40"
+      - series: 'pg_settings_max_slot_wal_keep_size_bytes{instance="pe:9187",job="postgres-exporter"}'
+        values: "2147483648x40"
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: CdcSlotLagHigh
+        exp_alerts: []
+
+  # ---------------------------------------------------------------- CdcOutboxSlotMissing
+  - name: order-service と postgres-exporter が動いているのに order の Outbox のスロットがなければ重大
+    interval: 15s
+    input_series:
+      - series: 'target_info{job="order-service"}'
+        values: "1x20"
+      - series: 'up{instance="pe:9187",job="postgres-exporter"}'
+        values: "1x20"
+      - series: 'pg_replication_slots_slot_is_active{instance="pe:9187",job="postgres-exporter",slot_name="other_slot",slot_type="logical"}'
+        values: "1x20"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: CdcOutboxSlotMissing
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: CdcOutboxSlotMissing
+        exp_alerts:
+          - exp_labels: { severity: critical, slot_name: order_outbox }
+            exp_annotations:
+              summary: "order の Outbox のレプリケーションスロット order_outbox がない(注文のイベントが発行されない)"
+              runbook: docs/runbooks/cdc-outbox-lag.md#スロットがない
+
+  - name: スロットがあれば、スロットがないアラートは出ない
+    interval: 15s
+    input_series:
+      - series: 'target_info{job="order-service"}'
+        values: "1x20"
+      - series: 'up{instance="pe:9187",job="postgres-exporter"}'
+        values: "1x20"
+      - series: 'pg_replication_slots_slot_is_active{instance="pe:9187",job="postgres-exporter",slot_name="order_outbox",slot_type="logical"}'
+        values: "1x20"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: CdcOutboxSlotMissing
+        exp_alerts: []
+
+  - name: order-service が動いていない(core だけの起動など)ときは、スロットがなくても出さない
+    interval: 15s
+    input_series:
+      - series: 'up{instance="pe:9187",job="postgres-exporter"}'
+        values: "1x20"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: CdcOutboxSlotMissing
+        exp_alerts: []
+
+  - name: postgres-exporter が止まっているとき(スロットが見えない)は、スロットがないアラートは出さない(CdcMonitoringDown で知らせる)
+    interval: 15s
+    input_series:
+      - series: 'target_info{job="order-service"}'
+        values: "1x20"
+      - series: 'up{instance="pe:9187",job="postgres-exporter"}'
+        values: "0x20"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: CdcOutboxSlotMissing
+        exp_alerts: []
+
+  # ---------------------------------------------------------------- CdcConnectorDown
+  - name: コネクタが止まっている(stopped)状態が 1 分続くと重大
+    interval: 15s
+    input_series:
+      - series: 'kafka_connect_connector_status{instance="kc:9404",job="kafka-connect",connector="order-outbox",status="stopped"}'
+        values: "1x10"
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: CdcConnectorDown
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: CdcConnectorDown
+        exp_alerts:
+          - exp_labels: { severity: critical, instance: "kc:9404", job: kafka-connect, connector: order-outbox, status: stopped }
+            exp_annotations:
+              summary: "CDC のコネクタが動いていない(発行が止まり、スロットが WAL を保持し続ける)"
+              runbook: docs/runbooks/cdc-outbox-lag.md#警告の段階
+
+  - name: タスクが failed、またはスロットが使われていなければ重大
+    interval: 15s
+    input_series:
+      - series: 'kafka_connect_connector_task_status{instance="kc:9404",job="kafka-connect",connector="order-outbox",task="0",status="failed"}'
+        values: "1x10"
+      - series: 'pg_replication_slots_slot_is_active{instance="pe:9187",job="postgres-exporter",slot_name="order_outbox",slot_type="logical"}'
+        values: "0x10"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: CdcConnectorDown
+        exp_alerts:
+          - exp_labels: { severity: critical, instance: "kc:9404", job: kafka-connect, connector: order-outbox, task: "0", status: failed }
+            exp_annotations:
+              summary: "CDC のコネクタが動いていない(発行が止まり、スロットが WAL を保持し続ける)"
+              runbook: docs/runbooks/cdc-outbox-lag.md#警告の段階
+          - exp_labels: { severity: critical, instance: "pe:9187", job: postgres-exporter, slot_name: order_outbox, slot_type: logical }
+            exp_annotations:
+              summary: "CDC のコネクタが動いていない(発行が止まり、スロットが WAL を保持し続ける)"
+              runbook: docs/runbooks/cdc-outbox-lag.md#警告の段階
+
+  - name: コネクタとタスクが running で、スロットが使われていれば出さない
+    interval: 15s
+    input_series:
+      - series: 'kafka_connect_connector_status{instance="kc:9404",job="kafka-connect",connector="order-outbox",status="running"}'
+        values: "1x10"
+      - series: 'kafka_connect_connector_task_status{instance="kc:9404",job="kafka-connect",connector="order-outbox",task="0",status="running"}'
+        values: "1x10"
+      - series: 'pg_replication_slots_slot_is_active{instance="pe:9187",job="postgres-exporter",slot_name="order_outbox",slot_type="logical"}'
+        values: "1x10"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: CdcConnectorDown
+        exp_alerts: []
+
+  # ---------------------------------------------------------------- CdcMonitoringDown
+  - name: 監視の部品の一部が止まれば警告
+    interval: 15s
+    input_series:
+      - series: 'up{instance="pe:9187",job="postgres-exporter"}'
+        values: "0x20"
+      - series: 'up{instance="ke:9308",job="kafka-exporter"}'
+        values: "1x20"
+      - series: 'up{instance="kc:9404",job="kafka-connect"}'
+        values: "1x20"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: CdcMonitoringDown
+        exp_alerts:
+          - exp_labels: { severity: warning, instance: "pe:9187", job: postgres-exporter }
+            exp_annotations:
+              summary: "CDC の監視の対象 postgres-exporter から収集できない"
+              runbook: docs/runbooks/cdc-outbox-lag.md#監視が見えないとき
+
+  - name: すべて止まっている(cdc / order profile が動いていない)ときは出さない
+    interval: 15s
+    input_series:
+      - series: 'up{instance="pe:9187",job="postgres-exporter"}'
+        values: "0x20"
+      - series: 'up{instance="ke:9308",job="kafka-exporter"}'
+        values: "0x20"
+      - series: 'up{instance="kc:9404",job="kafka-connect"}'
+        values: "0x20"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: CdcMonitoringDown
+        exp_alerts: []
