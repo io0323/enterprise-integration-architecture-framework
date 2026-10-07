@@ -11,6 +11,8 @@ tests:
   - name: wal_status が extended なら警告(上限の内側に収まらない)
     interval: 15s
     input_series:
+      - series: 'up{instance="pe:9187",job="postgres-exporter"}'
+        values: "1x40"
       - series: 'pg_replication_slots_wal_status{instance="pe:9187",job="postgres-exporter",slot_name="order_outbox",slot_type="logical",wal_status="extended"}'
         values: "1x10"
       - series: 'pg_settings_max_slot_wal_keep_size_bytes{instance="pe:9187",job="postgres-exporter"}'
@@ -30,6 +32,8 @@ tests:
   - name: wal_status が unreserved でも警告
     interval: 15s
     input_series:
+      - series: 'up{instance="pe:9187",job="postgres-exporter"}'
+        values: "1x40"
       - series: 'pg_replication_slots_wal_status{instance="pe:9187",job="postgres-exporter",slot_name="order_outbox",slot_type="logical",wal_status="unreserved"}'
         values: "1x10"
     alert_rule_test:
@@ -44,6 +48,8 @@ tests:
   - name: 上限 1GiB で safe_wal_size が 200MiB(25% = 256MiB を下回る)なら警告
     interval: 15s
     input_series:
+      - series: 'up{instance="pe:9187",job="postgres-exporter"}'
+        values: "1x40"
       - series: 'pg_replication_slots_wal_status{instance="pe:9187",job="postgres-exporter",slot_name="order_outbox",slot_type="logical",wal_status="reserved"}'
         values: "1x10"
       - series: 'pg_replication_slots_safe_wal_size_bytes{instance="pe:9187",job="postgres-exporter",slot_name="order_outbox",slot_type="logical"}'
@@ -62,6 +68,8 @@ tests:
   - name: 上限を 512MiB に変えると、同じ safe_wal_size 200MiB は 25%(128MiB)を下回らないので警告しない(閾値が上限に追従する)
     interval: 15s
     input_series:
+      - series: 'up{instance="pe:9187",job="postgres-exporter"}'
+        values: "1x40"
       - series: 'pg_replication_slots_wal_status{instance="pe:9187",job="postgres-exporter",slot_name="order_outbox",slot_type="logical",wal_status="reserved"}'
         values: "1x10"
       - series: 'pg_replication_slots_safe_wal_size_bytes{instance="pe:9187",job="postgres-exporter",slot_name="order_outbox",slot_type="logical"}'
@@ -76,6 +84,8 @@ tests:
   - name: 上限なし(-1)なら割合の判定をしない
     interval: 15s
     input_series:
+      - series: 'up{instance="pe:9187",job="postgres-exporter"}'
+        values: "1x40"
       - series: 'pg_replication_slots_wal_status{instance="pe:9187",job="postgres-exporter",slot_name="order_outbox",slot_type="logical",wal_status="reserved"}'
         values: "1x10"
       - series: 'pg_replication_slots_safe_wal_size_bytes{instance="pe:9187",job="postgres-exporter",slot_name="order_outbox",slot_type="logical"}'
@@ -91,6 +101,8 @@ tests:
   - name: wal_status が lost ならすぐに重大
     interval: 15s
     input_series:
+      - series: 'up{instance="pe:9187",job="postgres-exporter"}'
+        values: "1x40"
       - series: 'pg_replication_slots_wal_status{instance="pe:9187",job="postgres-exporter",slot_name="order_outbox",slot_type="logical",wal_status="lost"}'
         values: "1x10"
     alert_rule_test:
@@ -106,6 +118,8 @@ tests:
   - name: 上限 1GiB で遅延 300MiB(25% = 256MiB を超える)が 5 分続くと警告
     interval: 15s
     input_series:
+      - series: 'up{instance="pe:9187",job="postgres-exporter"}'
+        values: "1x40"
       - series: 'pg_replication_slots_pg_wal_lsn_diff{instance="pe:9187",job="postgres-exporter",slot_name="order_outbox",database="order_service"}'
         values: "314572800x40"
       - series: 'pg_settings_max_slot_wal_keep_size_bytes{instance="pe:9187",job="postgres-exporter"}'
@@ -125,6 +139,8 @@ tests:
   - name: 上限を 2GiB に変えると、同じ遅延 300MiB は 25%(512MiB)を超えないので警告しない(閾値が上限に追従する)
     interval: 15s
     input_series:
+      - series: 'up{instance="pe:9187",job="postgres-exporter"}'
+        values: "1x40"
       - series: 'pg_replication_slots_pg_wal_lsn_diff{instance="pe:9187",job="postgres-exporter",slot_name="order_outbox",database="order_service"}'
         values: "314572800x40"
       - series: 'pg_settings_max_slot_wal_keep_size_bytes{instance="pe:9187",job="postgres-exporter"}'
@@ -196,6 +212,8 @@ tests:
   - name: コネクタが止まっている(stopped)状態が 1 分続くと重大
     interval: 15s
     input_series:
+      - series: 'up{instance="kc:9404",job="kafka-connect"}'
+        values: "1x40"
       - series: 'kafka_connect_connector_status{instance="kc:9404",job="kafka-connect",connector="order-outbox",status="stopped"}'
         values: "1x10"
     alert_rule_test:
@@ -213,6 +231,10 @@ tests:
   - name: タスクが failed、またはスロットが使われていなければ重大
     interval: 15s
     input_series:
+      - series: 'up{instance="pe:9187",job="postgres-exporter"}'
+        values: "1x40"
+      - series: 'up{instance="kc:9404",job="kafka-connect"}'
+        values: "1x40"
       - series: 'kafka_connect_connector_task_status{instance="kc:9404",job="kafka-connect",connector="order-outbox",task="0",status="failed"}'
         values: "1x10"
       - series: 'pg_replication_slots_slot_is_active{instance="pe:9187",job="postgres-exporter",slot_name="order_outbox",slot_type="logical"}'
@@ -233,6 +255,10 @@ tests:
   - name: コネクタとタスクが running で、スロットが使われていれば出さない
     interval: 15s
     input_series:
+      - series: 'up{instance="pe:9187",job="postgres-exporter"}'
+        values: "1x40"
+      - series: 'up{instance="kc:9404",job="kafka-connect"}'
+        values: "1x40"
       - series: 'kafka_connect_connector_status{instance="kc:9404",job="kafka-connect",connector="order-outbox",status="running"}'
         values: "1x10"
       - series: 'kafka_connect_connector_task_status{instance="kc:9404",job="kafka-connect",connector="order-outbox",task="0",status="running"}'
@@ -275,4 +301,21 @@ tests:
     alert_rule_test:
       - eval_time: 3m
         alertname: CdcMonitoringDown
+        exp_alerts: []
+
+  - name: exporter が止まっている(up == 0)ときは、残っている古いサンプルでは判定しない(Prometheus の作り直しの直後など)
+    interval: 15s
+    input_series:
+      - series: 'up{instance="pe:9187",job="postgres-exporter"}'
+        values: "0x20"
+      - series: 'pg_replication_slots_slot_is_active{instance="pe:9187",job="postgres-exporter",slot_name="order_outbox",slot_type="logical"}'
+        values: "0x20"
+      - series: 'pg_replication_slots_wal_status{instance="pe:9187",job="postgres-exporter",slot_name="order_outbox",slot_type="logical",wal_status="lost"}'
+        values: "1x20"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: CdcConnectorDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: CdcSlotLost
         exp_alerts: []
