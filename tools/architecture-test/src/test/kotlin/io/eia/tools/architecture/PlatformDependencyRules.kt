@@ -29,12 +29,15 @@ internal object PlatformDependencyRules {
      * - api → observability: Problem Details の correlationId(ADR-0022 §2)
      * - messaging-kafka → schema-registry: 書き込みのスキーマ ID(起動時に解決したもの)と受信時の書き手のスキーマ(ADR-0025 §3)
      * - messaging-kafka → observability: PRODUCER の span と Correlation ID(ADR-0025 §4・ADR-0018 §2)
+     * - outbox → messaging-kafka: 記録のトピック・ヘッダ・ペイロード(EventTopic・EventMetadata・AvroEventSerializer。ADR-0007)
+     * - outbox → observability: 記録を作るときの PRODUCER の span と Correlation ID(ADR-0018 §2)
      */
     val ALLOWED: Map<String, Set<String>> =
         mapOf(
             "api" to setOf("observability"),
             "audit" to setOf("security", "observability"),
             "messaging-kafka" to setOf("schema-registry", "observability"),
+            "outbox" to setOf("messaging-kafka", "observability"),
             "security" to setOf("reliability", "api"),
         )
 
