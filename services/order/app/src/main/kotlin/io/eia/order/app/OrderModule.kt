@@ -4,6 +4,8 @@ import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import io.eia.order.adapters.inbound.rest.OrderApi
 import io.eia.order.adapters.out.audit.ExposedOrderAuditTrail
+import io.eia.order.adapters.out.outbox.OrderEventSchemas
+import io.eia.order.adapters.out.outbox.OutboxOrderEvents
 import io.eia.order.adapters.out.persistence.ExposedOrderRepository
 import io.eia.order.adapters.out.persistence.ExposedTransactionBoundary
 import io.eia.order.adapters.out.persistence.ExposedTransactionRunner
@@ -12,6 +14,7 @@ import io.eia.order.adapters.out.persistence.UuidV7OrderIdGenerator
 import io.eia.order.application.port.inbound.GetOrderUseCase
 import io.eia.order.application.port.inbound.PlaceOrderUseCase
 import io.eia.order.application.port.outbound.OrderAuditTrail
+import io.eia.order.application.port.outbound.OrderEventOutbox
 import io.eia.order.application.port.outbound.OrderIdGenerator
 import io.eia.order.application.port.outbound.OrderRepository
 import io.eia.order.application.port.outbound.TransactionRunner
@@ -30,14 +33,23 @@ import io.eia.platform.audit.anchor.S3AnchorStoreConfig
 import io.eia.platform.audit.anchor.ServiceName
 import io.eia.platform.audit.jdbc.AuditLog
 import io.eia.platform.observability.ObservabilityRuntime
+import io.eia.platform.outbox.Outbox
+import io.eia.platform.outbox.OutboxEvents
+import io.eia.platform.outbox.OutboxMetrics
 import io.eia.platform.reliability.ResilienceMetrics
+import io.eia.platform.schemaregistry.ApicurioRegistryClient
+import io.eia.platform.schemaregistry.SchemaIdBook
+import io.eia.platform.schemaregistry.SchemaRegistryConfig
 import io.eia.platform.security.jwt.JwtVerifier
 import io.eia.platform.security.jwt.JwtVerifierConfig
 import io.eia.platform.security.secret.Secret
 import io.eia.platform.security.secret.SecretProvider
 import io.eia.shared.kernel.getOrNull
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.cio.CIO
 import org.jetbrains.exposed.v1.jdbc.Database
 import org.koin.core.module.Module
+import org.koin.core.qualifier.named
 import org.koin.dsl.module
 import kotlin.time.Clock
 import kotlin.time.toJavaDuration
@@ -75,7 +87,8 @@ internal fun orderModule(
         single { AuditLog(listener = AuditMetrics(runtime.meter)) }
         single<OrderAuditTrail> { ExposedOrderAuditTrail(get(), get()) }
         if (config.anchor.enabled) anchorBeans(config.anchor, runtime, secrets)
-        single<PlaceOrderUseCase> { PlaceOrderService(get(), get(), get(), Clock.System, get()) }
+        eventBeans(config, runtime)
+        single<PlaceOrderUseCase> { PlaceOrderService(get(), get(), get(), Clock.System, get(), get()) }
         single<GetOrderUseCase> { GetOrderService(get()) }
         single<IdempotencyStore> { PostgresIdempotencyStore(get()) }
         single { IdempotencyHandler(get(), IdempotencyConfig(lease = config.idempotencyLease)) }
@@ -94,6 +107,31 @@ internal fun orderModule(
             )
         }
     }
+
+/** Schema Registry に問い合わせる HTTP クライアントの名前(起動時のスキーマ ID の解決だけに使う)。 */
+internal val SCHEMA_REGISTRY_HTTP = named("schema-registry-http")
+
+/**
+ * 注文のイベントの発行(Outbox。ADR-0007・ADR-0025)。
+ * 書き込むイベントのスキーマ ID は、起動時に [SchemaIdBook] で解決する(OrderServer が解決を繰り返し、`/health/ready` に反映する)。
+ */
+private fun Module.eventBeans(
+    config: OrderConfig,
+    runtime: ObservabilityRuntime,
+) {
+    single(SCHEMA_REGISTRY_HTTP) { HttpClient(CIO) }
+    single {
+        val registry = requireNotNull(config.schemaRegistryUrl) { "${OrderConfig.SCHEMA_REGISTRY_URL} が必要です" }
+        SchemaIdBook(OrderEventSchemas.subjects, ApicurioRegistryClient(SchemaRegistryConfig(registry), get(SCHEMA_REGISTRY_HTTP)))
+    }
+    single { OrderEventSchemas.orderCreatedSerializer(get()) }
+    single { Outbox(OutboxMetrics(runtime.meter)) }
+    single { OutboxEvents(runtime, EVENT_SOURCE) }
+    single<OrderEventOutbox> { OutboxOrderEvents(get(), get(), get(), get()) }
+}
+
+/** CloudEvents の `ce_source`(AsyncAPI の StandardHeaders の例と同じ)。 */
+private const val EVENT_SOURCE = "/sales/order-service"
 
 /**
  * 監査のアンカーの定期的な保存(ADR-0017 §5)。保存の前に、前回のアンカーからの差分を検証する([AnchorCycle])。

@@ -21,6 +21,8 @@ import kotlin.time.Duration.Companion.seconds
  * | `ORDER_DB_URL` | なし(必須) | migrate・serve |
  * | `ORDER_DB_USER` / `ORDER_DB_PASSWORD`(または `_FILE`) | `order_service` / なし | migrate だけ(所有者) |
  * | `ORDER_APP_DB_USER` / `ORDER_APP_DB_PASSWORD`(または `_FILE`) | `order_service_app` / なし | serve だけ(アプリのロール) |
+ * | `ORDER_CDC_DB_USER` | `debezium` | migrate(Outbox の表の SELECT を付ける Debezium のロール。ADR-0007) |
+ * | `ORDER_SCHEMA_REGISTRY_URL` | なし(serve では必須) | serve(Apicurio の REST。例 `http://apicurio:8080/apis/registry/v3`。ADR-0025 §3) |
  * | `ORDER_HTTPS_PORT` | 8443 | serve(API。mTLS だけで受ける。ADR-0024 §6) |
  * | `ORDER_HEALTH_PORT` | 8081 | serve(`/health/live` と `/health/ready` だけ。平文。コンテナの外に公開しない) |
  * | `ORDER_TLS_CERT_FILE` / `ORDER_TLS_KEY_FILE` | なし(serve では必須) | serve(サーバ証明書のチェーンと秘密鍵。PEM。鍵は PKCS#8) |
@@ -42,6 +44,8 @@ internal data class OrderConfig(
     val dbUrl: String,
     val ownerUser: String,
     val appUser: String,
+    val cdcUser: String,
+    val schemaRegistryUrl: String?,
     val httpsPort: Int,
     val healthPort: Int,
     val tls: TlsFiles,
@@ -57,6 +61,7 @@ internal data class OrderConfig(
     companion object {
         val OWNER_PASSWORD = SecretName("ORDER_DB_PASSWORD")
         val APP_PASSWORD = SecretName("ORDER_APP_DB_PASSWORD")
+        const val SCHEMA_REGISTRY_URL = "ORDER_SCHEMA_REGISTRY_URL"
         private const val DEFAULT_HTTPS_PORT = 8443
         private const val DEFAULT_HEALTH_PORT = 8081
 
@@ -67,6 +72,8 @@ internal data class OrderConfig(
                     dbUrl = reader.required("ORDER_DB_URL"),
                     ownerUser = reader.optional("ORDER_DB_USER") ?: "order_service",
                     appUser = reader.optional("ORDER_APP_DB_USER") ?: "order_service_app",
+                    cdcUser = reader.optional("ORDER_CDC_DB_USER") ?: "debezium",
+                    schemaRegistryUrl = reader.optional(SCHEMA_REGISTRY_URL),
                     httpsPort = reader.port("ORDER_HTTPS_PORT", DEFAULT_HTTPS_PORT),
                     healthPort = reader.port("ORDER_HEALTH_PORT", DEFAULT_HEALTH_PORT),
                     tls =

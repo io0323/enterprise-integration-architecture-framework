@@ -14,6 +14,10 @@ dependencies {
     implementation(project(":platform:audit"))
     // 依存先ごとの Resilience は ResilienceMetrics 経由で作る(#8-c。Konsist の resilienceOnlyThroughMetrics)
     implementation(project(":platform:reliability"))
+    // 注文のイベントの発行(Outbox)と、起動時のスキーマ ID の解決(ADR-0007・ADR-0025 §3)
+    implementation(project(":platform:outbox"))
+    implementation(project(":platform:schema-registry"))
+    implementation(libs.ktor.client.cio)
     implementation(libs.ktor.server.netty)
     implementation(libs.koin.core)
     implementation(libs.hikaricp)
@@ -26,4 +30,6 @@ dependencies {
     integrationTestImplementation(libs.nimbus.jose.jwt)
     integrationTestImplementation(libs.bouncycastle.pkix)
     integrationTestImplementation(libs.kotlinx.coroutines.core)
+    // 統合テストで Schema Registry を立て、契約を登録する
+    integrationTestImplementation(libs.ktor.client.cio)
 }

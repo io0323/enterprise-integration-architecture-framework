@@ -2,6 +2,7 @@ package io.eia.order.application
 
 import io.eia.order.application.port.inbound.RequestedBy
 import io.eia.order.application.port.outbound.OrderAuditTrail
+import io.eia.order.application.port.outbound.OrderEventOutbox
 import io.eia.order.application.port.outbound.OrderIdGenerator
 import io.eia.order.application.port.outbound.OrderRepository
 import io.eia.order.application.port.outbound.OrderVersionConflict
@@ -140,6 +141,20 @@ internal class FakeOrderAuditTrail(
     ): Result<Unit, DomainError> {
         failWith?.let { return err(it) }
         transaction.write { entries += Entry(order.id, requestedBy, requestDigest) }
+        return ok(Unit)
+    }
+}
+
+/** メモリ上の Outbox。書いた注文の ID を、トランザクションが確定したときだけ残す。[failWith] で次の書き込みを失敗させる。 */
+internal class FakeOrderEventOutbox(
+    private val transaction: FakeTransactionRunner,
+) : OrderEventOutbox {
+    val placed = mutableListOf<OrderId>()
+    var failWith: DomainError? = null
+
+    override suspend fun orderPlaced(order: Order): Result<Unit, DomainError> {
+        failWith?.let { return err(it) }
+        transaction.write { placed += order.id }
         return ok(Unit)
     }
 }

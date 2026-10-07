@@ -17,6 +17,7 @@ import io.eia.platform.observability.Observability
 import io.eia.platform.observability.ObservabilityConfig
 import io.eia.platform.observability.ObservabilityRuntime
 import io.eia.platform.observability.ktor.server.ServerObservability
+import io.eia.platform.schemaregistry.SchemaIdBook
 import io.eia.platform.security.jwt.JwtVerifier
 import io.eia.platform.security.ktor.eiaJwt
 import io.eia.platform.security.secret.EnvSecretProvider
@@ -28,6 +29,7 @@ import io.eia.shared.kernel.err
 import io.eia.shared.kernel.flatMap
 import io.eia.shared.kernel.map
 import io.eia.shared.kernel.ok
+import io.ktor.client.HttpClient
 import io.ktor.http.ContentType
 import io.ktor.server.application.Application
 import io.ktor.server.application.install
@@ -99,6 +101,7 @@ internal class OrderServer private constructor(
         if (stopped.count == 0L) return
         server.stop(GRACE_MILLIS, TIMEOUT_MILLIS)
         koin.get<JwtVerifier>().close()
+        koin.get<HttpClient>(SCHEMA_REGISTRY_HTTP).close()
         koin.getOrNull<S3AnchorStore>()?.close()
         koin.get<HikariDataSource>().close()
         koin.close()
@@ -160,7 +163,9 @@ internal class OrderServer private constructor(
             val forbidden = OrderCommands.FORBIDDEN_FOR_SERVE.filter { env.containsKey(it) }
             val violations =
                 forbidden.map { FieldViolation(it, "serve には所有者のパスワードを渡さないでください(migrate にだけ渡す)") } +
-                    listOf("OIDC_ISSUER", "OIDC_JWKS_URI").filter { env[it].isNullOrBlank() }.map { FieldViolation(it, "serve には必須です") }
+                    listOf("OIDC_ISSUER", "OIDC_JWKS_URI", OrderConfig.SCHEMA_REGISTRY_URL)
+                        .filter { env[it].isNullOrBlank() }
+                        .map { FieldViolation(it, "serve には必須です") }
             return when {
                 violations.isNotEmpty() -> {
                     err(ValidationError(violations))
@@ -208,10 +213,13 @@ internal class OrderServer private constructor(
                 }
             }
             routing {
-                overPlaintext { healthRoutes(koin.get()) }
+                overPlaintext { healthRoutes(koin.get(), koin.get()) }
                 overTls { authenticate { orderRoutes(koin.get()) } }
             }
             launchPurgeJob(koin.get(), config)
+            // 書き込むイベントのスキーマ ID を解決する。解決するまで /health/ready は 503(ADR-0025 §3)
+            val schemaIds = koin.get<SchemaIdBook>()
+            launch { schemaIds.resolveUntilReady() }
             val anchorCycle = koin.getOrNull<AnchorCycle>()
             if (anchorCycle != null) {
                 launchAnchorJob(anchorCycle, koin.get(), config.anchor.interval)
@@ -220,17 +228,25 @@ internal class OrderServer private constructor(
             }
         }
 
-        private fun Route.healthRoutes(dataSource: HikariDataSource) {
+        /**
+         * `/health/ready` は、DB に接続できて、書き込むイベントのスキーマ ID をすべて解決し終えたときだけ UP
+         * (ADR-0025 §3。リクエストの処理中はレジストリに問い合わせないので、解決する前はトラフィックを受けない)。
+         */
+        private fun Route.healthRoutes(
+            dataSource: HikariDataSource,
+            schemaIds: SchemaIdBook,
+        ) {
             get("/health/live") { call.respondText("""{"status":"UP"}""", ContentType.Application.Json) }
             get("/health/ready") {
                 val ready =
-                    withContext(Dispatchers.IO) {
-                        try {
-                            dataSource.connection.use { it.isValid(READY_TIMEOUT_SECONDS) }
-                        } catch (_: SQLException) {
-                            false
+                    schemaIds.isReady &&
+                        withContext(Dispatchers.IO) {
+                            try {
+                                dataSource.connection.use { it.isValid(READY_TIMEOUT_SECONDS) }
+                            } catch (_: SQLException) {
+                                false
+                            }
                         }
-                    }
                 if (ready) {
                     call.respondText("""{"status":"UP"}""", ContentType.Application.Json)
                 } else {
