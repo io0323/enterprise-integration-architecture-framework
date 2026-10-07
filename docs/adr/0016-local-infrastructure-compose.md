@@ -102,9 +102,13 @@ Docker のヘルスチェックはコンテナの中で実行されるため、�
 - **設定の再現**: 公式イメージのエントリポイントと同じ規則で、`CONNECT_<NAME>` の環境変数を `connect-distributed.properties` の `<name>` にする(`connect-entrypoint.sh`)。既定値(Converter、flush の間隔、`rest.advertised.*` など)も公式イメージの実効値に合わせた。
   - 違いは 2 点: 待ち受けを `listeners=http://0.0.0.0:8083` で指定する(Kafka 4 で `rest.host.name` / `rest.port` は廃止)。`plugin.path` は `/opt/kafka/plugins`。
   - `EnvVarConfigProvider`(`config.providers=env`)は §7 のとおり。`make verify PROFILE=cdc` の全項目(平文のパスワードが返らないことを含む)で確認した。
-  - 公式イメージにあってこのイメージにないもの: Postgres 以外のコネクタ、Debezium の scripting / OpenTelemetry / Jolokia / JMX exporter の拡張、`LOG_LEVEL` などの独自の環境変数。必要になったフェーズで、同じ方式(Maven Central の成果物を SHA-256 で固定)で追加する。
-- **Testcontainers(P06 以降の方針)**: 統合テストも同じ Dockerfile から組み立てる。`ImageFromDockerfile` に `infra/local/images/kafka-connect/` を渡し、build 引数 `KAFKA_IMAGE` に `InfraImages`(§5)が返すダイジェスト固定の名前を渡す。版とチェックサムを Dockerfile の 1 か所に保ち、compose と統合テストでずれないようにする。
-- **版の更新**: Dockerfile の `ARG`(版と SHA-256)を書き換える。SHA-256 は Maven Central の `.sha256` と、取得したファイルの値の両方で確かめる(手順は `infra/local/README.md`)。
+  - 公式イメージにあってこのイメージにないもの: Postgres 以外のコネクタ、Debezium の scripting / OpenTelemetry / Jolokia の拡張、`LOG_LEVEL` などの独自の環境変数。必要になったフェーズで、同じ方式(Maven Central の成果物を SHA-256 で固定)で追加する。
+- **例外: JMX exporter は GitHub のリリースから取得する**(P06 ④)。Connect と Debezium のメトリクス(`:9404`)のため、Prometheus の JMX exporter(`jmx_prometheus_javaagent`)を javaagent として載せる。
+  - JMX exporter は 1.1 以降、Maven Central に公開されていない(Maven Central の最新は 1.0.1)。成果物は GitHub のリリース(`https://github.com/prometheus/jmx_exporter/releases/download/<版>/jmx_prometheus_javaagent-<版>.jar`)にだけある。CLAUDE.md §2 の「最新の安定版」を満たすため、GitHub から取得する。
+  - GitHub のリリースの成果物は、Maven Central と違って差し替えや削除ができる。ただし版と SHA-256 を Dockerfile の `ARG` で固定し、`ADD --checksum` で取得するので、**差し替えられれば組み立てが失敗して検知できる**(黙って別のものを使うことはない)。SHA-256 は、リリースに添付された `.sha256` と、取得したファイルの値の両方で確かめる。
+  - 削除された場合も組み立てが失敗する。固定したもの(images.env のダイジェストと、Dockerfile の成果物)が今も取得できるかの定期確認は Issue #35 で扱う。
+- **Testcontainers(P06 以降の方針)**: 統合テストも同じ Dockerfile から組み立てる。`platform/test-support` の `KafkaConnectContainer` が、docker の CLI(BuildKit)で `infra/local/images/kafka-connect/` を組み立て、build 引数 `KAFKA_IMAGE` に `InfraImages`(§5)が返すダイジェスト固定の名前を渡す(Testcontainers の `ImageFromDockerfile` は BuildKit を使わず、`ADD --checksum` と `COPY --chmod` を組み立てられないため。P06 ③b)。版とチェックサムを Dockerfile の 1 か所に保ち、compose と統合テストでずれないようにする。
+- **版の更新**: Dockerfile の `ARG`(版と SHA-256)を書き換える。SHA-256 は Maven Central(JMX exporter は GitHub のリリース)の `.sha256` と、取得したファイルの値の両方で確かめる(手順は `infra/local/README.md`)。
 
 ## Alternatives Considered
 - **profile ごとに compose ファイルを分けて `include` で組み合わせる**: ファイルごとの見通しは良いが、core のサービスへの依存と共通の設定(ヘルスチェックのアンカーなど)がファイルをまたぐ。1 ファイル + profiles のほうが `docker compose config` での検査も単純。不採用。
