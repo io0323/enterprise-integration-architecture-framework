@@ -1,0 +1,31 @@
+# Kafka Connect と Debezium の JMX のメトリクスのうち、CDC の監視に使うものだけを出す(P06 ④。docs/runbooks/cdc-outbox-lag.md)。
+# 状態(status)は文字列の属性なので、値を 1 にしてラベルに入れる。
+lowercaseOutputName: true
+lowercaseOutputLabelNames: true
+rules:
+  # コネクタとタスクの状態(running / paused / failed / unassigned / restarting / stopped)
+  - pattern: 'kafka.connect<type=connector-metrics, connector=(.+)><>status: (.+)'
+    name: kafka_connect_connector_status
+    labels:
+      connector: "$1"
+      status: "$2"
+    value: 1
+    type: GAUGE
+  - pattern: 'kafka.connect<type=connector-task-metrics, connector=(.+), task=(.+)><>status: (.+)'
+    name: kafka_connect_connector_task_status
+    labels:
+      connector: "$1"
+      task: "$2"
+      status: "$3"
+    value: 1
+    type: GAUGE
+  # Debezium の Postgres コネクタのストリーミングの指標
+  - pattern: 'debezium.postgres<type=connector-metrics, context=streaming, server=(.+)><>(Connected|MilliSecondsBehindSource|MilliSecondsSinceLastEvent|TotalNumberOfEventsSeen|QueueRemainingCapacity)'
+    name: debezium_postgres_streaming_$2
+    labels:
+      server: "$1"
+    type: GAUGE
+  # Connect のワーカーの数(コネクタ・タスク)
+  - pattern: 'kafka.connect<type=connect-worker-metrics><>(connector-count|task-count)'
+    name: kafka_connect_worker_$1
+    type: GAUGE

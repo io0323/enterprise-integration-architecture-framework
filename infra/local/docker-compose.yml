@@ -131,6 +131,38 @@ services:
       # 起動時のグループ参加(NotCoordinator の再試行)で REST の待ち受けまで 1 分以上かかることがある
       start_period: 90s
 
+  # CDC の監視(P06 ④。docs/runbooks/cdc-outbox-lag.md)。Prometheus(core)が scrape し、アラートは prometheus/rules/cdc.yml
+  # レプリケーションスロット(wal_status・safe_wal_size・位置)と設定(max_slot_wal_keep_size)を出す。接続は pg_monitor だけのユーザー
+  postgres-exporter:
+    image: ${POSTGRES_EXPORTER_IMAGE:?}
+    profiles: [cdc, order]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATA_SOURCE_URI: postgres:5432/postgres?sslmode=disable
+      DATA_SOURCE_USER: postgres_exporter
+      DATA_SOURCE_PASS: ${POSTGRES_EXPORTER_DB_PASSWORD:?}
+    mem_limit: 64m
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9187/metrics"]
+
+  # トピックのオフセットと Consumer Group の lag(P06 ④。P07 の Consumer でも使う)
+  kafka-exporter:
+    image: ${KAFKA_EXPORTER_IMAGE:?}
+    profiles: [cdc, order]
+    command: ["--kafka.server=kafka:9092"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    volumes:
+      - *probe-volume
+    mem_limit: 64m
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "/probe/bin/wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9308/metrics"]
+
   # ---------------------------------------------------------------- iot
   mosquitto:
     image: ${MOSQUITTO_IMAGE:?}
@@ -419,6 +451,8 @@ services:
       KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?}
       APICURIO_DB_PASSWORD: ${APICURIO_DB_PASSWORD:?}
       DEBEZIUM_DB_PASSWORD: ${DEBEZIUM_DB_PASSWORD:?make env を実行してください}
+      # postgres-exporter のユーザー(pg_monitor だけ。P06 ④)。追加前のボリュームには作られないため make clean が必要(infra/local/README.md)
+      POSTGRES_EXPORTER_DB_PASSWORD: ${POSTGRES_EXPORTER_DB_PASSWORD:?make env を実行してください}
     ports:
       - 127.0.0.1:19432:5432
     volumes:
@@ -551,6 +585,8 @@ services:
       - 127.0.0.1:19090:9090
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # アラートのルール(P06 ④。単体テストは make alerts-test)
+      - ./prometheus/rules:/etc/prometheus/rules:ro
       - prometheus-data:/prometheus
     mem_limit: 384m
     healthcheck:

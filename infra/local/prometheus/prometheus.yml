@@ -4,6 +4,10 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+# アラートのルール(P06 ④。単体テストの *.test.yml は読まない)。Alertmanager は置かず、firing は Prometheus の /alerts と Grafana で見る
+rule_files:
+  - /etc/prometheus/rules/*.rules.yml
+
 otlp:
   promote_resource_attributes:
     - service.name
@@ -33,3 +37,13 @@ scrape_configs:
   - job_name: apicurio
     static_configs:
       - targets: ["apicurio:9000"]
+  # CDC(P06 ④。cdc / order profile)。core だけで起動したときは target が down になる(アラートはその場合を除いて判定する)
+  - job_name: postgres-exporter
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+  - job_name: kafka-exporter
+    static_configs:
+      - targets: ["kafka-exporter:9308"]
+  - job_name: kafka-connect
+    static_configs:
+      - targets: ["kafka-connect:9404"]
