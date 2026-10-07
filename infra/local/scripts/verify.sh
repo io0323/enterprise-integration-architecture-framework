@@ -826,12 +826,39 @@ verify_dashboard() {
 
   # すべてのパネルの式を Prometheus で評価する。式がエラーにならず、データを返すこと
   # (エラーの種類別と、監査の追記の失敗のパネルは、失敗がなければ空でよい)。メトリクスの送信は 10 秒ごとなので、少し待ってやり直す
-  local result=""
+  local result
+  result="$(dashboard_panels_return_data "$dash" "Errors(error.type 別)" "監査の追記の失敗(種類別)")"
+  if [[ "$result" == ok ]]; then
+    pass "Grafana: RED のダッシュボードの全パネルの式が、Prometheus でデータを返す(Gateway・order-service・caller_deadline)"
+  else
+    fail "Grafana: パネルの式が想定外: $result"
+  fi
+
+  # CDC のダッシュボード(P06 ④)。アラートのパネルは平常時は空でよい
+  dash="$(curl -fsS -u "admin:$GRAFANA_ADMIN_PASSWORD" http://localhost:19300/api/dashboards/uid/eiaf-cdc || true)"
+  if [[ "$(json 'd["meta"]["folderTitle"] + "/" + d["dashboard"]["title"]' <<<"$dash" 2>/dev/null)" == "EIAF/CDC — Outbox" ]]; then
+    pass "Grafana: ダッシュボード CDC — Outbox(フォルダ EIAF)を provisioning で読み込んでいる"
+    result="$(dashboard_panels_return_data "$dash" "CDC のアラート(firing / pending)")"
+    if [[ "$result" == ok ]]; then
+      pass "Grafana: CDC のダッシュボードの全パネルの式が、Prometheus でデータを返す(スロット・コネクタ・発行の件数)"
+    else
+      fail "Grafana: CDC のパネルの式が想定外: $result"
+    fi
+  else
+    fail "Grafana: ダッシュボード eiaf-cdc を読み込めない"
+  fi
+}
+
+# ダッシュボード(Grafana の API の JSON)の全パネルの式を Prometheus で評価し、エラーがなくデータを返せば ok を出力する。
+# 返さないパネルの名前を出力する。2 つめ以降の引数は、空でもよいパネルの名前。メトリクスの送信を待って 12 回までやり直す
+dashboard_panels_return_data() { # dashboard_panels_return_data <ダッシュボードの JSON> [空でよいパネルの名前...]
+  local dash="$1" result=""
+  shift
   for _ in $(seq 1 12); do
     result="$(json 'json.dumps([[p["title"], t["expr"]] for p in d["dashboard"]["panels"] if p["type"] != "row" for t in p["targets"]])' <<<"$dash" |
       python3 -c '
 import json, sys, urllib.error, urllib.parse, urllib.request
-allowed_empty = ("Errors(error.type 別)", "監査の追記の失敗(種類別)")
+allowed_empty = tuple(sys.argv[1:])
 bad = []
 for title, expr in json.load(sys.stdin):
     q = urllib.parse.urlencode({"query": expr.replace("$__rate_interval", "2m")})
@@ -844,16 +871,12 @@ for title, expr in json.load(sys.stdin):
         bad.append(title + "(式のエラー)")
     elif not d["data"]["result"] and title not in allowed_empty:
         bad.append(title + "(データなし)")
-print("; ".join(bad) if bad else "ok")
-' 2>&1 || true)"
+print("; ".join(sorted(set(bad))) if bad else "ok")
+' "$@" 2>&1 || true)"
     [[ "$result" == ok ]] && break
     sleep 10
   done
-  if [[ "$result" == ok ]]; then
-    pass "Grafana: RED のダッシュボードの全パネルの式が、Prometheus でデータを返す(Gateway・order-service・caller_deadline)"
-  else
-    fail "Grafana: パネルの式が想定外: $result"
-  fi
+  printf '%s' "$result"
 }
 
 verify_health
