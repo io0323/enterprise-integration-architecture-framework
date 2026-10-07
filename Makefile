@@ -73,6 +73,8 @@ up: not-root env certs $(if $(filter order,$(PROFILE)),order-dist) ## ローカ�
 		rm -f $(INFRA)/certs/.renewed; \
 	fi
 	$(COMPOSE) $(COMPOSE_PROFILES_ARGS) up -d --build --wait --wait-timeout 420
+	@# 注文のイベントの発行(Outbox → Debezium。ADR-0007)。order-migrate が Outbox の表と publication を作った後に登録する
+	@if [ -n "$(filter order,$(PROFILE))" ]; then $(INFRA)/scripts/connectors.sh order-outbox; fi
 
 down: env ## ローカル基盤を停止する(全 profile。データは残す)
 	$(COMPOSE) --profile '*' down --remove-orphans

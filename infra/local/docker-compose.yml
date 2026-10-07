@@ -92,7 +92,8 @@ services:
       context: ./images/kafka-connect
       args:
         KAFKA_IMAGE: ${KAFKA_IMAGE:?}
-    profiles: [cdc]
+    # order でも起動する: 注文のイベントは Outbox から Debezium で発行する(ADR-0007。コネクタは make up が登録する)
+    profiles: [cdc, order]
     depends_on:
       kafka:
         condition: service_healthy
@@ -394,6 +395,10 @@ services:
       - max_replication_slots=10
       - -c
       - max_wal_senders=10
+      # コネクタが止まっても、レプリケーションスロットが保持する WAL がディスクを使い切らないようにする上限(P06 ③b)。
+      # 超えるとスロットは無効(wal_status=lost)になり、その間のイベントは戻らない(回復の手順は docs/runbooks/cdc-outbox-lag.md。④)
+      - -c
+      - max_slot_wal_keep_size=1GB
       - -c
       - shared_buffers=128MB
     environment:
