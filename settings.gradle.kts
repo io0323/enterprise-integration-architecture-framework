@@ -27,6 +27,7 @@ include(
     ":platform:audit",
     ":platform:messaging-kafka",
     ":platform:observability",
+    ":platform:outbox",
     ":platform:reliability",
     ":platform:schema-registry",
     ":platform:security",
