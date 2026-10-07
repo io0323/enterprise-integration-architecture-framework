@@ -185,9 +185,9 @@ print(d.get("iss"), ",".join(aud), " ".join(sorted(d.get("scope","").split())))'
   check "Prometheus: 送った metric を検索できる" retry 30 2 bash -c \
     "curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=eiaf_verify_probe' | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin)[\"data\"][\"result\"] else 1)'"
 
-  # Prometheus: ミドルウェア自身のメトリクスの scrape 先がすべて up
-  check "Prometheus: scrape 先がすべて up" retry 10 3 bash -c \
-    "curl -fsS http://localhost:19090/api/v1/targets | python3 -c 'import json,sys; t=json.load(sys.stdin)[\"data\"][\"activeTargets\"]; sys.exit(0 if t and all(x[\"health\"]==\"up\" for x in t) else 1)'"
+  # Prometheus: ミドルウェア自身のメトリクスの scrape 先がすべて up(CDC の監視の 3 つは cdc / order profile の検査で確かめる)
+  check "Prometheus: scrape 先がすべて up(CDC の監視を除く)" retry 10 3 bash -c \
+    "curl -fsS http://localhost:19090/api/v1/targets | python3 -c 'import json,sys; t=[x for x in json.load(sys.stdin)[\"data\"][\"activeTargets\"] if x[\"labels\"][\"job\"] not in (\"postgres-exporter\",\"kafka-exporter\",\"kafka-connect\")]; sys.exit(0 if t and all(x[\"health\"]==\"up\" for x in t) else 1)'"
 
   # Grafana: provisioning した 3 つのデータソースが疎通する
   for uid in prometheus tempo loki; do
@@ -277,6 +277,7 @@ verify_cdc() {
     fail "CDC: $topic に届いた変更イベントが 2 件でない ('$events')"
   fi
   cleanup_cdc
+  verify_cdc_monitoring
 }
 
 # ------------------------------------------------------------------ iot
@@ -521,6 +522,8 @@ verify_order() {
   fi
 
   verify_order_cdc "$(sed '$d' <<<"$first" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))' 2>/dev/null || true)" "${gw[@]}"
+  verify_cdc_monitoring
+  verify_order_cdc_alerts "${gw[@]}"
   verify_audit_anchor "$posted_at"
   verify_gateway
   verify_dashboard
@@ -578,6 +581,67 @@ verify_order_cdc() {
     "curl -fsS $connect/connectors/order-outbox/status | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d[\"tasks\"] and all(t[\"state\"]==\"RUNNING\" for t in d[\"tasks\"]) else 1)'"
   check "CDC(order): Outbox の表に行が残らない" equals "0" \
     "${compose[@]}" exec -T postgres psql -U postgres -d order_service -tAc "select count(*) from outbox.outbox"
+}
+
+# CDC の監視(P06 ④。prometheus/rules/cdc.rules.yml・docs/runbooks/cdc-outbox-lag.md)。cdc と order の profile で共通の検査
+prom_value() { # prom_value <PromQL>(最初の結果の値。なければ空)
+  curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode "query=$1" |
+    python3 -c 'import json,sys; r=json.load(sys.stdin)["data"]["result"]; print(r[0]["value"][1] if r else "")' 2>/dev/null || true
+}
+cdc_alert_state() { # cdc_alert_state <アラート名>(firing / pending / なければ空)
+  curl -fsS http://localhost:19090/api/v1/alerts |
+    python3 -c 'import json,sys; a=[x["state"] for x in json.load(sys.stdin)["data"]["alerts"] if x["labels"]["alertname"]==sys.argv[1]]; print("firing" if "firing" in a else (a[0] if a else ""))' "$1" 2>/dev/null || true
+}
+verify_cdc_monitoring() {
+  local job
+  for job in postgres-exporter kafka-exporter kafka-connect; do
+    check "CDC の監視: Prometheus が $job から収集できる" retry 20 3 bash -c \
+      "curl -fsS http://localhost:19090/api/v1/targets | python3 -c 'import json,sys; t=[x for x in json.load(sys.stdin)[\"data\"][\"activeTargets\"] if x[\"labels\"][\"job\"]==\"$job\"]; sys.exit(0 if t and all(x[\"health\"]==\"up\" for x in t) else 1)'"
+  done
+  check "CDC の監視: アラートのルール(cdc.rules.yml の 6 つ)を読み込んでいる" bash -c \
+    "curl -fsS http://localhost:19090/api/v1/rules | python3 -c 'import json,sys; n={r[\"name\"] for g in json.load(sys.stdin)[\"data\"][\"groups\"] for r in g[\"rules\"]}; sys.exit(0 if {\"CdcSlotWalAtRisk\",\"CdcSlotLost\",\"CdcSlotLagHigh\",\"CdcOutboxSlotMissing\",\"CdcConnectorDown\",\"CdcMonitoringDown\"} <= n else 1)'"
+  # 割合の閾値の基準(上限)を、Prometheus が PostgreSQL の設定から得ている
+  check "CDC の監視: 上限 max_slot_wal_keep_size(1GiB)を pg_settings から収集している" equals "1073741824" \
+    prom_value 'pg_settings_max_slot_wal_keep_size_bytes'
+}
+
+# order の Outbox のスロットの監視とアラート(コネクタを止めると CdcConnectorDown が firing し、再開すると解消する)
+# verify_order_cdc_alerts <ゲートウェイの証明書で API を呼ぶ curl...>
+verify_order_cdc_alerts() {
+  local connect=http://localhost:19083 gw=("$@") alert
+  check "CDC の監視: order_outbox の wal_status・safe_wal_size・遅延を収集している" retry 20 3 bash -c \
+    "[[ -n \"\$(curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=pg_replication_slots_safe_wal_size_bytes{slot_name=\"order_outbox\"} and on(slot_name) pg_replication_slots_wal_status{slot_name=\"order_outbox\",wal_status=\"reserved\"} and on(slot_name) pg_replication_slots_pg_wal_lsn_diff' | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"data\"][\"result\"] or \"\")')\" ]]"
+  for alert in CdcSlotWalAtRisk CdcSlotLost CdcSlotLagHigh CdcOutboxSlotMissing CdcConnectorDown CdcMonitoringDown; do
+    if [[ "$(cdc_alert_state "$alert")" == firing ]]; then fail "CDC の監視: 平常時に $alert が firing している"; else pass "CDC の監視: 平常時に $alert は firing していない"; fi
+  done
+
+  # コネクタを止める(スロットは使われなくなり、WAL を保持し続ける)。止めている間の注文で、遅延の bytes が増える。
+  # 止めるときに Debezium が最後に LSN を確定させ、遅延がいったん下がるので、スロットが使われなくなったのを Prometheus で確かめてから測る
+  local before body key="verify-alert-$$-$(date +%s)"
+  curl -fsS -o /dev/null -X PUT "$connect/connectors/order-outbox/stop" || true
+  retry 20 3 equals 0 prom_value 'pg_replication_slots_slot_is_active{slot_name="order_outbox"}' || true
+  before="$(prom_value 'pg_replication_slots_pg_wal_lsn_diff{slot_name="order_outbox"}')"
+  body='{"customerId":"cust-verify","lines":[{"productId":"prod-1","sku":"SKU-1","quantity":1,"unitPrice":{"amount":"1000","currency":"JPY"}}],"shippingAddress":{"countryCode":"JP","postalCode":"100-0001","city":"Chiyoda","line1":"1-1"}}'
+  "${gw[@]}" -o /dev/null -X POST "https://localhost:19443/v1/orders" -H "Idempotency-Key: $key" -H 'Content-Type: application/json' -d "$body" || true
+  if retry 20 3 bash -c "a=\$(curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=pg_replication_slots_pg_wal_lsn_diff{slot_name=\"order_outbox\"}' | python3 -c 'import json,sys; r=json.load(sys.stdin)[\"data\"][\"result\"]; print(r[0][\"value\"][1] if r else 0)'); python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) > float(sys.argv[2] or 0) else 1)' \"\$a\" '$before'"; then
+    pass "CDC の監視: コネクタを止めている間の注文で、スロットの遅延(bytes)が増える"
+  else
+    fail "CDC の監視: コネクタを止めても、スロットの遅延(bytes)が増えない(before=$before)"
+  fi
+  # for: 1m + 評価の間隔(15 秒)+ scrape の間隔(15 秒)
+  if retry 60 3 bash -c "[[ \"\$(curl -fsS http://localhost:19090/api/v1/alerts | python3 -c 'import json,sys; print(\"firing\" if any(a[\"labels\"][\"alertname\"]==\"CdcConnectorDown\" and a[\"state\"]==\"firing\" for a in json.load(sys.stdin)[\"data\"][\"alerts\"]) else \"\")')\" == firing ]]"; then
+    pass "CDC の監視: コネクタを止めると CdcConnectorDown(critical)が firing する"
+  else
+    fail "CDC の監視: コネクタを止めても CdcConnectorDown が firing しない"
+  fi
+  curl -fsS -o /dev/null -X PUT "$connect/connectors/order-outbox/resume" || true
+  check "CDC の監視: 再開したコネクタとタスクが RUNNING" retry 30 2 bash -c \
+    "curl -fsS $connect/connectors/order-outbox/status | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d[\"connector\"][\"state\"]==\"RUNNING\" and d[\"tasks\"] and all(t[\"state\"]==\"RUNNING\" for t in d[\"tasks\"]) else 1)'"
+  if retry 40 3 bash -c "[[ -z \"\$(curl -fsS http://localhost:19090/api/v1/alerts | python3 -c 'import json,sys; print(\"x\" if any(a[\"labels\"][\"alertname\"]==\"CdcConnectorDown\" for a in json.load(sys.stdin)[\"data\"][\"alerts\"]) else \"\")')\" ]]"; then
+    pass "CDC の監視: コネクタを再開すると CdcConnectorDown が解消する"
+  else
+    fail "CDC の監視: コネクタを再開しても CdcConnectorDown が解消しない"
+  fi
 }
 
 # トピックに、キーが <注文 ID> で、契約のヘッダを持つイベントがあるか(order_event_arrived <トピック> <注文 ID>)
