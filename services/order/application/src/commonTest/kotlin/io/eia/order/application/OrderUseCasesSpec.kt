@@ -58,7 +58,8 @@ private class Fixture {
     val repository = FakeOrderRepository(transaction)
     val ids = SequentialIds()
     val audit = FakeOrderAuditTrail(transaction)
-    val place = PlaceOrderService(repository, transaction, ids, FixedClock(NOW), audit)
+    val events = FakeOrderEventOutbox(transaction)
+    val place = PlaceOrderService(repository, transaction, ids, FixedClock(NOW), audit, events)
     val get = GetOrderService(repository)
 }
 
@@ -94,6 +95,34 @@ class OrderUseCasesSpec :
                 f.transaction.rollbacks shouldBe 1
                 f.repository.orders shouldBe emptyMap()
                 f.audit.entries shouldBe emptyList()
+            }
+
+            test("受け付けたことを、注文の保存と同じトランザクションで Outbox に書く(イベントの発行)") {
+                val f = Fixture()
+                val order = f.place(command()).ok()
+
+                f.events.placed shouldBe listOf(order.id)
+                f.transaction.commits shouldBe 1
+            }
+
+            test("Outbox に書けなければ、注文の保存と監査の記録も取り消す(イベントのない業務の更新を残さない)") {
+                val f = Fixture()
+                val unavailable = UnavailableError("Outbox に書けません")
+                f.events.failWith = unavailable
+
+                f.place(command()).error() shouldBeEqual unavailable
+                f.transaction.rollbacks shouldBe 1
+                f.repository.orders shouldBe emptyMap()
+                f.audit.entries shouldBe emptyList()
+                f.events.placed shouldBe emptyList()
+            }
+
+            test("監査の記録に失敗したら、Outbox にも書かない") {
+                val f = Fixture()
+                f.audit.failWith = UnavailableError("監査の記録に失敗しました")
+
+                f.place(command()).error()
+                f.events.placed shouldBe emptyList()
             }
 
             test("違反があれば ValidationError を返し、保存しない(トランザクションも始めない)") {

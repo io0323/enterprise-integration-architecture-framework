@@ -3,6 +3,9 @@
 package io.eia.order.adapters.inbound.rest
 
 import io.eia.order.adapters.out.audit.ExposedOrderAuditTrail
+import io.eia.order.adapters.out.outbox.OrderCreatedV1
+import io.eia.order.adapters.out.outbox.OrderEventSchemas
+import io.eia.order.adapters.out.outbox.OutboxOrderEvents
 import io.eia.order.adapters.out.persistence.ExposedOrderRepository
 import io.eia.order.adapters.out.persistence.ExposedTransactionBoundary
 import io.eia.order.adapters.out.persistence.ExposedTransactionRunner
@@ -18,11 +21,17 @@ import io.eia.platform.api.idempotency.IDEMPOTENT_REPLAYED_HEADER
 import io.eia.platform.api.idempotency.IdempotencyHandler
 import io.eia.platform.api.problem.installProblemDetails
 import io.eia.platform.audit.jdbc.AuditLog
+import io.eia.platform.messagingkafka.AvroEventSerializer
 import io.eia.platform.observability.Observability
 import io.eia.platform.observability.ObservabilityConfig
 import io.eia.platform.observability.TelemetrySinks
 import io.eia.platform.observability.context.CorrelationHeaders
 import io.eia.platform.observability.ktor.server.ServerObservability
+import io.eia.platform.outbox.Outbox
+import io.eia.platform.outbox.OutboxEvents
+import io.eia.platform.schemaregistry.ApicurioRegistryClient
+import io.eia.platform.schemaregistry.SchemaIdBook
+import io.eia.platform.schemaregistry.SchemaRegistryConfig
 import io.eia.platform.security.ktor.eiaJwt
 import io.eia.shared.kernel.Result
 import io.kotest.core.spec.style.FunSpec
@@ -34,6 +43,9 @@ import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldStartWith
 import io.kotest.matchers.types.shouldBeInstanceOf
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
@@ -44,12 +56,14 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
+import io.ktor.http.headersOf
 import io.ktor.server.application.install
 import io.ktor.server.auth.Authentication
 import io.ktor.server.auth.authenticate
 import io.ktor.server.routing.routing
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
@@ -82,6 +96,36 @@ private val NANOSECOND_CLOCK =
         override fun now(): Instant = Clock.System.now() + 505.nanoseconds
     }
 
+private val EVENT_RUNTIME =
+    Observability.init(
+        ObservabilityConfig.of("order-routes-it").let {
+            (it as Result.Ok).value
+        },
+        TelemetrySinks(),
+        installLogAppender = false,
+    )
+
+/** 解決済みの OrderCreated の serializer(Schema Registry の代わりに MockEngine で contentId 1 を返す)。 */
+private fun resolvedOrderCreated(): AvroEventSerializer<OrderCreatedV1> {
+    val registry =
+        HttpClient(
+            MockEngine {
+                respond(
+                    """{"versions":[{"contentId":1,"state":"ENABLED"}]}""",
+                    HttpStatusCode.OK,
+                    headersOf(HttpHeaders.ContentType, "application/json"),
+                )
+            },
+        )
+    val book =
+        SchemaIdBook(
+            OrderEventSchemas.subjects,
+            ApicurioRegistryClient(SchemaRegistryConfig("http://registry.test/apis/registry/v3"), registry),
+        )
+    runBlocking { check(book.resolve() is Result.Ok) }
+    return OrderEventSchemas.orderCreatedSerializer(book)
+}
+
 /** order-service の REST を、実際の PostgreSQL・JWT の検証・Problem Details・冪等の処理で組み立てる(app の配線と同じ順序)。 */
 private fun ApplicationTestBuilder.orderService(
     db: OrderDatabase,
@@ -97,6 +141,7 @@ private fun ApplicationTestBuilder.orderService(
                     UuidV7OrderIdGenerator(),
                     NANOSECOND_CLOCK,
                     ExposedOrderAuditTrail(db.database, AuditLog()),
+                    OutboxOrderEvents(db.database, Outbox(), OutboxEvents(EVENT_RUNTIME, "/sales/order-service"), resolvedOrderCreated()),
                 ),
             getOrder = GetOrderService(repository),
             idempotency = IdempotencyHandler(PostgresIdempotencyStore(db.database)),

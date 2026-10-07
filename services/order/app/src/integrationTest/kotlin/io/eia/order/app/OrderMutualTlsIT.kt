@@ -27,7 +27,7 @@ class OrderMutualTlsIT :
             environment.start()
             val db = environment.newDatabase()
             OrderCommands.run(listOf("migrate"), environment.migrateEnv(db)) shouldBe OrderCommands.OK
-            server = OrderServer.start(environment.serveEnv(db)).started()
+            server = OrderServer.start(environment.serveEnv(db)).started().also { environment.awaitReady(it) }
         }
         afterSpec {
             server.stop()

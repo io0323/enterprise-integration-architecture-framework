@@ -17,10 +17,14 @@ import javax.sql.DataSource
  * order の DB の統合テストの環境。ロールはローカル基盤(infra/local/postgres/init/10-service-databases.sh)と同じ構成にする。
  *
  * - 所有者 `order_service`(マイグレーション)と、アプリ用の `order_service_app`(CONNECT だけ。表の権限はマイグレーションが付ける)。
+ * - Debezium 用の `debezium`(REPLICATION と CONNECT だけ。infra/local/postgres/init/20-debezium.sh と同じ)。Outbox の表の SELECT は
+ *   マイグレーションが付ける(ADR-0007)。WAL を論理的に読めるよう `wal_level=logical` で起動する。
  * - テストが互いに影響しないよう、[newDatabase] でテストごとに DB を作り、所有者のロールでマイグレーションする。
  */
 internal class OrderDatabaseEnvironment : AutoCloseable {
-    val postgres: PostgreSQLContainer = PostgreSQLContainer(InfraImages.get("POSTGRES_IMAGE").asCompatibleSubstituteFor("postgres"))
+    val postgres: PostgreSQLContainer =
+        PostgreSQLContainer(InfraImages.get("POSTGRES_IMAGE").asCompatibleSubstituteFor("postgres"))
+            .withCommand("postgres", "-c", "wal_level=logical")
     private val ownerPassword = randomHex()
     private val appPassword = randomHex()
     private val databases = AtomicInteger()
@@ -33,6 +37,7 @@ internal class OrderDatabaseEnvironment : AutoCloseable {
                 statement.execute(
                     "CREATE ROLE ${OrderSchema.APP_ROLE} LOGIN PASSWORD '$appPassword' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION",
                 )
+                statement.execute("CREATE ROLE ${OrderSchema.CDC_ROLE} LOGIN REPLICATION PASSWORD '${randomHex()}'")
             }
         }
     }
@@ -44,7 +49,7 @@ internal class OrderDatabaseEnvironment : AutoCloseable {
             connection.createStatement().use { statement ->
                 statement.execute("CREATE DATABASE $name OWNER $OWNER_ROLE")
                 statement.execute("REVOKE ALL ON DATABASE $name FROM PUBLIC")
-                statement.execute("GRANT CONNECT ON DATABASE $name TO ${OrderSchema.APP_ROLE}")
+                statement.execute("GRANT CONNECT ON DATABASE $name TO ${OrderSchema.APP_ROLE}, ${OrderSchema.CDC_ROLE}")
             }
         }
         val owner = dataSource(OWNER_ROLE, ownerPassword, name)

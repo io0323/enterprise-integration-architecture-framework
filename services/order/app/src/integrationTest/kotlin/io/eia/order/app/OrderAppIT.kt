@@ -26,13 +26,13 @@ private fun <T, E> Result<T, E>.ok(): T =
         is Result.Err -> fail("Ok を期待しましたが Err でした: $error")
     }
 
-/** migrate を実行してから serve を起動する(ローカル基盤と同じ順序)。 */
+/** migrate を実行してから serve を起動し、ready になるまで待つ(ローカル基盤と同じ順序)。 */
 private fun AppEnvironment.migratedServer(
     database: String,
     extra: Map<String, String> = emptyMap(),
 ): OrderServer {
     OrderCommands.run(listOf("migrate"), migrateEnv(database)) shouldBe OrderCommands.OK
-    return OrderServer.start(serveEnv(database, extra)).ok()
+    return OrderServer.start(serveEnv(database, extra)).ok().also { awaitReady(it) }
 }
 
 /** ゲートウェイのクライアント証明書で、API のポート(mTLS)に注文を送る。 */
@@ -57,6 +57,9 @@ class OrderAppIT :
                 ) shouldBe
                     2
                 environment.count(db, "SELECT count(*) FROM pg_tables WHERE schemaname = 'audit' AND tablename = 'audit_log'") shouldBe 1
+                // Outbox の表と、Debezium が読む publication(ADR-0007)
+                environment.count(db, "SELECT count(*) FROM pg_tables WHERE schemaname = 'outbox' AND tablename = 'outbox'") shouldBe 1
+                environment.count(db, "SELECT count(*) FROM pg_publication_tables WHERE pubname = 'eiaf_outbox'") shouldBe 1
             }
 
             test("serve の環境に所有者のパスワード(値でもファイルでも)があれば、起動しない") {

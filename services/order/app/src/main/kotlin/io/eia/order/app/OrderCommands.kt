@@ -65,7 +65,7 @@ internal object OrderCommands {
             is Result.Ok -> {
                 val (config, password) = inputs.value
                 ownerDataSource(config, password).use {
-                    when (val migrated = OrderSchema.migrate(it, config.appUser)) {
+                    when (val migrated = OrderSchema.migrate(it, config.appUser, config.cdcUser)) {
                         is Result.Ok -> OK.also { logger.info("マイグレーションが終わりました") }
                         is Result.Err -> FAILED.also { logger.error("マイグレーションに失敗しました: {}", migrated.error.message) }
                     }

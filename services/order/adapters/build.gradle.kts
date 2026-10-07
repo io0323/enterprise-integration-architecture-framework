@@ -10,6 +10,9 @@ dependencies {
     implementation(project(":platform:audit"))
     // 監査の記録に、今の処理の Correlation ID と traceparent を入れる(CurrentTrace。ADR-0017 §8 の A17-6)
     implementation(project(":platform:observability"))
+    // 注文のイベントを Outbox で発行する(ADR-0007)。イベントは Canonical Model を経由して作る(ADR-0010 Decision 7)
+    implementation(project(":platform:outbox"))
+    implementation(project(":shared:canonical-model"))
     // 冪等の保存先の Port(IdempotencyStore)を PostgreSQL で実装する(ADR-0022 §3)
     api(project(":platform:api"))
     // REST の認証(eiaJwt)と認可(requireScopes)。JWT の検証は platform/security だけで行う(ADR-0019)
@@ -25,6 +28,7 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
 
     testImplementation(libs.mockk)
+    testImplementation(libs.ktor.client.mock)
 
     integrationTestImplementation(project(":platform:test-support"))
     integrationTestImplementation(libs.testcontainers.postgresql)
@@ -35,4 +39,21 @@ dependencies {
     integrationTestImplementation(libs.nimbus.jose.jwt)
     integrationTestImplementation(libs.json.schema.validator)
     integrationTestImplementation(libs.jackson3.dataformat.yaml)
+}
+
+// 書き込むイベントの契約のスキーマ(contracts/avro)をリソースに含める。契約が唯一の真実で、コードに複製しない(ADR-0025 §2)
+tasks.named<ProcessResources>("processResources") {
+    from(rootProject.layout.projectDirectory.file("contracts/avro/sales/OrderCreated.avsc")) {
+        into("contracts/avro/sales")
+    }
+}
+
+// テストで、リソースのスキーマが契約のファイルと同じであることを確かめる
+tasks.named<Test>("test") {
+    systemProperty(
+        "eia.contractsAvro",
+        rootProject.layout.projectDirectory
+            .dir("contracts/avro")
+            .asFile.absolutePath,
+    )
 }

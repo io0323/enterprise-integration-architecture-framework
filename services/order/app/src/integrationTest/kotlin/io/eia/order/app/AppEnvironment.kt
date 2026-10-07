@@ -12,7 +12,15 @@ import com.nimbusds.jose.jwk.gen.RSAKeyGenerator
 import com.nimbusds.jwt.JWTClaimsSet
 import com.nimbusds.jwt.SignedJWT
 import com.sun.net.httpserver.HttpServer
+import io.eia.order.adapters.out.outbox.OrderEventSchemas
+import io.eia.platform.schemaregistry.ApicurioRegistryClient
+import io.eia.platform.schemaregistry.SchemaRegistryConfig
+import io.eia.platform.testsupport.ApicurioRegistryContainer
 import io.eia.platform.testsupport.InfraImages
+import io.eia.shared.kernel.Result
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.cio.CIO
+import kotlinx.coroutines.runBlocking
 import org.postgresql.ds.PGSimpleDataSource
 import org.testcontainers.postgresql.PostgreSQLContainer
 import java.net.InetSocketAddress
@@ -23,14 +31,22 @@ import java.util.HexFormat
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * app の統合テストの環境: ローカル基盤と同じロール(所有者 `order_service` と `order_service_app`)の PostgreSQL、テスト用の IdP、
  * テスト用の CA([pki])と、ゲートウェイ(SAN `apisix`)のクライアント証明書で接続する HTTP クライアント([gateway])。
  * 環境変数は、migrate と serve で別々に作る(serve には所有者のパスワードを渡さない。ADR-0024 §2)。
+ *
+ * Schema Registry([registry]。Apicurio)も立てる。serve は起動時に書き込むイベントのスキーマ ID を解決し、解決するまで ready にならない
+ * (ADR-0025 §3)。[start] で契約のスキーマを登録する(`make schemas` と同じ)。登録しない状態から始めるときは `registerSchemas = false`。
+ * Debezium 用のロール(`debezium`)も作る。migrate が Outbox の表の SELECT を付けるため(ADR-0007)。
  */
 internal class AppEnvironment : AutoCloseable {
-    val postgres: PostgreSQLContainer = PostgreSQLContainer(InfraImages.get("POSTGRES_IMAGE").asCompatibleSubstituteFor("postgres"))
+    val postgres: PostgreSQLContainer =
+        PostgreSQLContainer(InfraImages.get("POSTGRES_IMAGE").asCompatibleSubstituteFor("postgres"))
+            .withCommand("postgres", "-c", "wal_level=logical")
+    val registry = ApicurioRegistryContainer()
     private val ownerPassword = randomHex()
     private val appPassword = randomHex()
     private val databases = AtomicInteger()
@@ -56,14 +72,17 @@ internal class AppEnvironment : AutoCloseable {
     /** 平文の HTTP クライアント(ヘルスチェックのポートと、mTLS なしの接続の確認)。 */
     val plain: TestHttp = TestHttp(null)
 
-    fun start() {
+    fun start(registerSchemas: Boolean = true) {
         postgres.start()
+        registry.start()
         superuser(postgres.databaseName) {
             it.createStatement().use { s ->
                 s.execute("CREATE ROLE order_service LOGIN PASSWORD '$ownerPassword'")
                 s.execute("CREATE ROLE order_service_app LOGIN PASSWORD '$appPassword' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION")
+                s.execute("CREATE ROLE debezium LOGIN REPLICATION PASSWORD '${randomHex()}'")
             }
         }
+        if (registerSchemas) registerSchemas()
     }
 
     /** DB を 1 つ作る(マイグレーションはしない。migrate のコマンドで行う)。 */
@@ -73,7 +92,7 @@ internal class AppEnvironment : AutoCloseable {
             it.createStatement().use { s ->
                 s.execute("CREATE DATABASE $name OWNER order_service")
                 s.execute("REVOKE ALL ON DATABASE $name FROM PUBLIC")
-                s.execute("GRANT CONNECT ON DATABASE $name TO order_service_app")
+                s.execute("GRANT CONNECT ON DATABASE $name TO order_service_app, debezium")
             }
         }
         return name
@@ -96,6 +115,7 @@ internal class AppEnvironment : AutoCloseable {
             "ORDER_HEALTH_PORT" to "0",
             "OIDC_ISSUER" to ISSUER,
             "OIDC_JWKS_URI" to "http://127.0.0.1:${jwks.address.port}/jwks",
+            OrderConfig.SCHEMA_REGISTRY_URL to registry.baseUrl,
             "EIA_LOG_FORMAT" to "console",
             // 統合テストには S3 がない。アンカーの保存は platform/audit の AuditAnchorIT と E2E で確かめる
             AuditAnchorConfig.ENABLED to "false",
@@ -155,6 +175,7 @@ internal class AppEnvironment : AutoCloseable {
 
     override fun close() {
         jwks.stop(0)
+        registry.stop()
         postgres.stop()
         pki.close()
     }
