@@ -1,0 +1,88 @@
+# CDC(Outbox → Debezium)のアラート(P06 ④。ADR-0007・ADR-0016)。対応は docs/runbooks/cdc-outbox-lag.md。
+# Alertmanager は置かず、firing は Prometheus の /alerts と Grafana で見る。単体テストは cdc.test.yml(make alerts-test)。
+#
+# 閾値は、レプリケーションスロットが保持できる WAL の上限(max_slot_wal_keep_size。postgres-exporter の
+# pg_settings_max_slot_wal_keep_size_bytes)に対する割合で書く。上限を変えると、アラートも自動で追従する。
+# 上限なし(-1)のときは、割合の判定をしない(wal_status の判定は残る)。
+#
+# core だけで起動したとき(cdc / order profile なし)は exporter がいない。アラートは、その場合に誤って firing しない条件にする。
+groups:
+  - name: cdc
+    rules:
+      # 無効(lost)になる前に気づく: WAL が上限の内側に収まらなくなった(extended / unreserved)、または上限までの残りが 25% を切った
+      - alert: CdcSlotWalAtRisk
+        expr: |
+          pg_replication_slots_wal_status{wal_status=~"extended|unreserved"} == 1
+          or
+          (
+            pg_replication_slots_safe_wal_size_bytes
+              < on(instance) group_left()
+            (0.25 * pg_settings_max_slot_wal_keep_size_bytes > 0)
+          )
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "レプリケーションスロット {{ $labels.slot_name }} が保持できる WAL の上限に近づいている"
+          runbook: docs/runbooks/cdc-outbox-lag.md#警告の段階
+
+      # スロットが無効になった。読まれていない WAL は消え、Outbox のイベントは戻らない(#80)
+      - alert: CdcSlotLost
+        expr: pg_replication_slots_wal_status{wal_status="lost"} == 1
+        labels:
+          severity: critical
+        annotations:
+          summary: "レプリケーションスロット {{ $labels.slot_name }} が無効になった(wal_status=lost)"
+          runbook: docs/runbooks/cdc-outbox-lag.md#lost-になったとき
+
+      # 発行の遅延(スロットが読み終えていない WAL の量)が、上限の 25% を超えた状態が続く
+      - alert: CdcSlotLagHigh
+        expr: |
+          pg_replication_slots_pg_wal_lsn_diff
+            > on(instance) group_left()
+          (0.25 * pg_settings_max_slot_wal_keep_size_bytes > 0)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "レプリケーションスロット {{ $labels.slot_name }} の遅延が上限の 25% を超えている"
+          runbook: docs/runbooks/cdc-outbox-lag.md#警告の段階
+
+      # あるはずの order の Outbox のスロットがない(コネクタが一度も起動していない・スロットが消された)。
+      # order-service が動いていて、postgres-exporter が UP のときだけ判定する(core だけの起動や exporter の停止で誤って firing しない)
+      - alert: CdcOutboxSlotMissing
+        expr: |
+          absent(pg_replication_slots_slot_is_active{slot_name="order_outbox"})
+          and on() (count(target_info{job="order-service"}) > 0)
+          and on() (count(up{job="postgres-exporter"} == 1) > 0)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "order の Outbox のレプリケーションスロット order_outbox がない(注文のイベントが発行されない)"
+          runbook: docs/runbooks/cdc-outbox-lag.md#スロットがない
+
+      # コネクタかタスクが動いていない、またはスロットが使われていない(Connect が止まっている)
+      - alert: CdcConnectorDown
+        expr: |
+          kafka_connect_connector_status{status!="running"} == 1
+          or kafka_connect_connector_task_status{status!="running"} == 1
+          or pg_replication_slots_slot_is_active == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CDC のコネクタが動いていない(発行が止まり、スロットが WAL を保持し続ける)"
+          runbook: docs/runbooks/cdc-outbox-lag.md#警告の段階
+
+      # 監視の部品が止まった(スロットや Connect の状態が見えない)。cdc / order profile が動いているとき(どれか 1 つが UP)だけ判定する
+      - alert: CdcMonitoringDown
+        expr: |
+          up{job=~"postgres-exporter|kafka-exporter|kafka-connect"} == 0
+          and on() (count(up{job=~"postgres-exporter|kafka-exporter|kafka-connect"} == 1) > 0)
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CDC の監視の対象 {{ $labels.job }} から収集できない"
+          runbook: docs/runbooks/cdc-outbox-lag.md#監視が見えないとき
