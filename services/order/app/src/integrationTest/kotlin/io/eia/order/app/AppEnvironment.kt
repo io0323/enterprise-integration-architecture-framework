@@ -22,6 +22,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import kotlinx.coroutines.runBlocking
 import org.postgresql.ds.PGSimpleDataSource
+import org.testcontainers.containers.Network
 import org.testcontainers.postgresql.PostgreSQLContainer
 import java.net.InetSocketAddress
 import java.security.SecureRandom
@@ -40,13 +41,22 @@ import kotlin.time.Duration.Companion.seconds
  *
  * Schema Registry([registry]。Apicurio)も立てる。serve は起動時に書き込むイベントのスキーマ ID を解決し、解決するまで ready にならない
  * (ADR-0025 §3)。[start] で契約のスキーマを登録する(`make schemas` と同じ)。登録しない状態から始めるときは `registerSchemas = false`。
- * Debezium 用のロール(`debezium`)も作る。migrate が Outbox の表の SELECT を付けるため(ADR-0007)。
+ * Debezium 用のロール(`debezium`。パスワードは [cdcPassword])も作る。migrate が Outbox の表の SELECT を付けるため(ADR-0007)。
+ *
+ * [network] を渡すと、PostgreSQL と Apicurio をそのネットワークに `postgres`・`apicurio` の名前で参加させる
+ * (Kafka Connect のコンテナから、ローカル基盤と同じ名前で届くようにする。P06 ③b の発行の統合テスト)。
  */
-internal class AppEnvironment : AutoCloseable {
+internal class AppEnvironment(
+    network: Network? = null,
+) : AutoCloseable {
     val postgres: PostgreSQLContainer =
         PostgreSQLContainer(InfraImages.get("POSTGRES_IMAGE").asCompatibleSubstituteFor("postgres"))
             .withCommand("postgres", "-c", "wal_level=logical")
-    val registry = ApicurioRegistryContainer()
+            .apply { if (network != null) withNetwork(network).withNetworkAliases("postgres") }
+    val registry = ApicurioRegistryContainer().apply { if (network != null) withNetwork(network).withNetworkAliases("apicurio") }
+
+    /** Debezium のロールのパスワード(Kafka Connect の `DEBEZIUM_DB_PASSWORD`)。 */
+    val cdcPassword: String = randomHex()
     private val ownerPassword = randomHex()
     private val appPassword = randomHex()
     private val databases = AtomicInteger()
@@ -79,15 +89,14 @@ internal class AppEnvironment : AutoCloseable {
             it.createStatement().use { s ->
                 s.execute("CREATE ROLE order_service LOGIN PASSWORD '$ownerPassword'")
                 s.execute("CREATE ROLE order_service_app LOGIN PASSWORD '$appPassword' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION")
-                s.execute("CREATE ROLE debezium LOGIN REPLICATION PASSWORD '${randomHex()}'")
+                s.execute("CREATE ROLE debezium LOGIN REPLICATION PASSWORD '$cdcPassword'")
             }
         }
         if (registerSchemas) registerSchemas()
     }
 
-    /** DB を 1 つ作る(マイグレーションはしない。migrate のコマンドで行う)。 */
-    fun newDatabase(): String {
-        val name = "order_app_it_${databases.incrementAndGet()}"
+    /** DB を 1 つ作る(マイグレーションはしない。migrate のコマンドで行う)。[name] を省くと、テストごとに別の名前にする。 */
+    fun newDatabase(name: String = "order_app_it_${databases.incrementAndGet()}"): String {
         superuser(postgres.databaseName) {
             it.createStatement().use { s ->
                 s.execute("CREATE DATABASE $name OWNER order_service")

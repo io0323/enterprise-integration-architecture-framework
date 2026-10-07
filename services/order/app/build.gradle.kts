@@ -32,4 +32,13 @@ dependencies {
     integrationTestImplementation(libs.kotlinx.coroutines.core)
     // 統合テストで Schema Registry を立て、契約を登録する
     integrationTestImplementation(libs.ktor.client.cio)
+    // 発行(Outbox → Debezium → Kafka)の統合テスト(P06 ③b)
+    integrationTestImplementation(libs.testcontainers.kafka)
+}
+
+// 発行の統合テストは、ローカル基盤と同じコネクタの設定と Kafka Connect のイメージを使う。変更でテストをやり直すよう、入力に宣言する
+tasks.named<Test>("integrationTest") {
+    val infra = rootProject.layout.projectDirectory.dir("infra/local")
+    inputs.dir(infra.dir("kafka-connect")).withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName("connectors")
+    inputs.dir(infra.dir("images/kafka-connect")).withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName("kafkaConnectImage")
 }
