@@ -717,13 +717,17 @@ verify_order_cdc_alerts() {
   done
 
   # コネクタを止める(スロットは使われなくなり、WAL を保持し続ける)。止めている間の注文で、遅延の bytes が増える。
-  # 止めるときに Debezium が最後に LSN を確定させ、遅延がいったん下がるので、スロットが使われなくなったのを Prometheus で確かめてから測る
-  local before body key="verify-alert-$$-$(date +%s)"
+  # 止める要求は非同期で、止めるときに Debezium が最後に LSN を確定させる。Prometheus の値は 15 秒ごとの標本で、直前の Kafka の再起動の
+  # 間の「使われていない」が残っていることがある。そのため、止まったことは Connect(STOPPED)と PostgreSQL(active = false)で直接確かめ、
+  # 基準の遅延も PostgreSQL から直接読む。その後の注文で、Prometheus の遅延がそれを超えることを確かめる
+  local before body key="verify-alert-$$-$(date +%s)" created
   curl -fsS -o /dev/null -X PUT "$connect/connectors/order-outbox/stop" || true
-  retry 20 3 equals 0 prom_value 'pg_replication_slots_slot_is_active{slot_name="order_outbox"}' || true
-  before="$(prom_value 'pg_replication_slots_pg_wal_lsn_diff{slot_name="order_outbox"}')"
+  retry 30 2 bash -c "curl -fsS $connect/connectors/order-outbox/status | grep -q '\"state\":\"STOPPED\"'" || true
+  retry 30 2 equals f psql_super "select active from pg_replication_slots where slot_name = 'order_outbox'" || true
+  before="$(psql_super "select pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)::bigint from pg_replication_slots where slot_name = 'order_outbox'")"
   body='{"customerId":"cust-verify","lines":[{"productId":"prod-1","sku":"SKU-1","quantity":1,"unitPrice":{"amount":"1000","currency":"JPY"}}],"shippingAddress":{"countryCode":"JP","postalCode":"100-0001","city":"Chiyoda","line1":"1-1"}}'
-  "${gw[@]}" -o /dev/null -X POST "https://localhost:19443/v1/orders" -H "Idempotency-Key: $key" -H 'Content-Type: application/json' -d "$body" || true
+  created="$("${gw[@]}" -o /dev/null -w '%{http_code}' -X POST "https://localhost:19443/v1/orders" -H "Idempotency-Key: $key" -H 'Content-Type: application/json' -d "$body" || true)"
+  [[ "$created" == 201 ]] || fail "CDC の監視: コネクタを止めている間の注文の作成が $created(201 でない)"
   if retry 20 3 bash -c "a=\$(curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=pg_replication_slots_pg_wal_lsn_diff{slot_name=\"order_outbox\"}' | python3 -c 'import json,sys; r=json.load(sys.stdin)[\"data\"][\"result\"]; print(r[0][\"value\"][1] if r else 0)'); python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) > float(sys.argv[2] or 0) else 1)' \"\$a\" '$before'"; then
     pass "CDC の監視: コネクタを止めている間の注文で、スロットの遅延(bytes)が増える"
   else
