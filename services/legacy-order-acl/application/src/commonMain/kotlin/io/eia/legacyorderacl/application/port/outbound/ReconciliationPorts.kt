@@ -58,3 +58,14 @@ public fun interface Fingerprints {
 public fun interface Pause {
     public suspend fun pause(duration: Duration)
 }
+
+/** signal 表への指示(専用のロール `eiaf_resync`。signal 表の INSERT だけ。ADR-0027 §6)。 */
+public fun interface SnapshotRequests {
+    /** [orderNumbers] だけを取り直す Incremental Snapshot を指示する。 */
+    public suspend fun requestSnapshot(orderNumbers: Set<String>): Result<Unit, DomainError>
+}
+
+/** 照合が出力に書く削除(ce_source が照合を示す tombstone。ADR-0027 §6)。 */
+public fun interface ReconcileTombstones {
+    public suspend fun delete(orderNumber: String): Result<Unit, DomainError>
+}
