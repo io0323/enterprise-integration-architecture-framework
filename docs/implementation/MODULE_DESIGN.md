@@ -115,7 +115,7 @@ services/legacy-sim/app/
 | payment | 決済(モック) | Kafka |
 | shipping | 出荷 | Kafka |
 | legacy-sim | レガシー基幹 DB 模擬(改修できないレガシー。表と `simulate` だけ。1 モジュール。ADR-0026) | CDC(生の CDC のトピック `_cdc.legacy.*`) |
-| legacy-order-acl | レガシーの受注の CDC の Anti-Corruption Layer(状態を持たない変換・DLQ。P06 ⑤b。ADR-0026) | CDC → Kafka(`sales.legacy-order.changed.v1`。INT-SALES-003) |
+| legacy-order-acl | レガシーの受注の CDC の Anti-Corruption Layer(状態を持たない変換・DLQ。P06 ⑤b。ADR-0026)。4 モジュール。domain に変換の規則(`LegacyOrderTranslation`)、application にユースケースと発行の Port、adapters に Debezium の Envelope の型・読み取りのループ(`LegacyChangeConsumer`。At-Least-Once)・発行(`KafkaLegacyOrderStatePublisher`)、app に起動とヘルスチェック | CDC → Kafka(`sales.legacy-order.changed.v1`。INT-SALES-003) |
 | batch-etl | 分析基盤への ELT/ETL | Batch |
 | file-exchange | ファイル授受 | MFT (S3 互換ストレージ/SFTP) |
 | saas-mock / webhook-receiver / integration-flow | SaaS 連携 | REST, Webhook |
@@ -132,7 +132,7 @@ services/legacy-sim/app/
 | api | REST の共通部品: Problem Details(RFC 9457。`installProblemDetails` / `respondError`。`type` の一覧は INTEGRATION_STANDARDS §6)と Idempotency-Key(`respondIdempotently` / `IdempotencyHandler` / Port `IdempotencyStore`。PostgreSQL の実装は各サービスの adapters)(ADR-0022) | P05 |
 | reliability | `shared/resilience` の JVM 向けアダプタ: OTel のメトリクス(`ResilienceMetrics`)、Ktor Client の結果の Retryable / NonRetryable への分類(`HttpCallClassifier`)、`Retry-After` の解析(ADR-0021 §7・§11)。OTel は API だけを使う | P04b |
 | outbox | Transactional Outbox(ADR-0007)。`Outbox.append` / `appendOutbox`(業務と同じ Exposed のトランザクションで INSERT し、同じ行を DELETE する既定の方式。自動コミットでは書かない)、`OutboxEvents`(イベントから記録を作る。`{topic} create` の PRODUCER の span・UUIDv7 の `ce_id` = `id`)、`OutboxSchema`(スキーマ `outbox`・権限・publication `eiaf_outbox`。サービスの migrate で所有者が適用する)、`OutboxMetrics`。保持期間の方式は #76 | P06 |
-| messaging-kafka | Kafka の共通部品(ADR-0025)。P06: CloudEvents binary mode のヘッダ(`EventMetadata`)・トピック名(`EventTopic`)・Avro の Serde(avro4k。スキーマ ID は Apicurio と同じ形式でペイロードの先頭に埋め込む。`ApicurioWireFormat`・`AvroEventSerializer`・`AvroEventDeserializer`)・DB の更新を伴わない送信の Producer(`EventProducer`。PRODUCER の span)。DB の更新と組み合わせるイベントは Outbox で発行する。P07: Consumer・冪等消費・DLQ・Replay | P06, P07 |
+| messaging-kafka | Kafka の共通部品(ADR-0025)。P06: CloudEvents binary mode のヘッダ(`EventMetadata`)・トピック名(`EventTopic`)・Avro の Serde(avro4k。スキーマ ID は Apicurio と同じ形式でペイロードの先頭に埋め込む。`ApicurioWireFormat`・`AvroEventSerializer`・`AvroEventDeserializer`)・DB の更新を伴わない送信の Producer(`EventProducer`。PRODUCER の span)。DB の更新と組み合わせるイベントは Outbox で発行する。tombstone(`EventProducer.sendTombstone`)と DLQ(`DeadLetterPublisher`。`{topic}.dlq`・`eiaf.dlq.*` のヘッダ。INTEGRATION_STANDARDS §2)は P06 ⑤b(最初の利用者は legacy-order-acl)。P07: Consumer・冪等消費・Replay | P06, P07 |
 | batch | 軽量 DAG ランナー・Checkpoint・SLA メトリクス | P08 |
 | file-transfer | manifest・checksum・S3 互換ストレージ / SFTP | P09 |
 | schema-registry | Apicurio Registry 3 の REST クライアント(`ApicurioRegistryClient`: 内容からの contentId の解決・ID からのスキーマの取得・登録)、起動時のスキーマ ID の解決(`SchemaIdBook`。リクエストの処理中はレジストリに問い合わせず、未解決の間は `/health/ready` を失敗にする)、書き手のスキーマのキャッシュ(`WriterSchemas`)(ADR-0025 §2・§3)。契約の登録は `tools/schema-publish`(`make schemas`)だけが行い、サービスは自動登録しない | P06 |

@@ -25,6 +25,19 @@
 | Idempotency-Key | POST 必須 | — | 24h 保持 |
 | ce_id, ce_source, ce_type, ce_time, ce_specversion | — | ○ | CloudEvents binary mode |
 
+### DLQ のヘッダ(Framework 6.5。ADR-0026 §7)
+処理できないメッセージを `{topic}.dlq` に隔離するときは、キーと値を受け取ったバイト列のまま送り、元のヘッダに次を加える(`platform/messaging-kafka` の `DeadLetterPublisher`。値は UTF-8 の文字列)。`traceparent` は処理したトレースのものに置き換える。
+
+| ヘッダ | 内容 |
+|---|---|
+| `eiaf.dlq.reason` | 原因の種類(例 `UNKNOWN_STATUS_CODE`・`UNDECODABLE`)。種類の数は有限にする(メトリクスのラベルにも使う) |
+| `eiaf.dlq.detail` | 項目・列の名前と破った規則。**値は入れない**(ペイロードの全文のログの禁止・機密区分) |
+| `eiaf.dlq.source.topic` / `eiaf.dlq.source.partition` / `eiaf.dlq.source.offset` | 元のメッセージの位置 |
+| `eiaf.dlq.attempts` | 処理を試みた回数(決定的な誤りはリトライしないので 1) |
+| `eiaf.dlq.failed-at` | DLQ に送った時刻(ISO 8601 の UTC) |
+
+DLQ のトピックは、元のメッセージと同じ機密区分として扱う(値をそのまま運ぶため)。保持期間はトピックの定義(`infra/local/kafka/topics.conf`)に書く。
+
 ### Idempotency-Key の応答(ADR-0022 §3)
 - 部品は `platform/api` の `respondIdempotently`(判定は `IdempotencyHandler`、保存先は `IdempotencyStore` の Port)。キーの範囲はクライアント(`azp`)ごと。
 - 同じキーの再送: 内容(指紋 = メソッド・パス・正規化した本文)が同じなら保存した応答を返し `Idempotent-Replayed: true` を付ける。違えば 422。処理中なら 409 と `Retry-After`。キーがない・不正なら 400。

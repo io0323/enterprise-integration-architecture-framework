@@ -70,6 +70,9 @@ signal 表への書き込み(再同期の指示)は DBA(所有者のロール)�
   - 止まっている間、スロットは WAL を保持する(上限は `max_slot_wal_keep_size`。監視とアラートは P06 ④)。互換性のない変更を黙って流し、ACL や消費者が壊れるより、止まって気付ける方がよい(Framework 8.4「CDC はスキーマ変更に脆い → Schema Registry 連携と DDL 変更手順で統制」)。
   - レガシーの DDL を変えるときの手順(事前の互換性の確認、互換性がないときの手順)は ⑥ の Runbook に書く。
 - ACL は生のスキーマを、メッセージの contentId から取る(`WriterSchemas`。ADR-0025 §1 の受信側と同じ。新しい contentId を初めて見たときだけレジストリに問い合わせ、以後はキャッシュ)。
+- **Converter は参照なしの 1 つのスキーマで登録する**(`apicurio.registry.dereference-schema=true`)。既定では、Envelope の中の `Value`・`Source`・`event.block` が別のアーティファクトになり、Envelope のスキーマはそれらを参照する。contentId の内容だけでは解釈できない(参照を辿る必要がある)ため、ACL が `WriterSchemas` と avro4k でほかのイベントと同じように読めなくなる。
+  - ACL は Debezium の Envelope を、Debezium が作るレコード名(`_cdc.legacy.public.t_juchu.Envelope` / `.Value`・`io.debezium.connector.postgresql.Source`)の `@SerialName` を付けた型で読む(avro4k。使わない項目は読み飛ばす)。GenericRecord にはしない。
+  - 参照ありで登録した版が残っているレジストリに、参照なしの版を登録しようとすると、互換性の検査が古い版を解釈できず失敗する(`Could not execute compatibility rule on invalid Avro schema`)。新しい環境では起きない。ローカルで起きたら、グループ cdc-raw のアーティファクトを消してから、コネクタのタスクを再起動する。
 
 ### 5. 順序とキー
 - **問題**: 生のキーをレガシーの主キー(COL_01。採番の連番)のままにすると、出力のキー(注文番号 = COL_02)と違う。同じ注文の変更の順序が保たれるのは、主キーと注文番号が 1 対 1 で変わらない間だけになる。削除して同じ注文番号で別の連番で登録し直す(レガシーではよくある)と、同じ出力のキーの変更が、入力の別のパーティションから届き、順序が崩れうる。また、既定の REPLICA IDENTITY では削除の変更に主キーしか載らず、ACL は自分で状態(主キー → 注文番号)を持たないと tombstone を作れない。
@@ -91,7 +94,9 @@ signal 表への書き込み(再同期の指示)は DBA(所有者のロール)�
 - **決定**: At-Least-Once。Framework 6.4 は Exactly-Once を「基盤内処理に限定して適用」としており、ACL(Kafka → Kafka)はその対象になりうるが、上流が At-Least-Once のため全体では重複が残り、利点が小さい。
 - **冪等の前提**: 出力は注文のヘッダの全部の項目を運ぶ State Transfer Event で、注文番号をキーにした compacted のトピックへの Upsert になる。同じ変更を送り直しても、最後の状態は同じになる。このため ACL は **状態を持たない**(DB も processed_message の表も持たない)。
 - **一時的な巻き戻り**: 再送では、最後のコミットの後の変更が順に送り直される(例: A1・A2・A3 の後に A2・A3)。消費者は、A3 の後に A2 を受け取り、A3 が届くまで少し前の状態に戻ることがある。再送が終われば最新の状態に収束する。状態が戻ることを許さない消費者は、イベントの `source.lsn` で比べる(大きい方が新しい)。Snapshot のレコードは同じ LSN を共有するため、Snapshot 同士の比較には使えない(契約の AsyncAPI に書いた)。
-- 処理の中で一時的な失敗(Kafka・Apicurio)が起きたら、コミットせずに最後のコミットの位置に戻り、Backoff して読み直す(`shared/resilience` の RetryPolicy)。その間 ACL の `/health/ready` は失敗にする。
+- 処理の中で一時的な失敗(Kafka・Apicurio)が起きたら、処理を終えた分までをコミットし、残りを未処理の位置に戻して、Backoff して読み直す(kernel の `RetryPolicy`。上限なしで繰り返す)。その間 ACL の `/health/ready` は失敗にする。
+- `/health/ready` は「処理できる」(書き込むスキーマ ID を解決して読み取りを始め、直近の処理が一時的な失敗でない)ことを表し、パーティションの割り当ては条件にしない。生の CDC のトピックはコネクタの登録で作られ、`make up` の後になるため。処理の遅れは Consumer Group の lag で見る(§10)。
+- 1 件の発行(`EventProducer` の送信。acks=all)の完了まで待ってから次の 1 件を処理する。コミットは poll ごとに、処理を終えたオフセットだけを行う(`LegacyChangeConsumer`)。発行の後・コミットの前に止まった場合に、重複だけで欠けないことを統合テスト(`LegacyOrderAclIT`)で確かめた。
 
 ### 7. 変換できないレコードと DLQ(Framework 6.5)
 - 変換の規則(§8)に合わないレコードは、黙って捨てず、**DLQ `_cdc.legacy.public.t_juchu.dlq`**(入力のトピック + `.dlq`。Framework 6.5・INTEGRATION_STANDARDS §1)に送り、本流を止めない。後続の変更(同じ注文の後の変更を含む)は通常どおり変換する。
@@ -100,8 +105,11 @@ signal 表への書き込み(再同期の指示)は DBA(所有者のロール)�
 - DLQ のレコード:
   - キーと値は **受け取った生のバイト列のまま**(Avro・contentId を含む)。ヘッダは元のヘッダに、次を加える。
   - `eiaf.dlq.reason`(上の種類)、`eiaf.dlq.detail`(列の名前と破った規則。**値は入れない**: ペイロードの全文のログの禁止・機密区分)、`eiaf.dlq.source.topic` / `eiaf.dlq.source.partition` / `eiaf.dlq.source.offset`、`eiaf.dlq.attempts`(リトライしないので 1)、`eiaf.dlq.failed-at`(ISO 8601 の UTC)、`traceparent`(ACL が始めたトレース)。
-  - ヘッダの名前は INTEGRATION_STANDARDS に加え(⑤b)、P07 の DLQ でも同じ名前を使う。
-- **DLQ のトピックの機密区分は出力と同じ confidential** とする。生のバイト列は顧客名などを含むため。保持は **7 日**(`retention.ms=604800000`。生のトピックと同じ)とし、トピックを作る設定(⑤b)に書く。
+  - ヘッダの名前は INTEGRATION_STANDARDS §2 に加えた。送るのは `platform/messaging-kafka` の `DeadLetterPublisher` で、P07 の DLQ でも同じ部品と名前を使う。
+  - DLQ のキーは生の CDC のキーのまま(Converter の Avro。注文番号の文字列を含む)。
+  - 変換の後の失敗(契約と実装の食い違い `EVENT_ENCODING_FAILED`・送信の拒否 `PUBLISH_FAILED` の NonRetryable)も DLQ に送り、`eiaf.dlq.reason` はエラーのコードを大文字にしたもの。
+- **DLQ のトピックの機密区分は出力と同じ confidential** とする。生のバイト列は顧客名などを含むため。保持は **7 日**(`retention.ms=604800000`。生のトピックと同じ)とする。
+  - 両方をトピックの定義 `infra/local/kafka/topics.conf` に書く。Kafka のトピックの設定には機密区分を書けないため、定義のファイルの列で持つ(読み取りの権限の制御は secure profile の #26)。compose の `kafka-topics`(1 回だけ動くコンテナ。`kafka/create-topics.sh`)がこの定義でトピックを作り、既にあれば設定をそろえる。統合テストも同じファイルを読む。
   - 7 日にする理由: 生のトピックより長く持つと、機密のデータを持つ期間が延びる。回復(下)は DLQ のレコードを使わないため、DLQ は原因の調査の間だけあればよい。DLQ に入るとアラートが出る(§10)ので、7 日の間に調査できる。
 - 件数はメトリクスにする(`eia.acl.records{outcome=upserted|deleted|dead_lettered}`・`eia.acl.dead_letters{reason}`。OTel → Prometheus)。
 - **回復**: DLQ のレコードを本流に戻すと、その後に届いた同じ注文の変更より古い状態で上書きし、状態が戻りうる。このため回復の手順は、**変換の規則やレガシーのデータを直した後、signal 表から対象の注文の Incremental Snapshot を指示し、今の状態を送り直す**(部分の再同期。⑥ の Runbook)。一般の Replay の CLI(P07)は、この DLQ には使わない。
@@ -119,17 +127,22 @@ signal 表への書き込み(再同期の指示)は DBA(所有者のロール)�
 
 ### 9. 出力の契約(INT-SALES-003。Contract First)
 - `sales.legacy-order.changed.v1`(`contracts/asyncapi/legacy-order-events.v1.yaml`・`contracts/avro/sales/LegacyOrderChanged.avsc`)。State Transfer Event(Framework 6.2)で、レガシーの表・列・コード値は運ばない。
-- compacted(`cleanup.policy=compact`)。キーは注文番号。削除は値のない tombstone。tombstone は `delete.retention.ms`(1 日)の間だけ残る。**1 日より長く止まった消費者は、トピックの最初から読み直して状態を作り直す**(読み直して現れなかったキーを消す)。この条件は AsyncAPI の契約に書いた。
+- compacted(`cleanup.policy=compact`。`topics.conf`)。キーは注文番号。削除は値のない tombstone(`EventProducer.sendTombstone`)。tombstone は `delete.retention.ms`(1 日)の間だけ残る。**1 日より長く止まった消費者は、トピックの最初から読み直して状態を作り直す**(読み直して現れなかったキーを消す)。この条件は AsyncAPI の契約に書いた。
 - ヘッダは CloudEvents binary mode(`ce_source=/sales/legacy-order-acl`・`ce_type=sales.legacy-order.changed`)と `traceparent`・`correlationid`。レガシーはトレースを持たないため、ACL が変更ごとにトレースと correlationid を始める(CONSUMER の span の下に PRODUCER の span)。tombstone にも同じヘッダを付ける。
 - `source { lsn, committedAt, snapshot }` を運ぶ(§6 の比較、⑥ の照合)。
 
-### 10. 監視(⑤b)
-- Grafana(CDC のダッシュボードに追加): ACL の Consumer Group の lag(kafka-exporter)、変換の結果ごとの件数、DLQ の原因ごとの件数。
-- アラートの候補(promtool のテストを付け、P06 ④ と同じく `and on(instance) (up == 1)` で exporter が動いている間だけ判定する):
-  - DLQ のトピックのオフセットが増えた(kafka-exporter。ACL が止まっていても判定できる)
-  - ACL の lag が閾値を超えた状態が続く
-  - ACL のメトリクスがない(`absent()`)
-  - レガシーのスロット `legacy_juchu` の WAL の保持(P06 ④ のルールが注文のスロットに限られていれば広げる)
+### 10. 監視
+- Grafana の **CDC — Legacy**(`eiaf-cdc-legacy`。order の Outbox の CDC — Outbox とは分ける。order だけの profile の検査でパネルが空になるため): レガシーのスロットの WAL・コネクタの状態・生の CDC の件数、ACL の Consumer Group の lag(kafka-exporter)・結果ごとの件数・DLQ の原因ごとの件数・DLQ のトピックの件数・読み直しの回数、アラート。
+- アラート(`prometheus/rules/acl.rules.yml`。promtool のテストは `acl.test.yml`。閾値を変えるとテストが失敗することを確かめた):
+
+  | アラート | 重大度 | 条件 |
+  |---|---|---|
+  | `LegacyAclDeadLetters` | warning | DLQ のトピックの末尾のオフセットが 10 分の間に増えた(kafka-exporter。ACL が止まっていても判定できる) |
+  | `LegacyAclLagHigh` | warning | Consumer Group の lag の合計が 1,000 件を超えた状態が 10 分続く |
+  | `LegacyAclDown` | critical | レガシーのコネクタがあるのに、ACL のメトリクス(`target_info{job="legacy-order-acl"}`)が 2 分ない |
+  - kafka-exporter で判定するものは、P06 ④ と同じく `and on(instance) (up == 1)` で exporter が動いている間だけ判定する。
+  - レガシーのスロット `legacy_juchu` の WAL とコネクタの状態は、P06 ④ のルール(`cdc.rules.yml`)がスロット・コネクタごとに判定するため、そのまま対象になる。
+- 対応は `docs/runbooks/legacy-order-acl.md`(DLQ の原因ごとの対応と、DLQ を戻さず部分の再同期で回復する手順)。
 
 ### 11. 範囲
 - ⑤ で扱うのは、受注の **ヘッダの表(t_juchu)だけ**。明細の表との結合は、2 つの表をまたぐ変更を結合するために ACL が状態を持つ必要があり、別に扱う(#82。状態ストア・変更の順序・片方だけ届いた場合を検討する)。
@@ -154,3 +167,7 @@ signal 表への書き込み(再同期の指示)は DBA(所有者のロール)�
 
 ## 改訂履歴
 - 2026-10-08: P06 ⑤a で作成。legacy-sim(V1・V2・simulate)、コネクタ legacy-juchu、契約(INT-SALES-003)を入れた。`LegacyCdcIT` で Snapshot・c / u / d・削除の変更前の値・キーの列の変更(削除 + 登録)・Incremental Snapshot・グループ cdc-raw・Debezium の権限を確かめた。ACL(§5〜§10 の実装)は ⑤b。
+- 2026-10-08: P06 ⑤b で ACL(`services/legacy-order-acl`)を入れた。
+  - 確認点 3(avro4k で Debezium の名前を読めるか): 読める。ただし Converter の既定では Envelope が参照つきで登録され、contentId だけでは解釈できないため、`apicurio.registry.dereference-schema=true` を加えた(§4)。
+  - `/health/ready` はパーティションの割り当てを条件にしない(§6)。DLQ の詳細(キー・変換の後の失敗の reason・`topics.conf`。§7)、監視(§10)を書いた。INT-SALES-003 を active にした。
+  - `platform/messaging-kafka` に `EventProducer.sendTombstone` と `DeadLetterPublisher` を加えた(ADR-0025 の改訂履歴)。
