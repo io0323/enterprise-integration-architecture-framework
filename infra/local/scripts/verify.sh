@@ -346,12 +346,35 @@ verify_legacy_cdc() {
     "[[ -n \"\$(curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=eia_acl_records_total{job=\"legacy-order-acl\"}' | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"data\"][\"result\"] or \"\")')\" ]]"
   check "ACL(legacy): アラートのルール(acl.rules.yml の 3 つ)を読み込んでいる" bash -c \
     "curl -fsS http://localhost:19090/api/v1/rules | python3 -c 'import json,sys; n={r[\"name\"] for g in json.load(sys.stdin)[\"data\"][\"groups\"] for r in g[\"rules\"]}; sys.exit(0 if {\"LegacyAclDeadLetters\",\"LegacyAclLagHigh\",\"LegacyAclDown\"} <= n else 1)'"
+  # 照合(P06 ⑥。ADR-0027): 読み取り専用のロールの上限、定期の照合の成功とずれがないこと、手動の照合(Runbook)
+  check "照合(legacy): eiaf_reconcile は接続数 4・statement_timeout 30s・idle_in_transaction 60s・読み取り専用" \
+    equals "4|statement_timeout=30s,idle_in_transaction_session_timeout=60s,default_transaction_read_only=on" \
+    psql_super "select rolconnlimit || '|' || array_to_string(rolconfig, ',', '') from pg_roles where rolname = 'eiaf_reconcile'"
+  check "照合(legacy): eiaf_reconcile の表の権限は t_juchu の SELECT だけ" equals "public.t_juchu:SELECT" \
+    legacy_db "select string_agg(table_schema || '.' || table_name || ':' || privilege_type, ',') from information_schema.role_table_grants where grantee = 'eiaf_reconcile'"
+  # 定期の照合(2 分ごと)が、直近の 6 分以内に成功し、ずれが 0 件(変換できない受注は既知の差で、ずれに数えない)
+  reconcile_ok() {
+    [[ "$(prom_value 'time() - eia_reconcile_last_success_seconds{job="legacy-order-acl"} < 360')" != "" ]] &&
+      [[ "$(prom_value 'sum(eia_reconcile_drift_keys{job="legacy-order-acl"})')" == "0" ]] &&
+      [[ "$(prom_value 'sum(eia_reconcile_checks_total{job="legacy-order-acl",outcome="consistent"})')" != "" ]]
+  }
+  check "照合(legacy): 定期の照合が成功し、ずれが 0 件(Prometheus)" retry 40 6 reconcile_ok
+  local manual
+  manual="$("${compose[@]}" run --rm --no-deps legacy-order-acl reconcile 2>/dev/null; echo "exit=$?")"
+  if grep -q '^exit=0$' <<<"$manual" && grep -q '^position=.* drift=0 unconvertible=[1-9]' <<<"$manual"; then
+    pass "照合(legacy): 手動の照合(legacy-order-acl reconcile)が一致で終わり、変換できない受注を別に数える"
+  else
+    fail "照合(legacy): 手動の照合が一致で終わらない ($(grep -E '^(position|exit)=' <<<"$manual" | tr '\n' ' '))"
+  fi
+  check "照合(legacy): アラートのルール(reconcile.rules.yml の 3 つ)を読み込んでいる" bash -c \
+    "curl -fsS http://localhost:19090/api/v1/rules | python3 -c 'import json,sys; n={r[\"name\"] for g in json.load(sys.stdin)[\"data\"][\"groups\"] for r in g[\"rules\"]}; sys.exit(0 if {\"LegacyReconcileStale\",\"LegacyReconcileDrift\",\"LegacyReconcileDriftOverLimit\"} <= n else 1)'"
+
   local dash result
   dash="$(curl -fsS -u "admin:$GRAFANA_ADMIN_PASSWORD" http://localhost:19300/api/dashboards/uid/eiaf-cdc-legacy || true)"
   if [[ "$(json 'd["meta"]["folderTitle"] + "/" + d["dashboard"]["title"]' <<<"$dash" 2>/dev/null)" == "EIAF/CDC — Legacy" ]]; then
     pass "Grafana: ダッシュボード CDC — Legacy を読み込んでいる"
     # 読み直しとアラートは、平常時には空でよい
-    result="$(dashboard_panels_return_data "$dash" "読み直し(一時的な失敗。1 時間の回数)" "レガシーの CDC のアラート(firing / pending)")"
+    result="$(dashboard_panels_return_data "$dash" "読み直し(一時的な失敗。1 時間の回数)" "レガシーの CDC のアラート(firing / pending)" "照合の失敗(1 時間の回数)")"
     if [[ "$result" == ok ]]; then pass "Grafana: CDC — Legacy の全パネルの式がデータを返す"; else fail "Grafana: CDC — Legacy のパネル: $result"; fi
   else
     fail "Grafana: ダッシュボード eiaf-cdc-legacy を読み込めない"
