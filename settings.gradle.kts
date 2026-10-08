@@ -25,6 +25,7 @@ include(
     ":shared:canonical-model",
     ":platform:api",
     ":platform:audit",
+    ":platform:inbox",
     ":platform:messaging-kafka",
     ":platform:observability",
     ":platform:outbox",
