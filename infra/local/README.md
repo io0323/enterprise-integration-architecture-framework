@@ -134,7 +134,7 @@ curl -s -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token
   - 生のトピックを読むのは Anti-Corruption Layer の `legacy-order-acl` だけで、ほかのシステムは整形済みの `sales.legacy-order.changed.v1`(compacted。キーは注文番号、削除は tombstone)を読む。変換できない変更は `_cdc.legacy.public.t_juchu.dlq`(confidential・保持 7 日)に入る。
   - トピックは `kafka-topics`(1 回だけ動くコンテナ)が `kafka/topics.conf` のとおりに作る。`legacy-order-acl` は、それと `schema-publish`(書くイベントの契約の登録)の完了を待って起動する。
   - 監視: Grafana の **CDC — Legacy**(http://localhost:19300/d/eiaf-cdc-legacy)と `prometheus/rules/acl.rules.yml` のアラート。対応は `docs/runbooks/legacy-order-acl.md`。
-  - 照合(ADR-0027): `legacy-order-acl` が 2 分ごとに、レガシーの受注表と出力の最新の状態をキーごとのハッシュで比べる。レガシーの DB は読み取り専用のロール `eiaf_reconcile`(`postgres/init/40-reconcile.sh`。接続数・問い合わせの時間の上限つき)で読む。手動の照合は `docker compose ... run --rm --no-deps legacy-order-acl reconcile`。アラートは `prometheus/rules/reconcile.rules.yml`。ロールは初期化スクリプトで作るので、P06 ⑥ より前のボリュームでは `make clean` が要る。
+  - 照合(ADR-0027): `legacy-order-acl` が 2 分ごとに、レガシーの受注表と出力の最新の状態をキーごとのハッシュで比べる。レガシーの DB は読み取り専用のロール `eiaf_reconcile`(`postgres/init/40-reconcile.sh`。接続数・問い合わせの時間の上限つき)で読む。ずれは上限 100 件の範囲で自動で取り直す(再同期のロール `eiaf_resync` は signal 表の INSERT だけ)。手動の照合は `docker compose ... run --rm --no-deps legacy-order-acl reconcile`(`--dry-run` で比べるだけ)。再同期と DDL の変更の手順は `docs/runbooks/cdc-resync.md`。アラートは `prometheus/rules/reconcile.rules.yml`。ロールは初期化スクリプトで作るので、P06 ⑥ より前のボリュームでは `make clean` が要る。
 - **Toxiproxy**: 起動時に `kafka-host`(19094)、`kafka-internal`(19095)、`postgres`(19433)の proxy を作る(`toxiproxy/toxiproxy.json`)。
 
 ## イメージの更新

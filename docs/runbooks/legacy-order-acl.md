@@ -99,7 +99,7 @@ docker compose -f infra/local/docker-compose.yml --env-file infra/local/images.e
    - `MISSING`(レガシーにあるが出力にない)・`STALE`(状態が違う): 変更が出力に届いていない。DLQ に入っていないか、ACL・コネクタが変更を飛ばしていないかを確かめる。
    - `EXTRA`(レガシーにないが出力に値がある): 削除の tombstone が出ていない。
 2. 回復: 対象のキーだけを取り直す(signal 表の Incremental Snapshot。[DLQ に入ったとき](#dlq-に入ったとき)の 3 の SQL の `filter` にキーを並べる)。`EXTRA` は Snapshot では消えないので、tombstone を書く。
-   部分の再同期の自動化(上限 100 件)と `EXTRA` の tombstone、全体の再同期は P06 ⑥b で入れ、手順は `docs/runbooks/cdc-resync.md` に書く。
+   照合は、上限(100 件)の範囲でこれを自動で行う。手順の全体(手動の部分の再同期・全体の再同期・DDL の変更)は `docs/runbooks/cdc-resync.md`。
 3. 100 件を超えたら(`LegacyReconcileDriftOverLimit`)、個々のキーではなく仕組みの問題を疑う(スロットの無効化・ACL の不具合・コネクタのオフセットの消失)。原因を直してから、全体の再同期を判断する。
 
 ## 本番では

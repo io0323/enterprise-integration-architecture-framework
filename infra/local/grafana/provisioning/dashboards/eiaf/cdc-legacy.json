@@ -787,7 +787,7 @@
       "id": 17,
       "type": "timeseries",
       "title": "照合の結果(1 時間の回数)",
-      "description": "consistent(一致)・drift(ずれ)・error(検査の失敗)。",
+      "description": "consistent(一致)・drift(ずれ)・error(検査の失敗)と、再同期で取り直したキー(snapshot・tombstone)。上限を超えたときは取り直さない。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -843,6 +843,15 @@
           "refId": "A",
           "expr": "sum by (outcome) (increase(eia_reconcile_checks_total{job=\"legacy-order-acl\"}[1h]))",
           "legendFormat": "{{outcome}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "B",
+          "expr": "sum by (action) (increase(eia_reconcile_resynced_keys_total{job=\"legacy-order-acl\"}[1h]))",
+          "legendFormat": "再同期 {{action}}"
         }
       ]
     },

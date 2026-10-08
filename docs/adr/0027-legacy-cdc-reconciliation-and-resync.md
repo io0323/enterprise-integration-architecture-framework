@@ -101,3 +101,9 @@ P06 ⑤ で、レガシーの受注表の変更を Debezium で取り込み、An
 
 ## 改訂履歴
 - 2026-10-08: P06 ⑥a で作成。§1〜§5(照合・監視)を実装した。§6(再同期)は P06 ⑥b で実装する。
+- 2026-10-09: P06 ⑥b で §6(再同期)を実装した。
+  - 確認: Debezium 3.6.3 の `additional-conditions` の `col_02 IN ('J000000002','J000000004')`(CHAR(10) の列)で、指定した 2 件だけが `source.snapshot=incremental` で取り直されることを確かめた。Apicurio 3.3.3 の `POST …/versions?dryRun=true` は、グループ `cdc-raw` のアーティファクトに対して、互換な変更で 200(版は作られない)、互換でない変更で 400 と理由を返すことを確かめた(DDL の事前の確認に使う)。
+  - `ResyncLegacyOrdersService`(上限 100 件。超えたら何もしない)、`JdbcSnapshotRequests`(`eiaf_resync`。JSON はライブラリで組み立て、注文番号は SQL の文字列のリテラルで `'` を `''` にする)、`KafkaReconcileTombstones`(`ce_source=/sales/legacy-order-acl/reconcile`)。signal 表はプライマリにだけ書けるので、再同期の接続先はスロットと同じ(`…_RECONCILE_SLOT_DB_URL`)。
+  - `eiaf_resync`: `postgres/init/40-reconcile.sh`(接続数 2・statement_timeout 10s)、権限は legacy-sim の V4(signal 表の INSERT と、スキーマ `eiaf_cdc` の USAGE だけ)。
+  - 自動の再同期は `LEGACY_ORDER_ACL_RECONCILE_AUTO_RESYNC`(既定 true)で止められる。手動は `legacy-order-acl reconcile`(`--dry-run` で比べるだけ)。メトリクス `eia.reconcile.resynced_keys{action}`・`eia.reconcile.resyncs{outcome}`。
+  - 手順の全体は `docs/runbooks/cdc-resync.md`(ずれを見つけたとき・部分と全体の再同期・レガシーの DDL の変更)。
