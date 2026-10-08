@@ -28,7 +28,7 @@
           { "name": "currency", "type": "string", "doc": "ISO 4217 の通貨コード" }
         ]
       },
-      "doc": "受注金額。レガシーは通貨を持たないため JPY とする(ADR-0026)"
+      "doc": "受注金額。レガシーは通貨を持たないため JPY とする。0 以上 9,999,999,999 円以下(ADR-0026 §8)"
     },
     { "name": "orderedAt", "type": { "type": "long", "logicalType": "timestamp-micros" }, "doc": "受注日時(レガシーの JST の現地時刻を UTC に変換した値)" },
     {
