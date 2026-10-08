@@ -155,3 +155,23 @@ class LegacyOrderTranslationSpec :
             TranslationError(TranslationFailure.UNKNOWN_STATUS_CODE, "col_03", "x").code shouldBe "unknown_status_code"
         }
     })
+
+class LegacyOrderFingerprintSpec :
+    FunSpec({
+        val order = LegacyOrderTranslation.translate(ROW).ok()
+
+        test("項目を固定の順序と書式で並べ、変更の位置を含めない") {
+            LegacyOrderFingerprint.canonical(order) shouldBe "J000000001|C0000101|山田商事株式会社|ACCEPTED|1200|JPY|1791417600123456|-"
+        }
+
+        test("区切りの文字を含む値はエスケープし、別の値と同じ文字列にならない") {
+            val a = order.copy(customerCode = "A|B", customerName = "C")
+            val b = order.copy(customerCode = "A", customerName = "B|C")
+            (LegacyOrderFingerprint.canonical(a) == LegacyOrderFingerprint.canonical(b)) shouldBe false
+        }
+
+        test("最終更新日時があれば、マイクロ秒で入る") {
+            LegacyOrderFingerprint.canonical(order.copy(legacyUpdatedAt = Instant.parse("2026-10-08T01:30:00.000001Z"))) shouldBe
+                "J000000001|C0000101|山田商事株式会社|ACCEPTED|1200|JPY|1791417600123456|1791423000000001"
+        }
+    })
