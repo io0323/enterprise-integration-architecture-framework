@@ -42,7 +42,7 @@ docker compose -f infra/local/docker-compose.yml --env-file infra/local/images.e
 | profile | サービス | 用途 |
 |---|---|---|
 | `core` | kafka, apicurio, postgres, keycloak, apisix, otel-collector, prometheus, tempo, loki, grafana | 常に起動する |
-| `cdc` | kafka-connect(Debezium), postgres-exporter, kafka-exporter, legacy-migrate | Outbox + CDC(P06)、レガシーの CDC(P06 ⑤)と、その監視(P06 ④) |
+| `cdc` | kafka-connect(Debezium), postgres-exporter, kafka-exporter, legacy-migrate・kafka-topics・schema-publish(1 回だけ動いて終わる), legacy-order-acl | Outbox + CDC(P06)、レガシーの CDC と Anti-Corruption Layer(P06 ⑤。ADR-0026)と、その監視(P06 ④) |
 | `iot` | mosquitto | MQTT(P11) |
 | `file` | seaweedfs(S3), sftp | ファイル連携(P09)、Audit のアンカー(P04a) |
 | `b2b` | seaweedfs(S3), sftp-b2b | B2B / EDI(P12) |
@@ -131,7 +131,9 @@ curl -s -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token
   - 発行: `make up` が起動の後に `scripts/connectors.sh order-outbox` でコネクタ(`kafka-connect/order-outbox.json`)を登録し、Debezium が WAL の INSERT を `sales.order.created.v1` に発行する。debezium のロールは REPLICATION と Outbox の表の SELECT だけ。heartbeat(10 秒)で、注文のない間もスロットを進める。スロットが保持する WAL の上限は `max_slot_wal_keep_size=1GB`。監視: postgres-exporter(スロットの `wal_status`・`safe_wal_size`・遅延と上限)、kafka-exporter(トピックのオフセット)、Connect の JMX exporter(`:9404`。コネクタとタスクの状態)を Prometheus が収集し、`prometheus/rules/cdc.rules.yml` のアラート(閾値は上限に対する割合)と Grafana の **CDC — Outbox** で見る。対応は `docs/runbooks/cdc-outbox-lag.md`。ルールの単体テストは `make alerts-test`。`make verify PROFILE=order` は、Kafka を止めて(`compose stop`)作った注文のイベントが、再開の後に届くことも確かめる。
 - **レガシーの CDC(ADR-0026)**: `legacy-migrate`(cdc profile)が、改修できないレガシーの模擬の表(`legacy_sim` の `t_juchu`)と、DBA の CDC の設定(REPLICA IDENTITY FULL・debezium の権限・signal 表 `eiaf_cdc.debezium_signal`・publication `eiaf_legacy`)を作って終わる。`make up PROFILE=cdc` が起動の後にコネクタ `legacy-juchu`(`kafka-connect/legacy-juchu.json`)を登録し、変更を生の CDC のトピック `_cdc.legacy.public.t_juchu`(Avro。キーは受注番号。スキーマは Apicurio のグループ `cdc-raw` に Converter が自動で登録する)に出す。初回は全件の Snapshot から始める。
   - レガシーのアプリの操作: `make legacy-simulate ARGS="seed 10"`(ほかに `advance <件数>`・`cancel <件数>`・`delete <件数>`・`anomaly <種類>`。種類は `unknown-status` / `amount-fraction` / `amount-out-of-range` / `garbled-name`)。変えた受注番号を 1 行ずつ出す。`make up` では起動しない profile `legacy-sim-cli` のサービスで動く。
-  - 生のトピックを読むのは Anti-Corruption Layer(legacy-order-acl。P06 ⑤b)だけで、ほかのシステムは整形済みの `sales.legacy-order.changed.v1` を読む。
+  - 生のトピックを読むのは Anti-Corruption Layer の `legacy-order-acl` だけで、ほかのシステムは整形済みの `sales.legacy-order.changed.v1`(compacted。キーは注文番号、削除は tombstone)を読む。変換できない変更は `_cdc.legacy.public.t_juchu.dlq`(confidential・保持 7 日)に入る。
+  - トピックは `kafka-topics`(1 回だけ動くコンテナ)が `kafka/topics.conf` のとおりに作る。`legacy-order-acl` は、それと `schema-publish`(書くイベントの契約の登録)の完了を待って起動する。
+  - 監視: Grafana の **CDC — Legacy**(http://localhost:19300/d/eiaf-cdc-legacy)と `prometheus/rules/acl.rules.yml` のアラート。対応は `docs/runbooks/legacy-order-acl.md`。
 - **Toxiproxy**: 起動時に `kafka-host`(19094)、`kafka-internal`(19095)、`postgres`(19433)の proxy を作る(`toxiproxy/toxiproxy.json`)。
 
 ## イメージの更新

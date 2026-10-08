@@ -17,7 +17,7 @@ P03 で `infra/local/` に ADR-0003 のミドルウェア一式を Docker Compos
 | profile | サービス | 用途(フェーズ) |
 |---|---|---|
 | `core` | kafka, apicurio, postgres, keycloak, apisix, otel-collector, prometheus, tempo, loki, grafana | すべて(P04a〜) |
-| `cdc` | kafka-connect(Debezium), postgres-exporter, kafka-exporter, legacy-migrate(1 回だけ動くコンテナ) | Outbox + CDC(P06)、レガシー CDC(legacy-sim → コネクタ legacy-juchu。P06 ⑤。ADR-0026)、その監視(P06 ④) |
+| `cdc` | kafka-connect(Debezium), postgres-exporter, kafka-exporter, legacy-migrate・kafka-topics・schema-publish(1 回だけ動くコンテナ), legacy-order-acl | Outbox + CDC(P06)、レガシー CDC(legacy-sim → コネクタ legacy-juchu。P06 ⑤。ADR-0026)、その監視(P06 ④) |
 | `iot` | mosquitto | IoT(P11) |
 | `file` | seaweedfs, sftp | File(P09)、Audit のアンカー(P04a) |
 | `b2b` | seaweedfs, sftp-b2b | B2B / EDI(P12) |
@@ -158,3 +158,9 @@ Docker のヘルスチェックはコンテナの中で実行されるため、�
   - `kafka-connect` は `legacy-migrate` の成功を待つ(`required: false`。order の profile では legacy-migrate がない)。`up --wait` は、どのサービスも待たない 1 回だけのコンテナが終わると失敗にするため。
   - レガシーのアプリの操作は、`make up` では起動しない profile `legacy-sim-cli` のサービス `legacy-sim` で行う(`make legacy-simulate ARGS="seed 10"`)。
   - `make verify PROFILE=cdc` に、コネクタ・スロット・Debezium の権限・REPLICA IDENTITY・生のトピックへの到達・Apicurio のグループ cdc-raw の検査を加えた。CI の `verify (cdc)` は legacy-sim を作るため Java を用意し、`services/legacy-sim/**` の変更でも動く。
+- 2026-10-08: P06 ⑤b で、cdc の profile に legacy-order-acl を加えた(ADR-0026)。
+  - `kafka-topics`(1 回だけ動くコンテナ。kafka のイメージ): アプリが書くトピックを `kafka/topics.conf`(名前・パーティション数・設定・機密区分)のとおりに作り、既にあれば設定をそろえる(`kafka/create-topics.sh`)。Debezium が書くトピックはコネクタの `topic.creation.*` で作るので含めない。
+  - `legacy-order-acl` は `kafka-topics` と `schema-publish`(cdc の profile にも加えた。ACL が書くイベントの契約を登録する)の完了を待って起動する。ヘルスチェックは `/health/ready`。
+  - `make up PROFILE=cdc` の `legacy-dist` は legacy-order-acl と schema-publish の中身も作る。CI の e2e は `make up PROFILE="order cdc"` で起動する。
+  - Prometheus のルールに `acl.rules.yml` を、Grafana に **CDC — Legacy** を加えた。`make verify PROFILE=cdc` が、整形済みのトピックへの到達・DLQ・トピックの設定・メトリクス・ルール・ダッシュボードを確かめる。
+  - 開発機(Docker に 7.7GiB。別のプロジェクトのコンテナと共有)で core + order + cdc を同時に起動すると、PostgreSQL のプロセスが強制終了されて復旧(recovery)に入った。手元の検証は cdc だけで行い、order と cdc の組み合わせは CI(16GB)で確かめる。

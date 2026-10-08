@@ -65,3 +65,4 @@ P06 では、注文のイベントを Outbox + Debezium で発行する(ADR-0007
 - 2026-10-07: P06 ② で、`ce_id` の採番を UUIDv4 から UUIDv7(`EventIds`)に改めた。Outbox の `id` 列と同じ値にするため(ADR-0007 の改訂履歴 2026-10-07)。
 - 2026-10-07: P06 ③a で、`make up PROFILE=order` から契約を自動で登録するようにした(compose の `schema-publish`)。注文の作成で、解決の後に Apicurio を止めても注文を作れることを確かめた(`OrderEventOutboxIT`)。
 - 2026-10-08: P06 ⑤a で、§2(サービスは自動登録しない)の例外を ADR-0026 §4 に置いた。レガシーの生の CDC のスキーマは、Kafka Connect の AvroConverter がグループ `cdc-raw` に自動で登録する(スキーマの元は契約ではなく DB の定義で、Debezium が作る)。互換性のルール(FULL_TRANSITIVE)は引き続き効く。サービスは引き続き自動登録しない。
+- 2026-10-08: P06 ⑤b で、§4 の Producer に `sendTombstone`(compacted のトピックでキーの削除を表す。ヘッダは `send` と同じ)を加え、DLQ に送る `DeadLetterPublisher`(受け取ったバイト列のまま `{topic}.dlq` へ。`eiaf.dlq.*` のヘッダ。ADR-0026 §7)を加えた。最初の利用者は legacy-order-acl(DB の更新を伴わない送信)。P07 の Consumer の DLQ も同じ部品を使う。

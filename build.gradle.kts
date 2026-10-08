@@ -11,4 +11,8 @@ dependencies {
     kover(project(":services:order:adapters"))
     kover(project(":services:order:app"))
     kover(project(":services:legacy-sim:app"))
+    kover(project(":services:legacy-order-acl:domain"))
+    kover(project(":services:legacy-order-acl:application"))
+    kover(project(":services:legacy-order-acl:adapters"))
+    kover(project(":services:legacy-order-acl:app"))
 }
