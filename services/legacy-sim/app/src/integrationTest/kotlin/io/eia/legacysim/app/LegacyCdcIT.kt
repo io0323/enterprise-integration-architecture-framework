@@ -229,6 +229,7 @@ class LegacyCdcIT :
                     s.execute("CREATE ROLE legacy_sim_app LOGIN PASSWORD '$appPassword' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION")
                     s.execute("CREATE ROLE debezium LOGIN REPLICATION PASSWORD '$cdcPassword'")
                     s.execute("CREATE ROLE eiaf_reconcile LOGIN PASSWORD '${randomHex()}' CONNECTION LIMIT 4")
+                    s.execute("CREATE ROLE eiaf_resync LOGIN PASSWORD '${randomHex()}' CONNECTION LIMIT 2")
                     s.execute("CREATE DATABASE legacy_sim OWNER legacy_sim")
                     s.execute("REVOKE ALL ON DATABASE legacy_sim FROM PUBLIC")
                     s.execute("GRANT CONNECT ON DATABASE legacy_sim TO legacy_sim_app, debezium")
@@ -398,5 +399,51 @@ class LegacyCdcIT :
                 "SELECT schemaname || '.' || tablename FROM pg_publication_tables WHERE pubname = 'eiaf_legacy' ORDER BY 1",
             ) shouldBe listOf("eiaf_cdc.debezium_signal", "public.t_juchu")
             seeded shouldHaveSize 2
+        }
+
+        // 表の定義を変えるので、最後に実行する
+        test("互換でない DDL で取り込みが止まり、Runbook(cdc-resync.md)の手順(そのアーティファクトだけルールを外して再起動し、戻す)で再開する") {
+            fun taskState(): String =
+                Json
+                    .parseToJsonElement(request("GET", "${connect.restUrl}/connectors/$CONNECTOR/status").body())
+                    .jsonObject["tasks"]!!
+                    .jsonArray
+                    .single()
+                    .jsonObject["state"]!!
+                    .jsonPrimitive.content
+
+            fun awaitTask(state: String) {
+                val deadline = TimeSource.Monotonic.markNow() + 90.seconds
+                while (taskState() != state) {
+                    check(deadline.hasNotPassedNow()) { "タスクが $state になりません(${taskState()})" }
+                    Thread.sleep(1_000)
+                }
+            }
+
+            // NOT NULL を外すと、Debezium のスキーマで col_05 が NULL 可(union)になり、FULL_TRANSITIVE では互換でない
+            execute("legacy_sim", ownerPassword, "ALTER TABLE t_juchu ALTER COLUMN col_05 DROP NOT NULL")
+            val number = simulate("seed", "1").single()
+            awaitTask("FAILED")
+
+            val artifacts = listOf("$TOPIC-value", "$TOPIC-key")
+            artifacts.forEach { artifact ->
+                val created =
+                    request(
+                        "POST",
+                        "${registry.baseUrl}/groups/$RAW_GROUP/artifacts/$artifact/rules",
+                        """{"ruleType":"COMPATIBILITY","config":"NONE"}""",
+                    )
+                check(created.statusCode() in 200..204) { "ルールを作れません: ${created.statusCode()} ${created.body()}" }
+            }
+            request("POST", "${connect.restUrl}/connectors/$CONNECTOR/restart?includeTasks=true&onlyFailed=true").statusCode() shouldBe 202
+            awaitTask("RUNNING")
+
+            // 止まっている間の変更(DDL の後の登録)が欠けずに届く
+            readRaw { received -> received.any { it.key == number } }.first { it.key == number }.op shouldBe "c"
+
+            artifacts.forEach { artifact ->
+                request("DELETE", "${registry.baseUrl}/groups/$RAW_GROUP/artifacts/$artifact/rules/COMPATIBILITY").statusCode() shouldBe 204
+                request("GET", "${registry.baseUrl}/groups/$RAW_GROUP/artifacts/$artifact/rules").body() shouldBe "[]"
+            }
         }
     })
