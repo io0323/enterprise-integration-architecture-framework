@@ -192,4 +192,5 @@ Kafka Connect は公開イメージを使わず、`images/kafka-connect/Dockerfi
 | コンテナが再起動を繰り返す(OOM) | `make stats` で使用量を確認し、Docker に割り当てるメモリを増やすか、不要な profile を止める(`make down` して必要な profile だけ `make up`) |
 | ポートが使用中で起動しない | 19000〜19999 を使う他のプロセスを止める(`lsof -iTCP:19092 -sTCP:LISTEN` など) |
 | `make verify` が「Prometheus が postgres-exporter から収集できる」で失敗する | `postgres_exporter` のロールは初期化スクリプト(`postgres/init/30-monitoring.sh`)で作るため、P06 ④ より前のボリュームなら `make clean` が必要 |
+| `make up PROFILE=cdc` の後に `PROFILE=order` だけで起動すると、`CdcConnectorDown`(`slot_name="legacy_juchu"`)が firing し、`make verify PROFILE=order` が失敗する | cdc で作ったレガシーのスロット `legacy_juchu` は DB(ボリューム)に残るが、order の profile にはそのコネクタがない。使われないスロットは WAL を保持し続けるので、アラートは正しい。両方を使うなら `make up PROFILE="cdc order"`。order だけに戻すなら `make clean` から始め直す(スロットだけを消すと、次に cdc で起動したとき、Connect に残ったオフセットとスロットの位置がずれる) |
 | `make verify PROFILE=cdc` がコネクタの RUNNING で失敗する | `make logs SERVICE=kafka-connect` を確認する。`debezium` ユーザーは初期化スクリプトで作るため、古いボリュームなら `make clean` が必要 |
