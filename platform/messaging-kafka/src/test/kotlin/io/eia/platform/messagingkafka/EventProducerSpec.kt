@@ -119,6 +119,26 @@ class EventProducerSpec :
                 listOf("publish_failed", "publish_failed")
         }
 
+        test("tombstone: 値のないレコードを、キーと同じヘッダ(CloudEvents・traceparent・correlationid)で送る") {
+            val (mock, pair) = fixture()
+            val (producer, _) = pair
+            val correlationId = CorrelationId.parse("corr-2").ok()
+
+            val published = withContext(ObservabilityContext(correlationId)) { producer.sendTombstone(TOPIC, "p-9").ok() }
+
+            val record = mock.history().single()
+            record.topic() shouldBe "test.parcel.shipped.v1"
+            String(record.key()) shouldBe "p-9"
+            record.value() shouldBe null
+            val metadata = EventMetadata.fromHeaders(record.headers()).ok()
+            metadata shouldBe published.metadata
+            metadata.type shouldBe "test.parcel.shipped"
+            metadata.correlationId shouldBe correlationId
+            val span = spans.finishedSpanItems.single()
+            span.kind shouldBe SpanKind.PRODUCER
+            metadata.traceParent.parentId.toString() shouldBe span.spanId
+        }
+
         test("エンコードできなければ送らない") {
             val (mock, pair) = fixture()
             val (producer, _) = pair
