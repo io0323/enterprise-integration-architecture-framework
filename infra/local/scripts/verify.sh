@@ -376,7 +376,7 @@ verify_legacy_cdc() {
   if [[ "$(json 'd["meta"]["folderTitle"] + "/" + d["dashboard"]["title"]' <<<"$dash" 2>/dev/null)" == "EIAF/CDC — Legacy" ]]; then
     pass "Grafana: ダッシュボード CDC — Legacy を読み込んでいる"
     # 読み直しとアラートは、平常時には空でよい
-    result="$(dashboard_panels_return_data "$dash" "読み直し(一時的な失敗。1 時間の回数)" "レガシーの CDC のアラート(firing / pending)" "照合の失敗(1 時間の回数)")"
+    result="$(dashboard_panels_return_data "$dash" "読み直し(一時的な失敗。1 時間の回数)" "レガシーの CDC のアラート(firing / pending)" "照合の失敗(1 時間の回数)" "再同期したキー(1 時間の件数)")"
     if [[ "$result" == ok ]]; then pass "Grafana: CDC — Legacy の全パネルの式がデータを返す"; else fail "Grafana: CDC — Legacy のパネル: $result"; fi
   else
     fail "Grafana: ダッシュボード eiaf-cdc-legacy を読み込めない"
