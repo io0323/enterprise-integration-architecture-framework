@@ -30,6 +30,7 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldStartWith
 import io.kotest.matchers.types.shouldBeInstanceOf
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
@@ -114,6 +115,21 @@ class ReconcileIT :
         val http = JdkHttpClient.newHttpClient()
         val registryHttp = HttpClient(CIO)
         lateinit var acl: AclServer
+
+        // ACL と reconcile のサブコマンドの環境(コンテナの起動の後に決まる)
+        val aclEnv by lazy {
+            mapOf(
+                AclConfig.KAFKA_BOOTSTRAP to kafka.bootstrapServers,
+                AclConfig.SCHEMA_REGISTRY_URL to registry.baseUrl,
+                AclConfig.HEALTH_PORT to "0",
+                ReconcileConfig.DB_URL to postgres.jdbcUrl.replaceAfterLast('/', "legacy_sim"),
+                ReconcileConfig.PASSWORD.value to reconcilePassword,
+                ReconcileConfig.INTERVAL to "1h",
+                ReconcileConfig.RECHECK_AFTER to "3s",
+                ReconcileConfig.WAIT_TIMEOUT to "60s",
+                "EIA_LOG_FORMAT" to "console",
+            )
+        }
         lateinit var admin: Admin
         var outputContentId = ContentId(0)
 
@@ -348,16 +364,8 @@ class ReconcileIT :
                 check(deadline.hasNotPassedNow()) { "コネクタが RUNNING になりません: $status" }
                 Thread.sleep(1_000)
             }
-            acl =
-                AclServer
-                    .start(
-                        mapOf(
-                            AclConfig.KAFKA_BOOTSTRAP to kafka.bootstrapServers,
-                            AclConfig.SCHEMA_REGISTRY_URL to registry.baseUrl,
-                            AclConfig.HEALTH_PORT to "0",
-                            "EIA_LOG_FORMAT" to "console",
-                        ),
-                    ).ok()
+            // 照合を有効にして起動する(起動の直後に 1 回照合する。間隔は長くし、テストの照合と重ねない)
+            acl = AclServer.start(aclEnv).ok()
         }
 
         afterSpec {
@@ -385,6 +393,8 @@ class ReconcileIT :
             report.compared shouldBe 3
             report.digest.length shouldBe 64
             pauses.shouldBeEmpty()
+            // 手動の照合(サブコマンド)も一致で終わる
+            ReconcileCommand.run(aclEnv) {} shouldBe ReconcileCommand.CONSISTENT
         }
 
         test("比べている最中にレガシーが更新・登録・削除されても、ずれと判定しない(比べ直しで一致する)。待ちの間にトランザクションを残さない") {
@@ -416,6 +426,15 @@ class ReconcileIT :
             report.drift shouldBe
                 mapOf("R000000001" to Mismatch.STALE, "R000000004" to Mismatch.MISSING, "Z000000009" to Mismatch.EXTRA)
             report.unconvertible shouldBe setOf("R000000003")
+        }
+
+        test("reconcile のサブコマンド(Runbook の手動の照合)は、ずれのキーと種類を出して終了コード 1 で終わる") {
+            val lines = mutableListOf<String>()
+            ReconcileCommand.run(aclEnv, lines::add) shouldBe ReconcileCommand.DRIFT
+            lines.filter { it.startsWith("DRIFT ") || it.startsWith("UNCONVERTIBLE ") } shouldBe
+                listOf("DRIFT STALE R000000001", "DRIFT MISSING R000000004", "DRIFT EXTRA Z000000009", "UNCONVERTIBLE R000000003")
+            lines.first() shouldStartWith "position="
+            ReconcileCommand.run(aclEnv - ReconcileConfig.DB_URL) {} shouldBe ReconcileCommand.USAGE
         }
 
         test("ACL が止まっていて追いつかなければ、ずれではなく検査の失敗(待ちの上限の超過)") {
