@@ -16,6 +16,7 @@ import io.eia.shared.kernel.ok
  * | `LEGACY_SIM_APP_DB_USER` / `LEGACY_SIM_APP_DB_PASSWORD`(または `_FILE`) | `legacy_sim_app` / なし | simulate だけ(レガシーのアプリ) |
  * | `LEGACY_SIM_CDC_DB_USER` | `debezium` | migrate(受注表の SELECT と signal 表の権限を付ける Debezium のロール) |
  * | `LEGACY_SIM_RECONCILE_DB_USER` | `eiaf_reconcile` | migrate(受注表の SELECT を付ける照合のロール。ADR-0027) |
+ * | `LEGACY_SIM_RESYNC_DB_USER` | `eiaf_resync` | migrate(signal 表の INSERT を付ける再同期のロール。ADR-0027 §6) |
  */
 internal data class LegacySimConfig(
     val dbUrl: String,
@@ -23,6 +24,7 @@ internal data class LegacySimConfig(
     val appUser: String,
     val cdcUser: String,
     val reconcileUser: String,
+    val resyncUser: String = "eiaf_resync",
 ) {
     companion object {
         const val DB_URL = "LEGACY_SIM_DB_URL"
@@ -32,8 +34,15 @@ internal data class LegacySimConfig(
         private const val APP_USER = "LEGACY_SIM_APP_DB_USER"
         private const val CDC_USER = "LEGACY_SIM_CDC_DB_USER"
         private const val RECONCILE_USER = "LEGACY_SIM_RECONCILE_DB_USER"
+        private const val RESYNC_USER = "LEGACY_SIM_RESYNC_DB_USER"
         private val ROLE_DEFAULTS =
-            mapOf(OWNER_USER to "legacy_sim", APP_USER to "legacy_sim_app", CDC_USER to "debezium", RECONCILE_USER to "eiaf_reconcile")
+            mapOf(
+                OWNER_USER to "legacy_sim",
+                APP_USER to "legacy_sim_app",
+                CDC_USER to "debezium",
+                RECONCILE_USER to "eiaf_reconcile",
+                RESYNC_USER to "eiaf_resync",
+            )
         private val ROLE_NAME = Regex("^[a-z_][a-z0-9_]{0,62}$")
 
         fun fromEnvironment(env: Map<String, String>): Result<LegacySimConfig, ValidationError> {
@@ -62,6 +71,7 @@ internal data class LegacySimConfig(
                             roles.getValue(APP_USER),
                             roles.getValue(CDC_USER),
                             roles.getValue(RECONCILE_USER),
+                            roles.getValue(RESYNC_USER),
                         ),
                     )
                 }

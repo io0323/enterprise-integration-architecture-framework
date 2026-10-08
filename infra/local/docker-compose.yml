@@ -241,6 +241,7 @@ services:
       # 照合(ADR-0027)。読み取り専用のロール eiaf_reconcile(postgres/init/40-reconcile.sh)。ローカルは確かめやすいよう 2 分ごと(既定 15 分)
       LEGACY_ORDER_ACL_RECONCILE_DB_URL: jdbc:postgresql://postgres:5432/legacy_sim
       LEGACY_RECONCILE_DB_PASSWORD: ${LEGACY_RECONCILE_DB_PASSWORD:?make env を実行してください}
+      LEGACY_RESYNC_DB_PASSWORD: ${LEGACY_RESYNC_DB_PASSWORD:?make env を実行してください}
       LEGACY_ORDER_ACL_RECONCILE_INTERVAL: 2m
       OTEL_SERVICE_NAME: legacy-order-acl
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
@@ -543,6 +544,7 @@ services:
       # postgres-exporter のユーザー(pg_monitor だけ。P06 ④)。追加前のボリュームには作られないため make clean が必要(infra/local/README.md)
       POSTGRES_EXPORTER_DB_PASSWORD: ${POSTGRES_EXPORTER_DB_PASSWORD:?make env を実行してください}
       LEGACY_RECONCILE_DB_PASSWORD: ${LEGACY_RECONCILE_DB_PASSWORD:?make env を実行してください}
+      LEGACY_RESYNC_DB_PASSWORD: ${LEGACY_RESYNC_DB_PASSWORD:?make env を実行してください}
     ports:
       - 127.0.0.1:19432:5432
     volumes:

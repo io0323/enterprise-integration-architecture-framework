@@ -33,7 +33,7 @@ fun main(args: Array<String>) {
                 System.err.println("使い方: legacy-order-acl reconcile [--dry-run]")
                 exitProcess(ReconcileCommand.USAGE)
             }
-            exitProcess(ReconcileCommand.run(System.getenv(), { println(it) }, dryRun))
+            exitProcess(ReconcileCommand.run(System.getenv(), dryRun) { println(it) })
         }
 
         else -> {
