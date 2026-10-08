@@ -12,6 +12,7 @@ import javax.sql.DataSource
  *
  * - V1: 既存のレガシーの受注表(改修できない前提の定義)。レガシーのアプリ([appRole])に読み書きを付ける。
  * - V2: DBA の CDC の設定(REPLICA IDENTITY FULL・Debezium([cdcRole])の権限・signal 表・publication `eiaf_legacy`)。ADR-0026
+ * - V3: DBA の照合の設定(照合のロール([reconcileRole])に受注表の SELECT)。ADR-0027
  */
 internal object LegacySchema {
     private const val LOCATION = "classpath:db/legacy"
@@ -20,6 +21,7 @@ internal object LegacySchema {
         owner: DataSource,
         appRole: String,
         cdcRole: String,
+        reconcileRole: String,
     ): Result<Unit, DomainError> =
         // Flyway の例外のメッセージは SQL 文や接続先を含みうるため、型の名前だけを入れる
         catching<Unit, DomainError>({ e -> UnexpectedError("legacy-sim のマイグレーションに失敗しました(${e::class.simpleName})", e) }) {
@@ -27,7 +29,7 @@ internal object LegacySchema {
                 .configure()
                 .dataSource(owner)
                 .locations(LOCATION)
-                .placeholders(mapOf("appRole" to appRole, "cdcRole" to cdcRole))
+                .placeholders(mapOf("appRole" to appRole, "cdcRole" to cdcRole, "reconcileRole" to reconcileRole))
                 .load()
                 .migrate()
             Unit

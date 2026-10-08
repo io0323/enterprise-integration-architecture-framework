@@ -89,7 +89,7 @@ internal object LegacySimCommands {
         dataSource: PGSimpleDataSource,
         config: LegacySimConfig,
     ): Int =
-        when (val migrated = LegacySchema.migrate(dataSource, config.appUser, config.cdcUser)) {
+        when (val migrated = LegacySchema.migrate(dataSource, config.appUser, config.cdcUser, config.reconcileUser)) {
             is Result.Ok -> OK.also { logger.info("マイグレーションが終わりました") }
             is Result.Err -> FAILED.also { logger.error("マイグレーションに失敗しました: {}", migrated.error.message) }
         }
