@@ -1,17 +1,24 @@
 package io.eia.tools.schemapublish
 
 import io.eia.platform.schemaregistry.ApicurioRegistryClient
+import io.eia.platform.schemaregistry.ContentId
 import io.eia.platform.schemaregistry.SchemaRegistryConfig
 import io.eia.platform.schemaregistry.SchemaRegistryError
 import io.eia.platform.schemaregistry.SchemaRejected
 import io.eia.platform.schemaregistry.SchemaSubject
+import io.eia.shared.kernel.Jitter
 import io.eia.shared.kernel.Result
+import io.eia.shared.kernel.RetryDecision
+import io.eia.shared.kernel.RetryPolicy
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import java.nio.file.Path
 import kotlin.io.path.Path
+import kotlin.random.Random
 import kotlin.system.exitProcess
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
 private val REQUEST_TIMEOUT = 30.seconds
@@ -40,15 +47,24 @@ internal data class Options(
     }
 }
 
+/**
+ * レジストリの一時的な失敗(接続できない・5xx)のリトライ。起動の直後のレジストリは、ヘルスチェック(管理用のポート)が UP でも、
+ * REST のポートがまだ接続を受けないことがある(compose の schema-publish が最初の要求で失敗した)。合計でおよそ 30 秒まで待つ。
+ * 拒否(互換性の違反など。NonRetryable)はリトライしない。
+ */
+internal val RETRY = RetryPolicy(initialDelay = 1.seconds, multiplier = 2.0, maxAttempts = 6, maxDelay = 8.seconds, jitter = Jitter.NONE)
+
 /** 契約のスキーマを登録し、トピックごとの結果を表示する。 */
 internal suspend fun publish(
     subjects: List<SchemaSubject>,
     client: ApicurioRegistryClient,
     out: (String) -> Unit,
+    retry: RetryPolicy = RETRY,
+    sleep: suspend (Duration) -> Unit = { delay(it) },
 ): Int {
     val failures = mutableListOf<SchemaRegistryError>()
     subjects.forEach { subject ->
-        when (val result = client.register(subject)) {
+        when (val result = registerWithRetry(subject, client, retry, sleep, out)) {
             is Result.Ok -> {
                 out("OK   ${subject.artifactId} contentId=${result.value}")
             }
@@ -63,6 +79,25 @@ internal suspend fun publish(
         failures.isEmpty() -> ExitCode.OK
         failures.all { it is SchemaRejected } -> ExitCode.REJECTED
         else -> ExitCode.CANNOT_RUN
+    }
+}
+
+private suspend fun registerWithRetry(
+    subject: SchemaSubject,
+    client: ApicurioRegistryClient,
+    retry: RetryPolicy,
+    sleep: suspend (Duration) -> Unit,
+    out: (String) -> Unit,
+): Result<ContentId, SchemaRegistryError> {
+    var attempt = 1
+    while (true) {
+        val result = client.register(subject)
+        val error = (result as? Result.Err)?.error ?: return result
+        val decision = retry.decide(attempt, error.asDomainError(), Random.Default)
+        if (decision !is RetryDecision.Retry) return result
+        out("WAIT ${subject.artifactId} ${error.message}(${decision.delay} 後に再試行。$attempt 回目)")
+        sleep(decision.delay)
+        attempt++
     }
 }
 
