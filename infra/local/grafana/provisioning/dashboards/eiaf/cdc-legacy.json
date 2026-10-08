@@ -787,14 +787,14 @@
       "id": 17,
       "type": "timeseries",
       "title": "照合の結果(1 時間の回数)",
-      "description": "consistent(一致)・drift(ずれ)・error(検査の失敗)と、再同期で取り直したキー(snapshot・tombstone)。上限を超えたときは取り直さない。",
+      "description": "consistent(一致)・drift(ずれ)・error(検査の失敗)。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 8,
         "x": 0,
         "y": 35
       },
@@ -843,15 +843,6 @@
           "refId": "A",
           "expr": "sum by (outcome) (increase(eia_reconcile_checks_total{job=\"legacy-order-acl\"}[1h]))",
           "legendFormat": "{{outcome}}"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "B",
-          "expr": "sum by (action) (increase(eia_reconcile_resynced_keys_total{job=\"legacy-order-acl\"}[1h]))",
-          "legendFormat": "再同期 {{action}}"
         }
       ]
     },
@@ -866,8 +857,8 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
+        "w": 8,
+        "x": 8,
         "y": 35
       },
       "fieldConfig": {
@@ -915,6 +906,69 @@
           "refId": "A",
           "expr": "sum by (error_code) (increase(eia_reconcile_checks_total{job=\"legacy-order-acl\",outcome=\"error\"}[1h]))",
           "legendFormat": "{{error_code}}"
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "再同期したキー(1 時間の件数)",
+      "description": "自動の再同期で取り直したキー(snapshot = signal 表の Incremental Snapshot、tombstone = 照合の削除)。上限(100 件)を超えたときは取り直さない。ずれがなければ空。",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 35
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "spanNulls": true,
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (action) (increase(eia_reconcile_resynced_keys_total{job=\"legacy-order-acl\"}[1h]))",
+          "legendFormat": "{{action}}"
         }
       ]
     },
