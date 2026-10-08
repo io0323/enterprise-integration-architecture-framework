@@ -37,11 +37,11 @@ public class LegacyChangeConsumer(
     @Volatile
     private var healthy = false
 
-    @Volatile
-    private var assigned = false
-
-    /** 直近の処理が一時的な失敗でなく、パーティションを割り当てられている。 */
-    public val ready: Boolean get() = healthy && assigned
+    /**
+     * 読み取りを始めていて、直近の処理が一時的な失敗でない。パーティションの割り当ては条件にしない
+     * (生の CDC のトピックはコネクタの登録で作られるため、起動の時点ではまだないことがある。遅れは lag の監視で見る)。
+     */
+    public val ready: Boolean get() = healthy
 
     /** [topic] を購読し、キャンセルされるまで処理を続ける。終わるときに Consumer を閉じる(同じスレッドで)。 */
     public suspend fun run(topic: String = TOPIC) {
@@ -75,7 +75,6 @@ public class LegacyChangeConsumer(
     /** 1 回 poll して処理する。一時的な失敗のときはそのエラーのコード、それ以外は null。 */
     internal suspend fun pollOnce(): String? {
         val records = consumer.poll(pollTimeout.toJavaDuration())
-        assigned = consumer.assignment().isNotEmpty()
         val processed = mutableMapOf<TopicPartition, OffsetAndMetadata>()
         // パーティションごとに、届いた順に処理する
         val ordered = records.partitions().flatMap { records.records(it) }
