@@ -109,8 +109,10 @@ public class LegacyChangeProcessor(
             is Result.Ok -> {
                 metrics.deadLettered(reason.code)
                 logger.warn(
-                    "変換できない変更を DLQ に送りました(reason={}, {} partition={} offset={})",
+                    // detail は列の名前と破った規則だけで、値を含まない(DLQ のヘッダと同じ)
+                    "変換できない変更を DLQ に送りました(reason={}, detail={}, {} partition={} offset={})",
                     reason.code,
+                    reason.detail,
                     record.topic(),
                     record.partition(),
                     record.offset(),
