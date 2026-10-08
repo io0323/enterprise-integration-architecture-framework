@@ -26,7 +26,7 @@
      --topic _cdc.legacy.public.t_juchu.dlq --from-beginning --timeout-ms 5000 --property print.key=true --property print.headers=true \
      | grep -a -o -E '(eiaf\.dlq\.[a-z.-]+:[^,]*)' | sort | uniq -c
    ```
-   - キーは注文番号、`eiaf.dlq.reason` は原因の種類、`eiaf.dlq.detail` は列と破った規則(値は入らない)、`eiaf.dlq.source.*` は生の CDC の位置。
+   - キーは生の CDC のキーのまま(Converter の Avro。注文番号の文字列を含む)、`eiaf.dlq.reason` は原因の種類、`eiaf.dlq.detail` は列と破った規則(値は入らない)、`eiaf.dlq.source.*` は生の CDC の位置。
    - DLQ のトピックは **confidential**(受け取ったバイト列のままで、顧客名などを含む)。中身を読むのは調査に必要な人だけにし、外に持ち出さない。保持は 7 日。
 2. 原因の種類ごとの対応(ADR-0026 §8)
 

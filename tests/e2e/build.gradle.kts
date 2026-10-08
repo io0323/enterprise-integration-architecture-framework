@@ -2,7 +2,7 @@ plugins {
     id("eia.jvm-library")
 }
 
-// E2E(ROADMAP P05。MODULE_DESIGN)。起動したローカル基盤(`make up PROFILE=order`)に、公開されたエンドポイント
+// E2E(ROADMAP P05。MODULE_DESIGN)。起動したローカル基盤(`make up PROFILE="order cdc"`)に、公開されたエンドポイント
 // (Gateway・Keycloak・Tempo・Prometheus・Grafana・Kafka・Schema Registry)だけで接続して確かめる。サービスのコードには依存しない。
 // `make e2e`(`./gradlew :tests:e2e:e2eTest`)で実行し、`build` / `check` には含めない。CI は ci.yml の `e2e` ジョブ。
 val e2eTest: SourceSet = sourceSets.create("e2eTest")

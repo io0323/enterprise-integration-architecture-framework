@@ -23,7 +23,7 @@ make up PROFILE="file chaos"  # 複数の profile を同時に起動する
 make verify PROFILE=cdc       # healthy と各機能の疎通を検査する(PASS / FAIL を 1 行ずつ出力)
 make up PROFILE=order         # core + order-service(先に installDist でイメージの中身を作り、migrate → serve の順に起動する)
 make certs                    # 開発用の CA と mTLS の証明書を作る(make up も毎回確かめる。残りが 7 日を切ると作り直す)
-make e2e                      # E2E のシナリオ(tests/e2e)。make up PROFILE=order で起動した基盤に対して実行する
+make e2e                      # E2E のシナリオ(tests/e2e)。make up PROFILE="order cdc" で起動した基盤に対して実行する
 make ps                       # 状態
 make logs SERVICE=kafka       # ログ
 make stats                    # メモリ使用量(docker stats)

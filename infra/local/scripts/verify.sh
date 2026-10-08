@@ -302,7 +302,7 @@ verify_legacy_cdc() {
 
   # レガシーのアプリとして受注を 1 件登録し、受注番号のキーで生のトピックに届く(Avro の文字列は UTF-8 のまま入るため、バイト列で探す)
   local number
-  number="$("${compose[@]}" --profile legacy-sim-cli run --rm --no-deps legacy-sim simulate seed 1 2>/dev/null | grep -E '^J[0-9]{9}$' | tail -1 || true)"
+  number="$("${compose[@]}" --profile legacy-sim-cli run --rm --build --no-deps legacy-sim simulate seed 1 2>/dev/null | grep -E '^J[0-9]{9}$' | tail -1 || true)"
   if [[ -n "$number" ]] && retry 30 2 legacy_change_arrived "$topic" "$number"; then
     pass "CDC(legacy): 登録した受注($number)が $topic に届く"
   else
@@ -318,7 +318,7 @@ verify_legacy_cdc() {
   else
     fail "ACL(legacy): 登録した受注(${number:-登録できない})が $out に届かない"
   fi
-  anomaly="$("${compose[@]}" --profile legacy-sim-cli run --rm --no-deps legacy-sim simulate anomaly unknown-status 2>/dev/null | grep -E '^J[0-9]{9}$' | tail -1 || true)"
+  anomaly="$("${compose[@]}" --profile legacy-sim-cli run --rm --build --no-deps legacy-sim simulate anomaly unknown-status 2>/dev/null | grep -E '^J[0-9]{9}$' | tail -1 || true)"
   dlq_reason() { # dlq_reason <受注番号>(DLQ のその受注のレコードの eiaf.dlq.reason)
     kafka_cli /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic "$dlq" --from-beginning --timeout-ms 5000 \
       --property print.key=true --property print.headers=true 2>/dev/null | grep -a -F "$1" | grep -a -o 'eiaf.dlq.reason:[A-Z_]*' | tail -1
