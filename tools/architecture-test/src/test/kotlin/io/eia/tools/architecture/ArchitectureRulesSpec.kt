@@ -144,10 +144,17 @@ class ArchitectureRulesSpec :
 
         context("準拠サンプルでは違反がない") {
             test("サービスごとのルール") {
-                compliant.services shouldBe listOf("good")
-                ArchitectureRules.layerDependencies(compliant, "good").shouldBeEmpty()
-                ArchitectureRules.serviceIsolation(compliant, "good").shouldBeEmpty()
-                ArchitectureRules.packageMatchesLocation(compliant, "good").shouldBeEmpty()
+                compliant.services shouldBe listOf("good", "two-words")
+                compliant.services.forEach { service ->
+                    ArchitectureRules.layerDependencies(compliant, service).shouldBeEmpty()
+                    ArchitectureRules.serviceIsolation(compliant, service).shouldBeEmpty()
+                    ArchitectureRules.packageMatchesLocation(compliant, service).shouldBeEmpty()
+                }
+            }
+
+            test("サービスのパッケージは、ディレクトリ名から - を除いた io.eia.<service>(例 legacy-sim → io.eia.legacysim)") {
+                ArchitectureRules.servicePackage("order") shouldBe "io.eia.order"
+                ArchitectureRules.servicePackage("legacy-order-acl") shouldBe "io.eia.legacyorderacl"
             }
 
             test("全体のルール(kernel の Result と @JvmInline は許可)") {

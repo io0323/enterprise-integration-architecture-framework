@@ -82,7 +82,7 @@ internal object ArchitectureRules {
         val otherServices = codeBase.services - service
         return serviceLayerFiles(codeBase, service).flatMap { (layer, file) ->
             file.importNames.mapNotNull { import ->
-                val otherService = otherServices.firstOrNull { import.isInPackage("$BASE_PACKAGE.$it") }
+                val otherService = otherServices.firstOrNull { import.isInPackage(servicePackage(it)) }
                 when {
                     otherService != null -> {
                         Violation("サービス間依存", file.path, "$service が $otherService を参照しています: import $import")
@@ -106,7 +106,7 @@ internal object ArchitectureRules {
         service: String,
     ): List<Violation> =
         serviceLayerFiles(codeBase, service).mapNotNull { (layer, file) ->
-            val expected = "$BASE_PACKAGE.$service.$layer"
+            val expected = "${servicePackage(service)}.$layer"
             if (file.packageName.isInPackage(expected)) {
                 null
             } else {
@@ -118,7 +118,7 @@ internal object ArchitectureRules {
     fun platformIndependentOfServices(codeBase: CodeBase): List<Violation> =
         codeBase.filesUnder("platform/").flatMap { file ->
             file.importNames.mapNotNull { import ->
-                codeBase.services.firstOrNull { import.isInPackage("$BASE_PACKAGE.$it") }?.let {
+                codeBase.services.firstOrNull { import.isInPackage(servicePackage(it)) }?.let {
                     Violation("platform→services 依存", file.path, "platform が services:$it を参照しています: import $import")
                 }
             }
@@ -408,13 +408,19 @@ internal object ArchitectureRules {
     private fun layerOf(
         import: String,
         service: String,
-    ): String? = LAYERS.firstOrNull { import.isInPackage("$BASE_PACKAGE.$service.$it") }
+    ): String? = LAYERS.firstOrNull { import.isInPackage("${servicePackage(service)}.$it") }
 
     private fun SourceFile.isPureCommonMain(): Boolean {
         if (!path.contains("/src/commonMain/")) return false
         val segments = path.split('/')
         return segments[0] == "shared" || (segments[0] == "services" && segments[2] in setOf("domain", "application"))
     }
+
+    /**
+     * services/<service> のパッケージ `io.eia.<service>`。Kotlin のパッケージ名に `-` は使えないため、ディレクトリ名の `-` は除く
+     * (例 services/legacy-sim → `io.eia.legacysim`。platform/messaging-kafka → `io.eia.platform.messagingkafka` と同じ規則)。
+     */
+    internal fun servicePackage(service: String): String = "$BASE_PACKAGE.${service.replace("-", "")}"
 
     private fun String.isInPackage(packageName: String): Boolean = this == packageName || startsWith("$packageName.")
 }
