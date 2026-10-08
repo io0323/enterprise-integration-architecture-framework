@@ -8,7 +8,8 @@ import kotlin.system.exitProcess
  * legacy-order-acl のコマンド。
  *
  * - (引数なし)/ `serve`: 変換を動かし、終了の合図(SIGTERM)まで動く。照合が設定されていれば、定期的に照合する。設定の誤りは終了コード 2。
- * - `reconcile`: 照合を 1 回だけ行い、結果を出して終わる(Runbook の手動の確認。ADR-0027)。終了コードは [ReconcileCommand]。
+ * - `reconcile [--dry-run]`: 照合を 1 回だけ行い、結果を出して終わる(Runbook の手動の確認。ADR-0027)。終了コードは [ReconcileCommand]。
+ *   自動の再同期が有効なら取り直しもする。`--dry-run` なら比べるだけ。
  */
 fun main(args: Array<String>) {
     val logger = LoggerFactory.getLogger("io.eia.legacyorderacl.app.Main")
@@ -27,11 +28,16 @@ fun main(args: Array<String>) {
         }
 
         "reconcile" -> {
-            exitProcess(ReconcileCommand.run(System.getenv()) { println(it) })
+            val dryRun = args.drop(1) == listOf("--dry-run")
+            if (args.size > 1 && !dryRun) {
+                System.err.println("使い方: legacy-order-acl reconcile [--dry-run]")
+                exitProcess(ReconcileCommand.USAGE)
+            }
+            exitProcess(ReconcileCommand.run(System.getenv(), { println(it) }, dryRun))
         }
 
         else -> {
-            System.err.println("使い方: legacy-order-acl [serve | reconcile]")
+            System.err.println("使い方: legacy-order-acl [serve | reconcile [--dry-run]]")
             exitProcess(ReconcileCommand.USAGE)
         }
     }

@@ -8,6 +8,7 @@ import io.eia.platform.observability.ObservabilityRuntime
 import io.eia.platform.schemaregistry.SchemaIdBook
 import io.eia.platform.security.secret.EnvSecretProvider
 import io.eia.platform.security.secret.Secret
+import io.eia.platform.security.secret.SecretName
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.ValidationError
 import io.eia.shared.kernel.err
@@ -90,19 +91,32 @@ internal class AclServer private constructor(
         private const val TIMEOUT_MILLIS = 5_000L
         private val logger = LoggerFactory.getLogger(AclServer::class.java)
 
-        /** 照合をするなら、レガシーの DB のパスワード(SecretProvider)。照合をしないなら null。 */
-        internal fun reconcilePassword(
+        /**
+         * 照合をするなら、レガシーの DB のパスワード(SecretProvider)。照合をしないなら null。
+         * 自動の再同期をするなら、signal 表に書くロールのパスワードも必須。
+         */
+        internal fun reconcileSecrets(
             config: AclConfig,
             env: Map<String, String>,
-        ): Result<Secret?, ValidationError> =
-            if (config.reconcile == null) {
-                ok(null)
-            } else {
-                when (val secret = EnvSecretProvider(env).get(ReconcileConfig.PASSWORD)) {
+        ): Result<ReconcileSecrets?, ValidationError> {
+            val reconcile = config.reconcile ?: return ok(null)
+            val secrets = EnvSecretProvider(env)
+
+            fun read(name: SecretName): Result<Secret, ValidationError> =
+                when (val secret = secrets.get(name)) {
                     is Result.Ok -> ok(secret.value)
-                    is Result.Err -> err(ValidationError.of(ReconcileConfig.PASSWORD.value, secret.error.message))
+                    is Result.Err -> err(ValidationError.of(name.value, secret.error.message))
+                }
+            return read(ReconcileConfig.PASSWORD).flatMap { password ->
+                if (reconcile.autoResync) {
+                    read(ReconcileConfig.RESYNC_PASSWORD).map {
+                        ReconcileSecrets(password, it)
+                    }
+                } else {
+                    ok(ReconcileSecrets(password, null))
                 }
             }
+        }
 
         fun start(
             env: Map<String, String>,
@@ -111,7 +125,7 @@ internal class AclServer private constructor(
             AclConfig
                 .fromEnvironment(env)
                 .flatMap { config ->
-                    reconcilePassword(config, env).flatMap { password ->
+                    reconcileSecrets(config, env).flatMap { password ->
                         val observabilityEnv = mapOf(ObservabilityConfig.ENV_SERVICE_NAME to "legacy-order-acl") + env
                         ObservabilityConfig.fromEnvironment(observabilityEnv).map { observability -> config to (password to observability) }
                     }

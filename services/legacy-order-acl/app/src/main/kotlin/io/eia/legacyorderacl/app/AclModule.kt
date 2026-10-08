@@ -7,15 +7,19 @@ import io.eia.legacyorderacl.adapters.inbound.OffsetCommitter
 import io.eia.legacyorderacl.adapters.outbound.KafkaLegacyOrderStatePublisher
 import io.eia.legacyorderacl.adapters.outbound.LegacyOrderEventSchemas
 import io.eia.legacyorderacl.adapters.reconcile.JdbcLegacySource
+import io.eia.legacyorderacl.adapters.reconcile.JdbcSnapshotRequests
 import io.eia.legacyorderacl.adapters.reconcile.KafkaPublishedLegacyOrders
+import io.eia.legacyorderacl.adapters.reconcile.KafkaReconcileTombstones
 import io.eia.legacyorderacl.adapters.reconcile.PublishedReaderSettings
 import io.eia.legacyorderacl.adapters.reconcile.ReconcileMetrics
 import io.eia.legacyorderacl.adapters.reconcile.ReconcileWaits
 import io.eia.legacyorderacl.adapters.reconcile.Sha256Fingerprints
 import io.eia.legacyorderacl.application.port.inbound.ReconcileLegacyOrdersUseCase
+import io.eia.legacyorderacl.application.port.inbound.ResyncLegacyOrdersUseCase
 import io.eia.legacyorderacl.application.port.inbound.TranslateLegacyOrderChangeUseCase
 import io.eia.legacyorderacl.application.port.outbound.LegacyOrderStatePublisher
 import io.eia.legacyorderacl.application.usecase.ReconcileLegacyOrdersService
+import io.eia.legacyorderacl.application.usecase.ResyncLegacyOrdersService
 import io.eia.legacyorderacl.application.usecase.TranslateLegacyOrderChangeService
 import io.eia.platform.messagingkafka.DeadLetterPublisher
 import io.eia.platform.messagingkafka.EventProducer
@@ -48,7 +52,7 @@ internal fun aclModule(
     config: AclConfig,
     runtime: ObservabilityRuntime,
     committer: OffsetCommitter?,
-    reconcilePassword: Secret? = null,
+    reconcileSecrets: ReconcileSecrets? = null,
 ) = module {
     single { runtime }
     single { HttpClient(CIO) }
@@ -70,7 +74,7 @@ internal fun aclModule(
             KafkaConsumer<ByteArray?, ByteArray?>(LegacyChangeConsumer.consumerProperties(config.bootstrapServers, config.groupId))
         if (committer == null) LegacyChangeConsumer(consumer, get()) else LegacyChangeConsumer(consumer, get(), committer = committer)
     }
-    config.reconcile?.let { reconcile -> includes(reconcileModule(config, reconcile, runtime, reconcilePassword)) }
+    config.reconcile?.let { reconcile -> includes(reconcileModule(config, reconcile, runtime, reconcileSecrets)) }
 }
 
 /**
@@ -81,16 +85,19 @@ private fun reconcileModule(
     config: AclConfig,
     reconcile: ReconcileConfig,
     runtime: ObservabilityRuntime,
-    password: Secret?,
+    secrets: ReconcileSecrets?,
 ) = module {
     val waits = ReconcileWaits(timeout = reconcile.waitTimeout)
 
-    fun dataSource(url: String) =
-        PGSimpleDataSource().apply {
-            setURL(url)
-            user = reconcile.user
-            this.password = requireNotNull(password) { "${ReconcileConfig.PASSWORD} が必要です" }.reveal()
-        }
+    fun dataSource(
+        url: String,
+        user: String = reconcile.user,
+        password: Secret? = secrets?.reconcile,
+    ) = PGSimpleDataSource().apply {
+        setURL(url)
+        this.user = user
+        this.password = requireNotNull(password) { "$user のパスワードが必要です" }.reveal()
+    }
     single<Admin> { Admin.create(mapOf(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG to config.bootstrapServers)) }
     single { JdbcLegacySource(dataSource(reconcile.dbUrl), dataSource(reconcile.slotDbUrl), waits = waits) }
     single {
@@ -112,5 +119,16 @@ private fun reconcileModule(
         )
     }
     single { ReconcileMetrics(runtime.meter, reconcile.interval) }
-    single { ReconcileJob(get(), get(), runtime, reconcile.interval) }
+    // 自動の再同期(ADR-0027 §6)。signal 表はプライマリにだけ書ける(スロットと同じ接続先)。照合の tombstone は ce_source で見分ける
+    if (reconcile.autoResync) {
+        single<ResyncLegacyOrdersUseCase> {
+            ResyncLegacyOrdersService(
+                source = get<JdbcLegacySource>(),
+                snapshots = JdbcSnapshotRequests(dataSource(reconcile.slotDbUrl, reconcile.resyncUser, secrets?.resync)),
+                tombstones = KafkaReconcileTombstones(EventProducer(get(), runtime, KafkaReconcileTombstones.SOURCE)),
+                limit = reconcile.resyncLimit,
+            )
+        }
+    }
+    single { ReconcileJob(get(), get(), runtime, reconcile.interval, getOrNull()) }
 }
