@@ -14,4 +14,4 @@ channels:
 tier: 2
 dataClassification: confidential
 slo: { availability: "99.9", latencyP99: "60s" }
-lifecycle: design
+lifecycle: active
