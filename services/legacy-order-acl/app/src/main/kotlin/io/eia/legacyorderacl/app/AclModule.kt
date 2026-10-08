@@ -75,7 +75,7 @@ internal fun aclModule(
 
 /**
  * 照合(ADR-0027)の配線。レガシーの DB は読み取り専用のロール(`eiaf_reconcile`)で、接続はプールせず、使うたびに開いて閉じる
- * (ロールの接続数の上限は 2。照合は 15 分ごとなので、プールで接続を持ち続けない)。
+ * (ロールの接続数の上限は 4。照合は 15 分ごとなので、プールで接続を持ち続けない)。
  */
 private fun reconcileModule(
     config: AclConfig,

@@ -573,9 +573,9 @@
       ]
     },
     {
-      "id": 11,
+      "id": 13,
       "type": "row",
-      "title": "アラート",
+      "title": "照合(reconcile。ADR-0027)",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -586,18 +586,90 @@
       "panels": []
     },
     {
-      "id": 12,
+      "id": 14,
       "type": "timeseries",
-      "title": "レガシーの CDC のアラート(firing / pending)",
-      "description": "LegacyAcl*(acl.rules.yml)と、レガシーのスロット・コネクタの Cdc*(cdc.rules.yml)。",
+      "title": "最後に照合が成功してからの時間と閾値",
+      "description": "最後に照合が成功してからの経過(秒)。間隔の 3 倍を超えた状態が 5 分続くと LegacyReconcileStale。変更がない時間帯にも照合は成功する。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
         "h": 8,
-        "w": 24,
+        "w": 8,
         "x": 0,
+        "y": 27
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "spanNulls": true,
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "time() - eia_reconcile_last_success_seconds{job=\"legacy-order-acl\"}",
+          "legendFormat": "成功からの経過"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "B",
+          "expr": "3 * eia_reconcile_interval_seconds{job=\"legacy-order-acl\"}",
+          "legendFormat": "警告の閾値(間隔の 3 倍)"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "ずれのキー(種類ごと)",
+      "description": "直近の照合で、比べ直しても食い違ったキーの数(missing・stale・extra)。続くと LegacyReconcileDrift、100 件を超えると LegacyReconcileDriftOverLimit。",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
         "y": 27
       },
       "fieldConfig": {
@@ -643,7 +715,272 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "ALERTS{alertname=~\"LegacyAcl.*\"} or ALERTS{alertname=~\"Cdc.*\",slot_name=\"legacy_juchu\"} or ALERTS{alertname=~\"Cdc.*\",connector=\"legacy-juchu\"}",
+          "expr": "eia_reconcile_drift_keys{job=\"legacy-order-acl\"}",
+          "legendFormat": "{{kind}}"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "変換できないキー(既知の差)",
+      "description": "直近の照合で、変換の規則に合わない(DLQ に入る)キーの数。ずれには数えない(DLQ のアラートは LegacyAclDeadLetters)。",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 27
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "spanNulls": true,
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "eia_reconcile_unconvertible_keys{job=\"legacy-order-acl\"}",
+          "legendFormat": "変換できない"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "照合の結果(1 時間の回数)",
+      "description": "consistent(一致)・drift(ずれ)・error(検査の失敗)。",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 35
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "spanNulls": true,
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (outcome) (increase(eia_reconcile_checks_total{job=\"legacy-order-acl\"}[1h]))",
+          "legendFormat": "{{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "照合の失敗(1 時間の回数)",
+      "description": "検査の失敗(取り込み・処理の待ちの超過、レガシーの DB・Kafka に届かない)の原因ごとの回数。",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 35
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "spanNulls": true,
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (error_code) (increase(eia_reconcile_checks_total{job=\"legacy-order-acl\",outcome=\"error\"}[1h]))",
+          "legendFormat": "{{error_code}}"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "row",
+      "title": "アラート",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 43
+      },
+      "panels": []
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "レガシーの CDC のアラート(firing / pending)",
+      "description": "LegacyAcl*(acl.rules.yml)・LegacyReconcile*(reconcile.rules.yml)と、レガシーのスロット・コネクタの Cdc*(cdc.rules.yml)。",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 44
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "spanNulls": true,
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "ALERTS{alertname=~\"LegacyAcl.*|LegacyReconcile.*\"} or ALERTS{alertname=~\"Cdc.*\",slot_name=\"legacy_juchu\"} or ALERTS{alertname=~\"Cdc.*\",connector=\"legacy-juchu\"}",
           "legendFormat": "{{alertname}}({{alertstate}})"
         }
       ]

@@ -288,7 +288,7 @@ class ReconcileIT :
                     s.execute("CREATE ROLE legacy_sim LOGIN PASSWORD '$ownerPassword'")
                     s.execute("CREATE ROLE legacy_sim_app LOGIN PASSWORD '$appPassword'")
                     s.execute("CREATE ROLE debezium LOGIN REPLICATION PASSWORD '$cdcPassword'")
-                    s.execute("CREATE ROLE eiaf_reconcile LOGIN PASSWORD '$reconcilePassword' CONNECTION LIMIT 2")
+                    s.execute("CREATE ROLE eiaf_reconcile LOGIN PASSWORD '$reconcilePassword' CONNECTION LIMIT 4")
                     s.execute("ALTER ROLE eiaf_reconcile SET statement_timeout = '30s'")
                     s.execute("ALTER ROLE eiaf_reconcile SET idle_in_transaction_session_timeout = '60s'")
                     s.execute("ALTER ROLE eiaf_reconcile SET default_transaction_read_only = on")

@@ -230,11 +230,18 @@ services:
         condition: service_completed_successfully
       schema-publish:
         condition: service_completed_successfully
+      # 照合が読むレガシーの表と権限(V3)
+      legacy-migrate:
+        condition: service_completed_successfully
       otel-collector:
         condition: service_healthy
     environment:
       LEGACY_ORDER_ACL_KAFKA_BOOTSTRAP: kafka:9092
       LEGACY_ORDER_ACL_SCHEMA_REGISTRY_URL: http://apicurio:8080/apis/registry/v3
+      # 照合(ADR-0027)。読み取り専用のロール eiaf_reconcile(postgres/init/40-reconcile.sh)。ローカルは確かめやすいよう 2 分ごと(既定 15 分)
+      LEGACY_ORDER_ACL_RECONCILE_DB_URL: jdbc:postgresql://postgres:5432/legacy_sim
+      LEGACY_RECONCILE_DB_PASSWORD: ${LEGACY_RECONCILE_DB_PASSWORD:?make env を実行してください}
+      LEGACY_ORDER_ACL_RECONCILE_INTERVAL: 2m
       OTEL_SERVICE_NAME: legacy-order-acl
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
     volumes:

@@ -228,7 +228,7 @@ class LegacyCdcIT :
                     s.execute("CREATE ROLE legacy_sim LOGIN PASSWORD '$ownerPassword'")
                     s.execute("CREATE ROLE legacy_sim_app LOGIN PASSWORD '$appPassword' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION")
                     s.execute("CREATE ROLE debezium LOGIN REPLICATION PASSWORD '$cdcPassword'")
-                    s.execute("CREATE ROLE eiaf_reconcile LOGIN PASSWORD '${randomHex()}' CONNECTION LIMIT 2")
+                    s.execute("CREATE ROLE eiaf_reconcile LOGIN PASSWORD '${randomHex()}' CONNECTION LIMIT 4")
                     s.execute("CREATE DATABASE legacy_sim OWNER legacy_sim")
                     s.execute("REVOKE ALL ON DATABASE legacy_sim FROM PUBLIC")
                     s.execute("GRANT CONNECT ON DATABASE legacy_sim TO legacy_sim_app, debezium")
