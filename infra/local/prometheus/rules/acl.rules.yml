@@ -1,0 +1,43 @@
+# レガシーの受注の CDC の Anti-Corruption Layer(legacy-order-acl)のアラート(P06 ⑤b。ADR-0026 §10)。対応は docs/runbooks/legacy-order-acl.md。
+# 単体テストは acl.test.yml(make alerts-test)。レプリケーションスロット(legacy_juchu)とコネクタ(legacy-juchu)は cdc.rules.yml がスロットごとに見る。
+#
+# kafka-exporter のメトリクスで判定するアラートは、その exporter が今 UP のとき(and on(instance) (up == 1))だけ判定する(cdc.rules.yml と同じ理由)。
+groups:
+  - name: legacy-order-acl
+    rules:
+      # 変換できない変更が DLQ に入った(1 件でも調べる)。DLQ のトピックの末尾のオフセットで見るので、ACL が止まっていても判定できる。
+      # 原因の種類ごとの件数は ACL のメトリクス eia_acl_dead_letters_total{reason}(ダッシュボード)
+      - alert: LegacyAclDeadLetters
+        expr: |
+          sum by (instance, topic) (increase(kafka_topic_partition_current_offset{topic="_cdc.legacy.public.t_juchu.dlq"}[10m])) > 0
+          and on(instance) (up == 1)
+        labels:
+          severity: warning
+        annotations:
+          summary: "レガシーの受注の変更が変換できず、DLQ({{ $labels.topic }})に入った"
+          runbook: docs/runbooks/legacy-order-acl.md#dlq-に入ったとき
+
+      # ACL の処理が遅れている: Consumer Group の lag(生の CDC のトピックで読み残している件数)が 1,000 件を超えた状態が 10 分続く。
+      # 1,000 件は、ローカルの模擬の更新の量に対して十分に大きい値(本番はレガシーの更新の量と鮮度の SLO(INT-SALES-003 の p99 60s)で決める)
+      - alert: LegacyAclLagHigh
+        expr: |
+          sum by (instance, consumergroup) (kafka_consumergroup_lag_sum{consumergroup="legacy-order-acl.translate"}) > 1000
+          and on(instance) (up == 1)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "legacy-order-acl の処理が遅れている(lag が 1,000 件を超えた状態が続く)"
+          runbook: docs/runbooks/legacy-order-acl.md#処理が遅れているとき
+
+      # ACL が動いていない: レガシーのコネクタはあるのに、ACL のメトリクスがない(起動していない・落ちた)。整形済みのトピックが更新されない
+      - alert: LegacyAclDown
+        expr: |
+          absent(target_info{job="legacy-order-acl"})
+          and on() (count(kafka_connect_connector_status{connector="legacy-juchu"}) > 0)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "legacy-order-acl のメトリクスがない(レガシーの受注の変更が整形済みのトピックに出ない)"
+          runbook: docs/runbooks/legacy-order-acl.md#acl-が動いていないとき

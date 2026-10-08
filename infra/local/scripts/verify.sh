@@ -310,6 +310,46 @@ verify_legacy_cdc() {
   fi
   check "CDC(legacy): 生の CDC のスキーマが Apicurio のグループ cdc-raw にある(Converter の自動登録)" bash -c \
     "curl -fsS 'http://localhost:19081/apis/registry/v3/groups/cdc-raw/artifacts?limit=100' | python3 -c 'import json,sys; ids={a[\"artifactId\"] for a in json.load(sys.stdin)[\"artifacts\"]}; sys.exit(0 if {\"$topic-key\",\"$topic-value\"} <= ids else 1)'"
+
+  # Anti-Corruption Layer(P06 ⑤b。ADR-0026): 登録した受注が、注文番号のキーで整形済みのトピックに届く。変換できない受注は DLQ に入る
+  local out=sales.legacy-order.changed.v1 dlq=_cdc.legacy.public.t_juchu.dlq anomaly
+  if [[ -n "$number" ]] && retry 30 2 legacy_change_arrived "$out" "$number"; then
+    pass "ACL(legacy): 登録した受注($number)が $out に届く"
+  else
+    fail "ACL(legacy): 登録した受注(${number:-登録できない})が $out に届かない"
+  fi
+  anomaly="$("${compose[@]}" --profile legacy-sim-cli run --rm --no-deps legacy-sim simulate anomaly unknown-status 2>/dev/null | grep -E '^J[0-9]{9}$' | tail -1 || true)"
+  dlq_reason() { # dlq_reason <受注番号>(DLQ のその受注のレコードの eiaf.dlq.reason)
+    kafka_cli /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic "$dlq" --from-beginning --timeout-ms 5000 \
+      --property print.key=true --property print.headers=true 2>/dev/null | grep -a -F "$1" | grep -a -o 'eiaf.dlq.reason:[A-Z_]*' | tail -1
+  }
+  if [[ -n "$anomaly" ]] && retry 30 2 equals "eiaf.dlq.reason:UNKNOWN_STATUS_CODE" dlq_reason "$anomaly"; then
+    pass "ACL(legacy): 変換できない受注($anomaly)が $dlq に原因のヘッダ付きで入る"
+  else
+    fail "ACL(legacy): 変換できない受注(${anomaly:-登録できない})が $dlq に入らない"
+  fi
+  topic_config() { # topic_config <トピック>(cleanup.policy・retention.ms・delete.retention.ms の値)
+    kafka_cli /opt/kafka/bin/kafka-configs.sh --bootstrap-server kafka:9092 --describe --entity-type topics --entity-name "$1" 2>/dev/null |
+      awk '$1 ~ /^(cleanup\.policy|delete\.retention\.ms|retention\.ms)=/ { print $1 }' | sort | tr '\n' ' '
+  }
+  check "ACL(legacy): DLQ のトピックは delete・保持 7 日(topics.conf)" \
+    equals "cleanup.policy=delete retention.ms=604800000 " topic_config "$dlq"
+  check "ACL(legacy): 出力のトピックは compact・tombstone を 1 日残す(topics.conf)" \
+    equals "cleanup.policy=compact delete.retention.ms=86400000 " topic_config "$out"
+  check "ACL(legacy): Prometheus が ACL のメトリクス(eia_acl_records_total)を収集している" retry 20 3 bash -c \
+    "[[ -n \"\$(curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=eia_acl_records_total{job=\"legacy-order-acl\"}' | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"data\"][\"result\"] or \"\")')\" ]]"
+  check "ACL(legacy): アラートのルール(acl.rules.yml の 3 つ)を読み込んでいる" bash -c \
+    "curl -fsS http://localhost:19090/api/v1/rules | python3 -c 'import json,sys; n={r[\"name\"] for g in json.load(sys.stdin)[\"data\"][\"groups\"] for r in g[\"rules\"]}; sys.exit(0 if {\"LegacyAclDeadLetters\",\"LegacyAclLagHigh\",\"LegacyAclDown\"} <= n else 1)'"
+  local dash result
+  dash="$(curl -fsS -u "admin:$GRAFANA_ADMIN_PASSWORD" http://localhost:19300/api/dashboards/uid/eiaf-cdc-legacy || true)"
+  if [[ "$(json 'd["meta"]["folderTitle"] + "/" + d["dashboard"]["title"]' <<<"$dash" 2>/dev/null)" == "EIAF/CDC — Legacy" ]]; then
+    pass "Grafana: ダッシュボード CDC — Legacy を読み込んでいる"
+    # 読み直しとアラートは、平常時には空でよい
+    result="$(dashboard_panels_return_data "$dash" "読み直し(一時的な失敗。1 時間の回数)" "レガシーの CDC のアラート(firing / pending)")"
+    if [[ "$result" == ok ]]; then pass "Grafana: CDC — Legacy の全パネルの式がデータを返す"; else fail "Grafana: CDC — Legacy のパネル: $result"; fi
+  else
+    fail "Grafana: ダッシュボード eiaf-cdc-legacy を読み込めない"
+  fi
 }
 
 # ------------------------------------------------------------------ iot
