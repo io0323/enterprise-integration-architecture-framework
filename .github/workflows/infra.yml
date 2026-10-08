@@ -5,6 +5,8 @@ on:
       - "infra/local/**"
       - "services/*/app/Dockerfile"
       - "services/*/app/.dockerignore"
+      # レガシーの模擬は、表と DBA の CDC の設定(マイグレーション)が cdc profile の検証の対象(ADR-0026)
+      - "services/legacy-sim/**"
       - "tools/*/Dockerfile"
       - "tools/*/.dockerignore"
       - "Makefile"
@@ -15,6 +17,8 @@ on:
       - "infra/local/**"
       - "services/*/app/Dockerfile"
       - "services/*/app/.dockerignore"
+      # レガシーの模擬は、表と DBA の CDC の設定(マイグレーション)が cdc profile の検証の対象(ADR-0026)
+      - "services/legacy-sim/**"
       - "tools/*/Dockerfile"
       - "tools/*/.dockerignore"
       - "Makefile"
@@ -93,13 +97,13 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           docker system prune --all --force >/dev/null
           df -h /
-      # order profile: イメージの中身(installDist)を Gradle で作る(make up が order-dist を実行する)
-      - if: ${{ matrix.profile == 'order' }}
+      # order / cdc profile: イメージの中身(installDist)を Gradle で作る(make up が order-dist / legacy-dist を実行する)
+      - if: ${{ matrix.profile == 'order' || matrix.profile == 'cdc' }}
         uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: "21"
-      - if: ${{ matrix.profile == 'order' }}
+      - if: ${{ matrix.profile == 'order' || matrix.profile == 'cdc' }}
         uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
       - name: Up
         run: make up PROFILE=${{ matrix.profile }}
