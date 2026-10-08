@@ -21,6 +21,8 @@ import kotlin.time.Instant
  * | `eia.reconcile.drift_keys` | gauge | 直近の照合で、比べ直しても食い違ったキーの数。`kind`(`missing`・`stale`・`extra`) |
  * | `eia.reconcile.unconvertible_keys` | gauge | 直近の照合で、変換できない(DLQ に入る)キーの数。既知の差 |
  * | `eia.reconcile.checks` | counter | 照合の回数。`outcome`(`consistent`・`drift`・`error`。`error` は `error.code` つき) |
+ * | `eia.reconcile.resynced_keys` | counter | 再同期したキーの数。`action`(`snapshot`・`tombstone`) |
+ * | `eia.reconcile.resyncs` | counter | 再同期の判断の回数。`outcome`(`requested`・`over_limit`・`disabled`・`error`) |
  *
  * 起動の後、最初の照合が終わるまで `last_success` は起動の時刻にする(起動の直後に Stale を出さない)。
  */
@@ -36,6 +38,18 @@ public class ReconcileMetrics(
             .counterBuilder("eia.reconcile.checks")
             .setDescription("照合の回数(結果ごと)")
             .setUnit("{check}")
+            .build()
+    private val resynced: LongCounter =
+        meter
+            .counterBuilder("eia.reconcile.resynced_keys")
+            .setDescription("再同期したキーの数(方法ごと)")
+            .setUnit("{key}")
+            .build()
+    private val resyncs: LongCounter =
+        meter
+            .counterBuilder("eia.reconcile.resyncs")
+            .setDescription("再同期の判断の回数(結果ごと)")
+            .setUnit("{resync}")
             .build()
 
     init {
@@ -80,6 +94,17 @@ public class ReconcileMetrics(
         checks.add(1, Attributes.of(OUTCOME, if (report.consistent) "consistent" else "drift"))
     }
 
+    /** 再同期の判断の結果([outcome])と、取り直したキーの数。 */
+    public fun resynced(
+        outcome: String,
+        snapshot: Int = 0,
+        tombstone: Int = 0,
+    ) {
+        resyncs.add(1, Attributes.of(OUTCOME, outcome))
+        if (snapshot > 0) resynced.add(snapshot.toLong(), Attributes.of(ACTION, "snapshot"))
+        if (tombstone > 0) resynced.add(tombstone.toLong(), Attributes.of(ACTION, "tombstone"))
+    }
+
     public fun failed(errorCode: String) {
         checks.add(1, Attributes.of(OUTCOME, "error", ERROR_CODE, errorCode))
     }
@@ -90,6 +115,7 @@ public class ReconcileMetrics(
     private companion object {
         val KIND: AttributeKey<String> = AttributeKey.stringKey("kind")
         val OUTCOME: AttributeKey<String> = AttributeKey.stringKey("outcome")
+        val ACTION: AttributeKey<String> = AttributeKey.stringKey("action")
         val ERROR_CODE: AttributeKey<String> = AttributeKey.stringKey("error.code")
     }
 }

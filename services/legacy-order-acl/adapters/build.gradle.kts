@@ -10,10 +10,13 @@ dependencies {
     api(project(":platform:messaging-kafka"))
     implementation(project(":platform:observability"))
     implementation(libs.kotlinx.coroutines.core)
+    // signal 表への指示の JSON(ADR-0027 §6)
+    implementation(libs.kotlinx.serialization.json)
 
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.opentelemetry.sdk.testing)
     testImplementation(libs.ktor.client.mock)
+    testImplementation(libs.postgresql)
 
     integrationTestImplementation(project(":platform:test-support"))
     integrationTestImplementation(libs.testcontainers.postgresql)
