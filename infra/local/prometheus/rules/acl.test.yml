@@ -1,0 +1,112 @@
+# acl.rules.yml の単体テスト(promtool test rules。make alerts-test)。
+rule_files:
+  - acl.rules.yml
+
+evaluation_interval: 15s
+
+tests:
+  # ---------------------------------------------------------------- LegacyAclDeadLetters
+  - name: DLQ のオフセットが増えたら警告し、増えなくなって 10 分たてば解消する
+    interval: 1m
+    input_series:
+      - series: 'up{instance="ke:9308",job="kafka-exporter"}'
+        values: "1x30"
+      - series: 'kafka_topic_partition_current_offset{instance="ke:9308",job="kafka-exporter",topic="_cdc.legacy.public.t_juchu.dlq",partition="0"}'
+        values: "0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1"
+      - series: 'kafka_topic_partition_current_offset{instance="ke:9308",job="kafka-exporter",topic="sales.legacy-order.changed.v1",partition="0"}'
+        values: "0+5x20"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: LegacyAclDeadLetters
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: LegacyAclDeadLetters
+        exp_alerts:
+          - exp_labels: { severity: warning, instance: "ke:9308", topic: "_cdc.legacy.public.t_juchu.dlq" }
+            exp_annotations:
+              summary: "レガシーの受注の変更が変換できず、DLQ(_cdc.legacy.public.t_juchu.dlq)に入った"
+              runbook: docs/runbooks/legacy-order-acl.md#dlq-に入ったとき
+      - eval_time: 15m
+        alertname: LegacyAclDeadLetters
+        exp_alerts: []
+
+  - name: kafka-exporter が止まっている間は、古いサンプルで判定しない
+    interval: 1m
+    input_series:
+      - series: 'up{instance="ke:9308",job="kafka-exporter"}'
+        values: "0x10"
+      - series: 'kafka_topic_partition_current_offset{instance="ke:9308",job="kafka-exporter",topic="_cdc.legacy.public.t_juchu.dlq",partition="0"}'
+        values: "0 1 2 3 4 5"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: LegacyAclDeadLetters
+        exp_alerts: []
+
+  # ---------------------------------------------------------------- LegacyAclLagHigh
+  - name: lag が 1,000 件を超えた状態が 10 分続けば警告(パーティションの合計で判定する)
+    interval: 1m
+    input_series:
+      - series: 'up{instance="ke:9308",job="kafka-exporter"}'
+        values: "1x30"
+      - series: 'kafka_consumergroup_lag_sum{instance="ke:9308",job="kafka-exporter",consumergroup="legacy-order-acl.translate",topic="_cdc.legacy.public.t_juchu"}'
+        values: "600x30"
+      - series: 'kafka_consumergroup_lag_sum{instance="ke:9308",job="kafka-exporter",consumergroup="legacy-order-acl.translate",topic="other"}'
+        values: "500x30"
+      # ほかの Consumer Group の lag では判定しない
+      - series: 'kafka_consumergroup_lag_sum{instance="ke:9308",job="kafka-exporter",consumergroup="inventory.reservation",topic="sales.order.created.v1"}'
+        values: "99999x30"
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: LegacyAclLagHigh
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: LegacyAclLagHigh
+        exp_alerts:
+          - exp_labels: { severity: warning, instance: "ke:9308", consumergroup: "legacy-order-acl.translate" }
+            exp_annotations:
+              summary: "legacy-order-acl の処理が遅れている(lag が 1,000 件を超えた状態が続く)"
+              runbook: docs/runbooks/legacy-order-acl.md#処理が遅れているとき
+
+  - name: lag が 1,000 件以下なら警告しない
+    interval: 1m
+    input_series:
+      - series: 'up{instance="ke:9308",job="kafka-exporter"}'
+        values: "1x30"
+      - series: 'kafka_consumergroup_lag_sum{instance="ke:9308",job="kafka-exporter",consumergroup="legacy-order-acl.translate",topic="_cdc.legacy.public.t_juchu"}'
+        values: "1000x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LegacyAclLagHigh
+        exp_alerts: []
+
+  # ---------------------------------------------------------------- LegacyAclDown
+  - name: レガシーのコネクタがあるのに ACL のメトリクスがなければ critical
+    interval: 1m
+    input_series:
+      - series: 'kafka_connect_connector_status{instance="kc:9404",job="kafka-connect",connector="legacy-juchu",status="running"}'
+        values: "1x10"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: LegacyAclDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: LegacyAclDown
+        exp_alerts:
+          - exp_labels: { severity: critical, job: legacy-order-acl }
+            exp_annotations:
+              summary: "legacy-order-acl のメトリクスがない(レガシーの受注の変更が整形済みのトピックに出ない)"
+              runbook: docs/runbooks/legacy-order-acl.md#acl-が動いていないとき
+
+  - name: ACL が動いているか、レガシーのコネクタがない(order だけの起動)なら出さない
+    interval: 1m
+    input_series:
+      - series: 'kafka_connect_connector_status{instance="kc:9404",job="kafka-connect",connector="legacy-juchu",status="running"}'
+        values: "1x10"
+      - series: 'target_info{job="legacy-order-acl",instance="acl-1"}'
+        values: "1x10"
+      - series: 'kafka_connect_connector_status{instance="kc:9404",job="kafka-connect",connector="order-outbox",status="running"}'
+        values: "1x10"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: LegacyAclDown
+        exp_alerts: []
