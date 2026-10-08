@@ -22,6 +22,9 @@ dependencies {
 
     integrationTestImplementation(project(":platform:test-support"))
     integrationTestImplementation(libs.testcontainers.kafka)
+    // 照合の統合テスト: レガシーの DB(legacy-sim のマイグレーションの SQL)→ Debezium → ACL の全体(ADR-0027)
+    integrationTestImplementation(libs.testcontainers.postgresql)
+    integrationTestImplementation(libs.kotlinx.serialization.json)
     integrationTestImplementation(libs.kotlinx.coroutines.core)
     integrationTestImplementation(libs.ktor.client.cio)
 }
@@ -32,6 +35,13 @@ tasks.named<Test>("integrationTest") {
         .file(rootProject.layout.projectDirectory.file("infra/local/kafka/topics.conf"))
         .withPathSensitivity(PathSensitivity.RELATIVE)
         .withPropertyName("topics")
+    val infra = rootProject.layout.projectDirectory.dir("infra/local")
+    inputs.dir(infra.dir("kafka-connect")).withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName("connectors")
+    inputs.dir(infra.dir("images/kafka-connect")).withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName("kafkaConnectImage")
+    inputs
+        .dir(rootProject.layout.projectDirectory.dir("services/legacy-sim/app/src/main/resources/db/legacy"))
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+        .withPropertyName("legacySchema")
     systemProperty(
         "eia.repositoryRoot",
         rootProject.layout.projectDirectory.asFile.absolutePath,
