@@ -145,7 +145,10 @@ class LegacyOrderAclIT :
             )
         }
 
-        /** 生の CDC に、Debezium の Envelope を書く(キーは注文番号。Converter と同じ wire format)。 */
+        /**
+         * 生の CDC に、Debezium の Envelope を Converter と同じ wire format で書く。キーは注文番号の UTF-8 で書く
+         * (実際の Converter のキーは Avro だが、ACL はキーを読まず、値の before / after から注文番号を取る。DLQ はキーをそのまま運ぶ)。
+         */
         fun change(
             op: String,
             number: String,
