@@ -182,6 +182,7 @@ public class EventConsumer(
         }
     }
 
+    @Suppress("ReturnCount") // 値がない・読めないときは、処理の前に返す
     private suspend fun <T> handle(
         span: Span,
         subscription: EventSubscription<T>,
@@ -204,34 +205,44 @@ public class EventConsumer(
                     }
                 }
             }
-        val event = ConsumedEvent(metadata, record.key()?.toString(Charsets.UTF_8), value, record.topic(), record.partition(), record.offset())
+        val key = record.key()?.toString(Charsets.UTF_8)
+        val event = ConsumedEvent(metadata, key, value, record.topic(), record.partition(), record.offset())
+        return handleWithRetry(span, subscription.handler, record, event)
+    }
+
+    /** Transient はその場でリトライし、尽きたら DLQ。Rejected は DLQ、Unavailable は読み直し。 */
+    private suspend fun <T> handleWithRetry(
+        span: Span,
+        handler: EventHandler<T>,
+        record: ConsumerRecord<ByteArray?, ByteArray?>,
+        event: ConsumedEvent<T>,
+    ): Outcome {
         var attempt = 1
         while (true) {
-            when (val result = invoke(subscription.handler, event)) {
-                is Result.Ok -> {
-                    metrics.handled(record.topic(), groupId, result.value)
-                    return Outcome.Done
-                }
+            val failure =
+                when (val result = invoke(handler, event)) {
+                    is Result.Ok -> {
+                        metrics.handled(record.topic(), groupId, result.value)
+                        return Outcome.Done
+                    }
 
-                is Result.Err -> {
-                    when (val failure = result.error) {
-                        is HandlingFailure.Unavailable -> {
-                            return unavailable(span, failure)
-                        }
-
-                        is HandlingFailure.Rejected -> {
-                            return deadLetter(span, record, failure, attempt)
-                        }
-
-                        is HandlingFailure.Transient -> {
-                            if (attempt >= handlerRetry.maxAttempts) return deadLetter(span, record, failure, attempt)
-                            metrics.retried(record.topic(), groupId, failure.code)
-                            delay(handlerRetry.backoff(attempt, random))
-                            attempt++
-                        }
+                    is Result.Err -> {
+                        result.error
                     }
                 }
+            if (failure !is HandlingFailure.Transient || attempt >= handlerRetry.maxAttempts) {
+                return if (failure is HandlingFailure.Unavailable) {
+                    unavailable(
+                        span,
+                        failure,
+                    )
+                } else {
+                    deadLetter(span, record, failure, attempt)
+                }
             }
+            metrics.retried(record.topic(), groupId, failure.code)
+            delay(handlerRetry.backoff(attempt, random))
+            attempt++
         }
     }
 

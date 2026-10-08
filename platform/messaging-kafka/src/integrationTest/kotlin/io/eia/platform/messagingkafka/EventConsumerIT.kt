@@ -99,7 +99,8 @@ class EventConsumerIT :
         val client = ApicurioRegistryClient(SchemaRegistryConfig(registry.baseUrl, requestTimeout = 30.seconds), http)
         val runtime = Observability.init(ObservabilityConfig.of("consumer-it").ok(), TelemetrySinks(), installLogAppender = false)
         val admin = Admin.create(mapOf("bootstrap.servers" to kafka.bootstrapServers))
-        val dlqProducer = KafkaProducer<ByteArray, ByteArray>(KafkaProducerSettings(kafka.bootstrapServers, "consumer-it-dlq").toProperties())
+        val dlqProducer =
+            KafkaProducer<ByteArray, ByteArray>(KafkaProducerSettings(kafka.bootstrapServers, "consumer-it-dlq").toProperties())
         val eventProducer = KafkaProducer<ByteArray, ByteArray>(KafkaProducerSettings(kafka.bootstrapServers, "consumer-it").toProperties())
         val topics = AtomicInteger()
         val appPassword = randomHex()
@@ -165,7 +166,13 @@ class EventConsumerIT :
             vararg scans: ParcelScanned,
         ) {
             val subject = SchemaSubject(topic.name, SCHEMA)
-            val serializer = AvroEventSerializer(topic, subject, ParcelScanned.serializer(), SchemaIdBook(listOf(subject), client).also { it.resolve().ok() })
+            val serializer =
+                AvroEventSerializer(
+                    topic,
+                    subject,
+                    ParcelScanned.serializer(),
+                    SchemaIdBook(listOf(subject), client).also { it.resolve().ok() },
+                )
             val producer = EventProducer(eventProducer, runtime, "/test/scanner")
             scans.forEach { producer.send(serializer, it.parcelId, it).ok() }
         }
@@ -239,7 +246,12 @@ class EventConsumerIT :
                     EventConsumer.consumerProperties(kafka.bootstrapServers, GROUP + topic.name.filter(Char::isDigit), "consumer-it"),
                 )
             val subscription =
-                EventSubscription(topic, AvroEventDeserializer(ParcelScanned.serializer(), WriterSchemas(client)), "INT-TEST-001", handler(outcomes))
+                EventSubscription(
+                    topic,
+                    AvroEventDeserializer(ParcelScanned.serializer(), WriterSchemas(client)),
+                    "INT-TEST-001",
+                    handler(outcomes),
+                )
             val consumer =
                 EventConsumer(
                     kafkaConsumer,
@@ -376,9 +388,16 @@ private object EventMetadataFixtures {
             id = Uuid.random(),
             source = "/test/scanner",
             type = topic.ceType,
-            time = kotlin.time.Clock.System.now(),
-            traceParent = io.eia.shared.resilience.trace.TraceParent.parse("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01").ok(),
-            correlationId = io.eia.shared.kernel.CorrelationId.generate(),
+            time =
+                kotlin.time.Clock.System
+                    .now(),
+            traceParent =
+                io.eia.shared.resilience.trace.TraceParent
+                    .parse("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+                    .ok(),
+            correlationId =
+                io.eia.shared.kernel.CorrelationId
+                    .generate(),
         ).toHeaders()
 }
 

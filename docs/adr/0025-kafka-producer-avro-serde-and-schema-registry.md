@@ -67,3 +67,4 @@ P06 では、注文のイベントを Outbox + Debezium で発行する(ADR-0007
 - 2026-10-08: P06 ⑤a で、§2(サービスは自動登録しない)の例外を ADR-0026 §4 に置いた。レガシーの生の CDC のスキーマは、Kafka Connect の AvroConverter がグループ `cdc-raw` に自動で登録する(スキーマの元は契約ではなく DB の定義で、Debezium が作る)。互換性のルール(FULL_TRANSITIVE)は引き続き効く。サービスは引き続き自動登録しない。
 - 2026-10-08: P06 ⑤b で、§4 の Producer に `sendTombstone`(compacted のトピックでキーの削除を表す。ヘッダは `send` と同じ)を加え、DLQ に送る `DeadLetterPublisher`(受け取ったバイト列のまま `{topic}.dlq` へ。`eiaf.dlq.*` のヘッダ。ADR-0026 §7)を加えた。最初の利用者は legacy-order-acl(DB の更新を伴わない送信)。P07 の Consumer の DLQ も同じ部品を使う。
 - 2026-10-08: P06 ⑤b で、`schema-publish` が一時的な失敗(接続できない・5xx)を、合計でおよそ 30 秒まで再試行するようにした。compose で Apicurio のヘルスチェック(管理用のポート)が UP になっても、REST のポートがまだ接続を受けず、最初の登録が失敗して `make up` が止まった(CI の `verify (cdc)` と手元の新しい基盤で再現)。拒否(互換性の違反など)は再試行しない。
+- 2026-10-09: P07 ① で、受信側の Consumer(`EventConsumer`)を `platform/messaging-kafka` に加えた。値は `AvroEventDeserializer`(§1)で読み、DLQ は `DeadLetterPublisher` を使う。受信・冪等消費・リトライと DLQ の決定は ADR-0028。
