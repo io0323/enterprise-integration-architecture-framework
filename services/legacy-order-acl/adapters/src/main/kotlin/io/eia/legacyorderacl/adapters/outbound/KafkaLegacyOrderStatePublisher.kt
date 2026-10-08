@@ -10,6 +10,8 @@ import io.eia.shared.kernel.DomainError
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.map
 import io.eia.shared.kernel.mapError
+import io.eia.shared.kernel.money.CurrencyResolver
+import io.eia.shared.kernel.money.Money
 
 /**
  * [LegacyOrderStatePublisher] の Kafka の実装。`sales.legacy-order.changed.v1`(compacted)に、注文番号をキーにして送る。
@@ -63,3 +65,23 @@ internal fun LegacyOrder.toEvent(position: ChangePosition): LegacyOrderChangedV1
         legacyUpdatedAt = legacyUpdatedAt,
         source = LegacyChangeSourceV1(position.lsn, position.committedAt, position.snapshot),
     )
+
+/** 出力の値を、照合で比べる domain の形にする(ADR-0027)。通貨が未知なら null(契約と実装の食い違い)。 */
+internal fun LegacyOrderChangedV1.toDomain(): LegacyOrder? {
+    val currency = CurrencyResolver.COMMON.resolve(totalAmount.currency) ?: return null
+    return LegacyOrder(
+        orderNumber = orderNumber,
+        customerCode = customerCode,
+        customerName = customerName,
+        status =
+            when (status) {
+                LegacyOrderStatusV1.ACCEPTED -> LegacyOrderStatus.ACCEPTED
+                LegacyOrderStatusV1.ALLOCATED -> LegacyOrderStatus.ALLOCATED
+                LegacyOrderStatusV1.SHIPPED -> LegacyOrderStatus.SHIPPED
+                LegacyOrderStatusV1.CANCELLED -> LegacyOrderStatus.CANCELLED
+            },
+        totalAmount = Money.ofMinor(totalAmount.minorUnits, currency),
+        orderedAt = orderedAt,
+        legacyUpdatedAt = legacyUpdatedAt,
+    )
+}

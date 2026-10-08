@@ -8,7 +8,7 @@ import io.eia.shared.kernel.err
 import io.eia.shared.kernel.ok
 
 /**
- * legacy-order-acl の設定(環境変数)。秘密情報はない(ローカルの Kafka と Apicurio は未認証。ADR-0008 の縮退・#26・#29)。
+ * legacy-order-acl の設定(環境変数)。Kafka と Apicurio はローカルでは未認証(ADR-0008 の縮退・#26・#29)。
  *
  * | 環境変数 | 既定 |
  * |---|---|
@@ -16,12 +16,14 @@ import io.eia.shared.kernel.ok
  * | `LEGACY_ORDER_ACL_SCHEMA_REGISTRY_URL` | なし(必須。例 `http://apicurio:8080/apis/registry/v3`) |
  * | `LEGACY_ORDER_ACL_GROUP_ID` | `legacy-order-acl.translate` |
  * | `LEGACY_ORDER_ACL_HEALTH_PORT` | 8081(`/health/live` と `/health/ready` だけ。平文。コンテナの外に公開しない) |
+ * | `LEGACY_ORDER_ACL_RECONCILE_*` | 照合の設定([ReconcileConfig])。レガシーの DB のパスワードだけは秘密情報(`LEGACY_RECONCILE_DB_PASSWORD`) |
  */
 internal data class AclConfig(
     val bootstrapServers: String,
     val schemaRegistryUrl: String,
     val groupId: String,
     val healthPort: Int,
+    val reconcile: ReconcileConfig? = null,
 ) {
     companion object {
         const val KAFKA_BOOTSTRAP = "LEGACY_ORDER_ACL_KAFKA_BOOTSTRAP"
@@ -43,8 +45,13 @@ internal data class AclConfig(
                     it.toIntOrNull()?.takeIf { p -> p in 0..MAX_PORT }
                         ?: (-1).also { violations += FieldViolation(HEALTH_PORT, "0〜65535 のポート番号にしてください") }
                 }
+            val reconcile =
+                when (val parsed = ReconcileConfig.fromEnvironment(env)) {
+                    is Result.Ok -> parsed.value
+                    is Result.Err -> null.also { violations += parsed.error.violations }
+                }
             return if (violations.isEmpty()) {
-                ok(AclConfig(bootstrap, registry, env[GROUP_ID] ?: LegacyChangeConsumer.GROUP_ID, port ?: DEFAULT_HEALTH_PORT))
+                ok(AclConfig(bootstrap, registry, env[GROUP_ID] ?: LegacyChangeConsumer.GROUP_ID, port ?: DEFAULT_HEALTH_PORT, reconcile))
             } else {
                 err(ValidationError(violations))
             }

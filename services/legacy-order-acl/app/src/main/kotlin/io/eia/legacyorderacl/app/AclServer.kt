@@ -6,10 +6,14 @@ import io.eia.platform.observability.Observability
 import io.eia.platform.observability.ObservabilityConfig
 import io.eia.platform.observability.ObservabilityRuntime
 import io.eia.platform.schemaregistry.SchemaIdBook
+import io.eia.platform.security.secret.EnvSecretProvider
+import io.eia.platform.security.secret.Secret
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.ValidationError
+import io.eia.shared.kernel.err
 import io.eia.shared.kernel.flatMap
 import io.eia.shared.kernel.map
+import io.eia.shared.kernel.ok
 import io.ktor.client.HttpClient
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
@@ -22,12 +26,14 @@ import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import org.apache.kafka.clients.admin.Admin
 import org.apache.kafka.clients.producer.Producer
 import org.koin.core.Koin
 import org.koin.dsl.koinApplication
@@ -72,6 +78,7 @@ internal class AclServer private constructor(
         consumerThread.shutdown()
         server.stop(GRACE_MILLIS, TIMEOUT_MILLIS)
         koin.get<Producer<ByteArray, ByteArray>>().close()
+        koin.getOrNull<Admin>()?.close()
         koin.get<HttpClient>().close()
         koin.close()
         runtime.close()
@@ -83,44 +90,72 @@ internal class AclServer private constructor(
         private const val TIMEOUT_MILLIS = 5_000L
         private val logger = LoggerFactory.getLogger(AclServer::class.java)
 
+        /** 照合をするなら、レガシーの DB のパスワード(SecretProvider)。照合をしないなら null。 */
+        internal fun reconcilePassword(
+            config: AclConfig,
+            env: Map<String, String>,
+        ): Result<Secret?, ValidationError> =
+            if (config.reconcile == null) {
+                ok(null)
+            } else {
+                when (val secret = EnvSecretProvider(env).get(ReconcileConfig.PASSWORD)) {
+                    is Result.Ok -> ok(secret.value)
+                    is Result.Err -> err(ValidationError.of(ReconcileConfig.PASSWORD.value, secret.error.message))
+                }
+            }
+
         fun start(
             env: Map<String, String>,
             committer: OffsetCommitter? = null,
         ): Result<AclServer, ValidationError> =
-            AclConfig.fromEnvironment(env).flatMap { config ->
-                val observabilityEnv = mapOf(ObservabilityConfig.ENV_SERVICE_NAME to "legacy-order-acl") + env
-                ObservabilityConfig.fromEnvironment(observabilityEnv).map { observability ->
-                    val runtime = Observability.init(observability)
-                    val koin = koinApplication { modules(aclModule(config, runtime, committer)) }.koin
-                    val schemaIds = koin.get<SchemaIdBook>()
-                    val loop = koin.get<LegacyChangeConsumer>()
-                    // Kafka の Consumer はスレッドセーフでないので、読み取りは 1 つのスレッドだけで行う
-                    val consumerThread = Executors.newSingleThreadExecutor { Thread(it, "legacy-order-acl-consumer") }
-                    val scope = CoroutineScope(SupervisorJob() + consumerThread.asCoroutineDispatcher())
-                    scope.launch {
-                        schemaIds.resolveUntilReady()
-                        loop.run()
+            AclConfig
+                .fromEnvironment(env)
+                .flatMap { config ->
+                    reconcilePassword(config, env).flatMap { password ->
+                        val observabilityEnv = mapOf(ObservabilityConfig.ENV_SERVICE_NAME to "legacy-order-acl") + env
+                        ObservabilityConfig.fromEnvironment(observabilityEnv).map { observability -> config to (password to observability) }
                     }
-                    val server =
-                        embeddedServer(Netty, configure = { connector { port = config.healthPort } }) {
-                            routing {
-                                get("/health/live") { call.respondText("""{"status":"UP"}""", ContentType.Application.Json) }
-                                get("/health/ready") {
-                                    if (schemaIds.isReady && loop.ready) {
-                                        call.respondText("""{"status":"UP"}""", ContentType.Application.Json)
-                                    } else {
-                                        call.respondText(
-                                            """{"status":"DOWN"}""",
-                                            ContentType.Application.Json,
-                                            HttpStatusCode.ServiceUnavailable,
-                                        )
+                }.map { (config, rest) ->
+                    val (password, observability) = rest
+                    run {
+                        val runtime = Observability.init(observability)
+                        val koin = koinApplication { modules(aclModule(config, runtime, committer, password)) }.koin
+                        val schemaIds = koin.get<SchemaIdBook>()
+                        val loop = koin.get<LegacyChangeConsumer>()
+                        // Kafka の Consumer はスレッドセーフでないので、読み取りは 1 つのスレッドだけで行う
+                        val consumerThread = Executors.newSingleThreadExecutor { Thread(it, "legacy-order-acl-consumer") }
+                        val scope = CoroutineScope(SupervisorJob() + consumerThread.asCoroutineDispatcher())
+                        scope.launch {
+                            schemaIds.resolveUntilReady()
+                            loop.run()
+                        }
+                        // 照合(ADR-0027)は読み取りのスレッドとは別に動かす(待ちの間も変換を止めない)
+                        koin.getOrNull<ReconcileJob>()?.let { job ->
+                            scope.launch(Dispatchers.Default) {
+                                schemaIds.resolveUntilReady()
+                                job.run()
+                            }
+                        } ?: logger.warn("照合は無効です({} がない)", ReconcileConfig.DB_URL)
+                        val server =
+                            embeddedServer(Netty, configure = { connector { port = config.healthPort } }) {
+                                routing {
+                                    get("/health/live") { call.respondText("""{"status":"UP"}""", ContentType.Application.Json) }
+                                    get("/health/ready") {
+                                        if (schemaIds.isReady && loop.ready) {
+                                            call.respondText("""{"status":"UP"}""", ContentType.Application.Json)
+                                        } else {
+                                            call.respondText(
+                                                """{"status":"DOWN"}""",
+                                                ContentType.Application.Json,
+                                                HttpStatusCode.ServiceUnavailable,
+                                            )
+                                        }
                                     }
                                 }
-                            }
-                        }.start(wait = false)
-                    logger.info("legacy-order-acl を起動しました")
-                    AclServer(server, koin, runtime, scope, consumerThread)
+                            }.start(wait = false)
+                        logger.info("legacy-order-acl を起動しました")
+                        AclServer(server, koin, runtime, scope, consumerThread)
+                    }
                 }
-            }
     }
 }
