@@ -31,6 +31,8 @@ make logs SERVICE=kafka-connect                                # Debezium のエ
 ## 警告の段階
 `CdcSlotWalAtRisk` / `CdcSlotLagHigh` / `CdcConnectorDown`。**まだイベントは失われていない。** 目的は、スロットが無効になる前に発行を再開させること。
 
+アラートの `slot_name` でコネクタを見分ける: `order_outbox` はコネクタ `order-outbox`、`legacy_juchu` はレガシーの CDC のコネクタ `legacy-juchu`(ADR-0026)。以下のコマンドのコネクタの名前を読み替える。ローカルで profile を切り替えた(cdc の後に order だけ)ために `legacy_juchu` が使われていない場合は、`infra/local/README.md` のトラブルシューティングを見る。
+
 1. **コネクタの復旧を急ぐ**(多くの場合はこれで解消する)
    - タスクが `FAILED`: 原因(status の `trace`、`make logs SERVICE=kafka-connect`)を確かめてから、タスクを再起動する。
      ```bash
