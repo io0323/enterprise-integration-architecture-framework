@@ -17,7 +17,7 @@ P03 で `infra/local/` に ADR-0003 のミドルウェア一式を Docker Compos
 | profile | サービス | 用途(フェーズ) |
 |---|---|---|
 | `core` | kafka, apicurio, postgres, keycloak, apisix, otel-collector, prometheus, tempo, loki, grafana | すべて(P04a〜) |
-| `cdc` | kafka-connect(Debezium), postgres-exporter, kafka-exporter | Outbox + CDC(P06)、レガシー CDC、その監視(P06 ④) |
+| `cdc` | kafka-connect(Debezium), postgres-exporter, kafka-exporter, legacy-migrate(1 回だけ動くコンテナ) | Outbox + CDC(P06)、レガシー CDC(legacy-sim → コネクタ legacy-juchu。P06 ⑤。ADR-0026)、その監視(P06 ④) |
 | `iot` | mosquitto | IoT(P11) |
 | `file` | seaweedfs, sftp | File(P09)、Audit のアンカー(P04a) |
 | `b2b` | seaweedfs, sftp-b2b | B2B / EDI(P12) |
@@ -153,3 +153,8 @@ Docker のヘルスチェックはコンテナの中で実行されるため、�
   - Prometheus に `rule_files`(`prometheus/rules/*.rules.yml`)を加えた。Alertmanager は置かない。ルールの単体テスト(`*.test.yml`)は `make alerts-test`(images.env の Prometheus の promtool)で、CI の infra の `compose config` のジョブでも実行する。
   - core だけで起動したときは exporter の scrape 先が down になる。`make verify` の core の「scrape 先がすべて up」から CDC の 3 つを除き、cdc / order の検査で確かめる。アラートも、その場合に firing しない条件にした(`cdc.rules.yml`)。
   - CI のランナーのメモリの前提(「private リポジトリの ubuntu-latest は 7GB 程度」)を、今の標準ランナー(4 コア・16GB)に直した。`mem_limit` の基準は §1 のとおり開発機(16GB のマシンで Docker に 8〜10GB)。
+- 2026-10-08: P06 ⑤a で、cdc の profile にレガシーの CDC を加えた(ADR-0026)。
+  - `legacy-migrate`(1 回だけ動くコンテナ。レガシーの表と DBA の CDC の設定)。`make up PROFILE=cdc` は先に `legacy-dist`(installDist)を作り、起動の後にコネクタ `legacy-juchu` を登録する。
+  - `kafka-connect` は `legacy-migrate` の成功を待つ(`required: false`。order の profile では legacy-migrate がない)。`up --wait` は、どのサービスも待たない 1 回だけのコンテナが終わると失敗にするため。
+  - レガシーのアプリの操作は、`make up` では起動しない profile `legacy-sim-cli` のサービス `legacy-sim` で行う(`make legacy-simulate ARGS="seed 10"`)。
+  - `make verify PROFILE=cdc` に、コネクタ・スロット・Debezium の権限・REPLICA IDENTITY・生のトピックへの到達・Apicurio のグループ cdc-raw の検査を加えた。CI の `verify (cdc)` は legacy-sim を作るため Java を用意し、`services/legacy-sim/**` の変更でも動く。

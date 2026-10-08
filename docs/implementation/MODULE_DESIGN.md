@@ -8,13 +8,14 @@
 
 | 対象 | パッケージ | 例 |
 |---|---|---|
-| `services/<service>/<layer>` | `<basePackage>.<service>.<layer>` | `io.eia.order.domain`, `io.eia.order.adapters` |
+| `services/<service>/<layer>` | `<basePackage>.<service>.<layer>`(`<service>` はディレクトリ名から `-` を除いた値) | `io.eia.order.domain`, `io.eia.legacysim.app`(services/legacy-sim) |
 | `shared/<module>` | `<basePackage>.shared.<module>` | `io.eia.shared.kernel`, `io.eia.shared.kernel.money` |
 | `shared/canonical-model` | `<basePackage>.shared.canonical.<domain>`(ドメイン単位: common / sales / catalog / billing / logistics。ADR-0011) | `io.eia.shared.canonical.sales` |
 | `platform/<module>` | `<basePackage>.platform.<module>` | `io.eia.platform.observability` |
 | `tools/<module>` | `<basePackage>.tools.<module>` | `io.eia.tools.architecture` |
 
 Konsist はパッケージでレイヤを判定するため、配置(`services/<service>/<layer>/`)とパッケージの一致も検査する(ADR-0010)。
+Kotlin のパッケージ名に `-` は使えないため、サービスのパッケージはディレクトリ名から `-` を除く(`ArchitectureRules.servicePackage`。`platform/messaging-kafka` → `messagingkafka` と同じ規則)。
 
 ターゲット構成と JVM 専用ライブラリの配置は ADR-0004 に従う。
 
@@ -85,6 +86,15 @@ services/order/
   app/Dockerfile                                              # distroless の nonroot。ADR-0024 §7
 ```
 
+**例外: レガシーの模擬(`services/legacy-sim`)は `app` の 1 モジュールだけ**(ADR-0026 §1)。改修できないレガシーの模擬で、業務のロジックを持たず、表のマイグレーション(`db/legacy`。V1 はレガシーの表、V2 は DBA の CDC の設定)と、レガシーのアプリの操作(`simulate`)だけを持つ。変換の知識(Anti-Corruption Layer)は持たない。ACL は連携する側の別のサービス(`services/legacy-order-acl`。4 モジュール。P06 ⑤b)に置く。理由は ADR-0026 §1(ACL は連携する側の責務で、改修できないレガシーには置けない。Framework 8.3 は CDC と変換を別の段に分ける)。
+```
+services/legacy-sim/app/
+  src/main/kotlin/io/eia/legacysim/app/   Main.kt(migrate / simulate), LegacySimCommands.kt, LegacySimConfig.kt, LegacySchema.kt(Flyway), LegacyJuchuApp.kt(レガシーのアプリの模擬)
+  src/main/resources/db/legacy/           V1__legacy_schema.sql(t_juchu), V2__dba_cdc_setup.sql(REPLICA IDENTITY FULL・権限・signal 表・publication)
+  src/integrationTest/                     LegacyCdcIT(legacy-sim → Debezium → 生の CDC のトピック)
+  Dockerfile                               migrate / simulate(make up PROFILE=cdc・make legacy-simulate)
+```
+
 **永続化の方針**(全サービスで揃える):
 - Exposed はトランザクションの管理に使い、ロックの意味が重要な SQL(楽観的ロック、`ON CONFLICT` など)は PreparedStatement で直接書く(`platform/audit` と同じ書き方。ADR-0017)。
 - マイグレーションは DB の所有者のロール(`{service}`)で適用し、アプリはマイグレーションが権限を付けたロール(`{service}_app`。所有者の権限を持たない)で接続する。監査の表(`AuditSchema`)も同じ DB に適用する。
@@ -104,7 +114,8 @@ services/order/
 | inventory | 在庫引当 | Kafka Consumer, gRPC |
 | payment | 決済(モック) | Kafka |
 | shipping | 出荷 | Kafka |
-| legacy-sim | レガシー基幹 DB 模擬 | CDC |
+| legacy-sim | レガシー基幹 DB 模擬(改修できないレガシー。表と `simulate` だけ。1 モジュール。ADR-0026) | CDC(生の CDC のトピック `_cdc.legacy.*`) |
+| legacy-order-acl | レガシーの受注の CDC の Anti-Corruption Layer(状態を持たない変換・DLQ。P06 ⑤b。ADR-0026) | CDC → Kafka(`sales.legacy-order.changed.v1`。INT-SALES-003) |
 | batch-etl | 分析基盤への ELT/ETL | Batch |
 | file-exchange | ファイル授受 | MFT (S3 互換ストレージ/SFTP) |
 | saas-mock / webhook-receiver / integration-flow | SaaS 連携 | REST, Webhook |
