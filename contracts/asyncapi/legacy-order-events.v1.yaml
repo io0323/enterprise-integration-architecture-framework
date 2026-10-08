@@ -10,6 +10,8 @@ info:
     - 削除は値のない tombstone(キーだけで値が null)で表す。
     - 配信は At-Least-Once。ACL の再起動などで同じ状態や、少し前の状態が再送されることがある。
       最後に届いた値が最新の状態になる(compacted の upsert として冪等)。状態が戻ることを許さない消費者は `source.lsn` で比べる。
+      ただし `source.snapshot=true`(初回・Incremental Snapshot で読み直した今の状態。照合の再同期を含む)のレコードは位置で比べられない
+      (共有の位置、または位置 0)。比べずに受け入れる(ずれを直すための送り直しを捨てないため)。
     - ヘッダは CloudEvents binary mode(`ce_*`)と `traceparent`・`correlationid`。レガシーはトレースを持たないため、トレースと
       correlationid は ACL が始める。tombstone にも同じヘッダを付ける。
 

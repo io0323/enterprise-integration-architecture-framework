@@ -50,7 +50,17 @@ class RawChangeMapperSpec :
             (streamed as Result.Ok).value.position.snapshot shouldBe false
         }
 
-        test("形が合わない(未知の op・行がない・LSN がない)ものは UNDECODABLE") {
+        test("Incremental Snapshot のレコードは LSN がなくても受け入れ、位置 0・snapshot=true にする(再同期で取り直した状態)") {
+            val change =
+                RawChangeMapper.toChange(
+                    RawJuchuEnvelope(after = row("J5"), source = source(lsn = null, snapshot = "incremental"), op = "r"),
+                )
+            val position = change.shouldBeInstanceOf<Result.Ok<LegacyOrderChange>>().value.position
+            position.lsn shouldBe 0L
+            position.snapshot shouldBe true
+        }
+
+        test("形が合わない(未知の op・行がない・ストリーミングの変更に LSN がない)ものは UNDECODABLE") {
             listOf(
                 RawJuchuEnvelope(after = row("J4"), source = source(), op = "t"),
                 RawJuchuEnvelope(source = source(), op = "c"),

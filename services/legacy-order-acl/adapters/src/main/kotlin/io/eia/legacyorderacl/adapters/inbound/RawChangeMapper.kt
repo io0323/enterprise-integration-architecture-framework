@@ -17,17 +17,23 @@ import kotlin.time.Instant
 internal object RawChangeMapper {
     private const val NOT_SNAPSHOT = "false"
 
+    /** LSN を持たない Snapshot のレコードの位置。 */
+    const val SNAPSHOT_WITHOUT_LSN: Long = 0L
+
     fun toChange(envelope: RawJuchuEnvelope): Result<LegacyOrderChange, TranslationError> {
+        val snapshot = envelope.source.snapshot != null && envelope.source.snapshot != NOT_SNAPSHOT
+        // Incremental Snapshot で読んだレコードは、LSN を持たないことがある(Debezium の仕様)。Snapshot は今の状態の読み直しで、
+        // 位置で比べるものではないので、位置 0 で受け入れる(契約の source.lsn。ADR-0026 §6)。ストリーミングの変更に LSN がなければ読めない
+        val lsn =
+            envelope.source.lsn ?: if (snapshot) SNAPSHOT_WITHOUT_LSN else return err(undecodable("source.lsn", "変更の位置(LSN)がない"))
         val position =
-            envelope.source.lsn?.let { lsn ->
-                ChangePosition(
-                    lsn = lsn,
-                    committedAt =
-                        envelope.source.committedAtMicros?.let(::instantOfMicros)
-                            ?: Instant.fromEpochMilliseconds(envelope.source.committedAtMillis),
-                    snapshot = envelope.source.snapshot != null && envelope.source.snapshot != NOT_SNAPSHOT,
-                )
-            } ?: return err(undecodable("source.lsn", "変更の位置(LSN)がない"))
+            ChangePosition(
+                lsn = lsn,
+                committedAt =
+                    envelope.source.committedAtMicros?.let(::instantOfMicros)
+                        ?: Instant.fromEpochMilliseconds(envelope.source.committedAtMillis),
+                snapshot = snapshot,
+            )
         return when (envelope.op) {
             "c", "u", "r" -> {
                 envelope.after?.let { ok(LegacyOrderChange.Upsert(it.toRow(), position)) }
