@@ -40,8 +40,8 @@ import java.util.concurrent.Executors
  * legacy-order-acl のプロセス(ADR-0026)。
  *
  * - 書き込むイベントのスキーマ ID を解決してから、生の CDC の読み取りを始める([LegacyChangeConsumer]。1 つのスレッドで動かす)。
- * - ヘルスチェックのポートは平文で `/health/live` と `/health/ready` だけ。ready は、スキーマ ID をすべて解決し、
- *   パーティションを割り当てられ、直近の処理が一時的な失敗でないときだけ UP。
+ * - ヘルスチェックのポートは平文で `/health/live` と `/health/ready` だけ。ready は、スキーマ ID をすべて解決して読み取りを始め、
+ *   直近の処理が一時的な失敗でないときだけ UP(処理の遅れは Consumer Group の lag で監視する。ADR-0026 §10)。
  */
 internal class AclServer private constructor(
     private val server: EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration>,
