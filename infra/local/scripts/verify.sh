@@ -350,6 +350,8 @@ verify_legacy_cdc() {
   check "照合(legacy): eiaf_reconcile は接続数 4・statement_timeout 30s・idle_in_transaction 60s・読み取り専用" \
     equals "4|statement_timeout=30s,idle_in_transaction_session_timeout=60s,default_transaction_read_only=on" \
     psql_super "select rolconnlimit || '|' || array_to_string(rolconfig, ',', '') from pg_roles where rolname = 'eiaf_reconcile'"
+  check "再同期(legacy): eiaf_resync の権限は signal 表の INSERT だけ" equals "eiaf_cdc.debezium_signal:INSERT" \
+    legacy_db "select string_agg(table_schema || '.' || table_name || ':' || privilege_type, ',') from information_schema.role_table_grants where grantee = 'eiaf_resync'"
   check "照合(legacy): eiaf_reconcile の表の権限は t_juchu の SELECT だけ" equals "public.t_juchu:SELECT" \
     legacy_db "select string_agg(table_schema || '.' || table_name || ':' || privilege_type, ',') from information_schema.role_table_grants where grantee = 'eiaf_reconcile'"
   # 定期の照合(2 分ごと)が、直近の 6 分以内に成功し、ずれが 0 件(変換できない受注は既知の差で、ずれに数えない)
@@ -360,9 +362,9 @@ verify_legacy_cdc() {
   }
   check "照合(legacy): 定期の照合が成功し、ずれが 0 件(Prometheus)" retry 40 6 reconcile_ok
   local manual
-  manual="$("${compose[@]}" run --rm --no-deps legacy-order-acl reconcile 2>/dev/null; echo "exit=$?")"
+  manual="$("${compose[@]}" run --rm --no-deps legacy-order-acl reconcile --dry-run 2>/dev/null; echo "exit=$?")"
   if grep -q '^exit=0$' <<<"$manual" && grep -q '^position=.* drift=0 unconvertible=[1-9]' <<<"$manual"; then
-    pass "照合(legacy): 手動の照合(legacy-order-acl reconcile)が一致で終わり、変換できない受注を別に数える"
+    pass "照合(legacy): 手動の照合(legacy-order-acl reconcile --dry-run)が一致で終わり、変換できない受注を別に数える"
   else
     fail "照合(legacy): 手動の照合が一致で終わらない ($(grep -E '^(position|exit)=' <<<"$manual" | tr '\n' ' '))"
   fi
