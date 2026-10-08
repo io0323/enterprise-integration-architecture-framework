@@ -10,4 +10,5 @@ dependencies {
     kover(project(":services:order:application"))
     kover(project(":services:order:adapters"))
     kover(project(":services:order:app"))
+    kover(project(":services:legacy-sim:app"))
 }
