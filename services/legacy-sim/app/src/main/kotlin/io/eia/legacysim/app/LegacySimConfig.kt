@@ -15,12 +15,14 @@ import io.eia.shared.kernel.ok
  * | `LEGACY_SIM_DB_USER` / `LEGACY_SIM_DB_PASSWORD`(または `_FILE`) | `legacy_sim` / なし | migrate だけ(所有者。DBA の作業も行う) |
  * | `LEGACY_SIM_APP_DB_USER` / `LEGACY_SIM_APP_DB_PASSWORD`(または `_FILE`) | `legacy_sim_app` / なし | simulate だけ(レガシーのアプリ) |
  * | `LEGACY_SIM_CDC_DB_USER` | `debezium` | migrate(受注表の SELECT と signal 表の権限を付ける Debezium のロール) |
+ * | `LEGACY_SIM_RECONCILE_DB_USER` | `eiaf_reconcile` | migrate(受注表の SELECT を付ける照合のロール。ADR-0027) |
  */
 internal data class LegacySimConfig(
     val dbUrl: String,
     val ownerUser: String,
     val appUser: String,
     val cdcUser: String,
+    val reconcileUser: String,
 ) {
     companion object {
         const val DB_URL = "LEGACY_SIM_DB_URL"
@@ -29,7 +31,9 @@ internal data class LegacySimConfig(
         private const val OWNER_USER = "LEGACY_SIM_DB_USER"
         private const val APP_USER = "LEGACY_SIM_APP_DB_USER"
         private const val CDC_USER = "LEGACY_SIM_CDC_DB_USER"
-        private val ROLE_DEFAULTS = mapOf(OWNER_USER to "legacy_sim", APP_USER to "legacy_sim_app", CDC_USER to "debezium")
+        private const val RECONCILE_USER = "LEGACY_SIM_RECONCILE_DB_USER"
+        private val ROLE_DEFAULTS =
+            mapOf(OWNER_USER to "legacy_sim", APP_USER to "legacy_sim_app", CDC_USER to "debezium", RECONCILE_USER to "eiaf_reconcile")
         private val ROLE_NAME = Regex("^[a-z_][a-z0-9_]{0,62}$")
 
         fun fromEnvironment(env: Map<String, String>): Result<LegacySimConfig, ValidationError> {
@@ -38,10 +42,29 @@ internal data class LegacySimConfig(
             // ロール名は GRANT の SQL に埋め込むため、識別子として安全な文字だけを許す
             val unsafeRole = roles.entries.firstOrNull { !ROLE_NAME.matches(it.value) }
             return when {
-                url.isBlank() -> err(ValidationError.of(DB_URL, "必須です"))
-                !url.startsWith("jdbc:postgresql://") -> err(ValidationError.of(DB_URL, "jdbc:postgresql:// で始まる URL にしてください"))
-                unsafeRole != null -> err(ValidationError.of(unsafeRole.key, "英小文字・数字・_ の 63 文字以内にしてください"))
-                else -> ok(LegacySimConfig(url, roles.getValue(OWNER_USER), roles.getValue(APP_USER), roles.getValue(CDC_USER)))
+                url.isBlank() -> {
+                    err(ValidationError.of(DB_URL, "必須です"))
+                }
+
+                !url.startsWith("jdbc:postgresql://") -> {
+                    err(ValidationError.of(DB_URL, "jdbc:postgresql:// で始まる URL にしてください"))
+                }
+
+                unsafeRole != null -> {
+                    err(ValidationError.of(unsafeRole.key, "英小文字・数字・_ の 63 文字以内にしてください"))
+                }
+
+                else -> {
+                    ok(
+                        LegacySimConfig(
+                            url,
+                            roles.getValue(OWNER_USER),
+                            roles.getValue(APP_USER),
+                            roles.getValue(CDC_USER),
+                            roles.getValue(RECONCILE_USER),
+                        ),
+                    )
+                }
             }
         }
     }

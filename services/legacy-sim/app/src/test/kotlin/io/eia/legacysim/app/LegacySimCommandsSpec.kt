@@ -54,7 +54,7 @@ class LegacySimCommandsSpec :
             test("既定のロール名") {
                 val config = LegacySimConfig.fromEnvironment(mapOf(LegacySimConfig.DB_URL to "jdbc:postgresql://db:5432/legacy_sim"))
                 config.shouldBeInstanceOf<Result.Ok<LegacySimConfig>>().value shouldBe
-                    LegacySimConfig("jdbc:postgresql://db:5432/legacy_sim", "legacy_sim", "legacy_sim_app", "debezium")
+                    LegacySimConfig("jdbc:postgresql://db:5432/legacy_sim", "legacy_sim", "legacy_sim_app", "debezium", "eiaf_reconcile")
             }
 
             test("URL がない・PostgreSQL でない・ロール名が識別子として安全でない") {
