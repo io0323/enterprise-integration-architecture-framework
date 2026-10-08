@@ -3,7 +3,6 @@ package io.eia.legacyorderacl.app
 import io.eia.legacyorderacl.application.port.inbound.ReconciliationReport
 import io.eia.platform.observability.Observability
 import io.eia.platform.observability.ObservabilityConfig
-import io.eia.platform.security.secret.Secret
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.err
 import io.eia.shared.kernel.flatMap
@@ -17,7 +16,8 @@ import org.koin.dsl.koinApplication
 import org.slf4j.LoggerFactory
 
 /**
- * `legacy-order-acl reconcile`: 照合を 1 回行い、結果を 1 行ずつ [output] に出す(ADR-0027。Runbook の手動の確認)。
+ * `legacy-order-acl reconcile [--dry-run]`: 照合を 1 回行い、結果を 1 行ずつ [output] に出す(ADR-0027。Runbook の手動の確認)。
+ * 自動の再同期が有効なら、ずれを取り直す(定期の照合と同じ)。`--dry-run` なら比べるだけで、取り直さない。
  *
  * 終了コード: 0 = 一致 / 1 = ずれがある / 2 = 設定の誤り / 3 = 検査の失敗(取り込み・処理の待ちの超過、依存先の失敗)
  */
@@ -31,6 +31,7 @@ internal object ReconcileCommand {
     fun run(
         env: Map<String, String>,
         output: (String) -> Unit,
+        dryRun: Boolean = false,
     ): Int =
         when (val prepared = prepare(env)) {
             is Result.Err -> {
@@ -39,20 +40,21 @@ internal object ReconcileCommand {
 
             is Result.Ok -> {
                 val (config, password, observability) = prepared.value
-                execute(config, password, observability, output)
+                execute(config, password, observability, output, dryRun)
             }
         }
 
     private fun execute(
         config: AclConfig,
-        password: Secret?,
+        password: ReconcileSecrets?,
         observability: ObservabilityConfig,
         output: (String) -> Unit,
+        dryRun: Boolean,
     ): Int =
         Observability.init(observability).use { runtime ->
-            val koin = koinApplication { modules(aclModule(config, runtime, committer = null, reconcilePassword = password)) }.koin
+            val koin = koinApplication { modules(aclModule(config, runtime, committer = null, reconcileSecrets = password)) }.koin
             try {
-                when (val result = runBlocking { koin.get<ReconcileJob>().runOnce() }) {
+                when (val result = runBlocking { koin.get<ReconcileJob>().runOnce(resync = !dryRun) }) {
                     is Result.Ok -> print(result.value, output)
                     is Result.Err -> FAILED.also { output("照合を終えられませんでした: ${result.error.message}") }
                 }
@@ -64,12 +66,12 @@ internal object ReconcileCommand {
         }
 
     /** 設定・パスワード・OTel の設定。誤りはログに出すメッセージで返す。 */
-    private fun prepare(env: Map<String, String>): Result<Triple<AclConfig, Secret?, ObservabilityConfig>, String> =
+    private fun prepare(env: Map<String, String>): Result<Triple<AclConfig, ReconcileSecrets?, ObservabilityConfig>, String> =
         AclConfig
             .fromEnvironment(env)
             .mapError { it.message }
             .flatMap { config -> if (config.reconcile == null) err("${ReconcileConfig.DB_URL} が必要です") else ok(config) }
-            .flatMap { config -> AclServer.reconcilePassword(config, env).mapError { it.message }.map { config to it } }
+            .flatMap { config -> AclServer.reconcileSecrets(config, env).mapError { it.message }.map { config to it } }
             .flatMap { (config, password) ->
                 ObservabilityConfig
                     .fromEnvironment(mapOf(ObservabilityConfig.ENV_SERVICE_NAME to "legacy-order-acl") + env)
