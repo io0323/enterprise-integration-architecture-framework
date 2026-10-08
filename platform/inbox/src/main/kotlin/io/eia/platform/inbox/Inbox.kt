@@ -54,9 +54,10 @@ public class Inbox {
             } else {
                 val inserted =
                     connection.prepareStatement(INSERT).use { statement ->
-                        statement.setString(1, consumerGroup)
-                        statement.setObject(2, UUID.fromString(messageId.toString()))
-                        statement.setString(3, topic)
+                        var index = 0
+                        statement.setString(++index, consumerGroup)
+                        statement.setObject(++index, UUID.fromString(messageId.toString()))
+                        statement.setString(++index, topic)
                         statement.executeUpdate()
                     }
                 ok(if (inserted == 1) Receipt.FIRST else Receipt.DUPLICATE)

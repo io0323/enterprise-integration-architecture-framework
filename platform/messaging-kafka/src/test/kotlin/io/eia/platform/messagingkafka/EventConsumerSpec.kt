@@ -110,7 +110,9 @@ class EventConsumerSpec :
             fun committed(): OffsetAndMetadata? = consumer.committed(setOf(PARTITION))[PARTITION]
 
             fun deadLettered(): List<Map<String, String>> =
-                dlq.history().map { r -> r.headers().filter { it.key().startsWith("eiaf.dlq.") }.associate { it.key() to String(it.value()) } }
+                dlq.history().map { r ->
+                    r.headers().filter { it.key().startsWith("eiaf.dlq.") }.associate { it.key() to String(it.value()) }
+                }
         }
 
         fun fixture(
@@ -122,9 +124,18 @@ class EventConsumerSpec :
             val consumer = MockConsumer<ByteArray?, ByteArray?>(AutoOffsetResetStrategy.EARLIEST.name())
             consumer.assign(listOf(PARTITION))
             consumer.updateBeginningOffsets(mapOf(PARTITION to 0L))
-            val subscription = EventSubscription(TOPIC, AvroEventDeserializer(ParcelShipped.serializer(), writerSchemas), "INT-TEST-001", handler)
+            val subscription =
+                EventSubscription(TOPIC, AvroEventDeserializer(ParcelShipped.serializer(), writerSchemas), "INT-TEST-001", handler)
             val loop =
-                EventConsumer(consumer, GROUP, listOf(subscription), DeadLetterPublisher(dlq), runtime, handlerRetry = FAST_RETRY, committer = committer)
+                EventConsumer(
+                    consumer,
+                    GROUP,
+                    listOf(subscription),
+                    DeadLetterPublisher(dlq),
+                    runtime,
+                    handlerRetry = FAST_RETRY,
+                    committer = committer,
+                )
             return Fixture(consumer, dlq, loop)
         }
 
@@ -342,7 +353,8 @@ class EventConsumerSpec :
         }
 
         test("HandlingFailure.of は NonRetryable を Rejected、Retryable を Transient にする") {
-            HandlingFailure.of(MalformedEventPayload("x")) shouldBe HandlingFailure.Rejected("malformed_event_payload", "イベントのペイロードを読めません(x)")
+            HandlingFailure.of(MalformedEventPayload("x")) shouldBe
+                HandlingFailure.Rejected("malformed_event_payload", "イベントのペイロードを読めません(x)")
             HandlingFailure.of(PublishFailed.Retryable("t", "r")) shouldBe HandlingFailure.Transient("publish_failed", "t への送信に失敗しました(r)")
         }
     })

@@ -10,13 +10,15 @@ import io.opentelemetry.api.metrics.Meter
  * [EventConsumer] のメトリクス(ADR-0028 §5)。OTLP → Collector → Prometheus(`eia_consumer_messages_total` など)。
  * 遅れ(lag)は Kafka 側(kafka-exporter の `kafka_consumergroup_lag`)で見る。
  *
+ * 属性の「トピック」は `messaging.destination.name`、「グループ」は `messaging.consumer.group.name`。
+ *
  * | 名前 | 種類 | 属性 |
  * |---|---|---|
- * | `eia.consumer.messages` | counter | `messaging.destination.name`・`messaging.consumer.group.name`・`outcome`(`processed` / `duplicate` / `dead_lettered`) |
- * | `eia.consumer.dead_letters` | counter | `messaging.destination.name`・`messaging.consumer.group.name`・`reason`(DLQ の `eiaf.dlq.reason`) |
- * | `eia.consumer.retries` | counter | `messaging.destination.name`・`messaging.consumer.group.name`・`error.code`(Transient のその場のリトライ) |
- * | `eia.consumer.unavailable` | counter | `messaging.consumer.group.name`・`error.code`(Unavailable で読み直した回数) |
- * | `eia.consumer.process.duration` | histogram(秒) | `messaging.destination.name`・`messaging.consumer.group.name` |
+ * | `eia.consumer.messages` | counter | トピック・グループ・`outcome`(`processed` / `duplicate` / `dead_lettered`) |
+ * | `eia.consumer.dead_letters` | counter | トピック・グループ・`reason`(DLQ の `eiaf.dlq.reason`) |
+ * | `eia.consumer.retries` | counter | トピック・グループ・`error.code`(Transient のその場のリトライ) |
+ * | `eia.consumer.unavailable` | counter | グループ・`error.code`(Unavailable で読み直した回数) |
+ * | `eia.consumer.process.duration` | histogram(秒) | トピック・グループ |
  */
 public class ConsumerMetrics(
     meter: Meter,

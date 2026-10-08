@@ -33,8 +33,10 @@
 | `eiaf.dlq.reason` | 原因の種類(例 `UNKNOWN_STATUS_CODE`・`UNDECODABLE`)。種類の数は有限にする(メトリクスのラベルにも使う) |
 | `eiaf.dlq.detail` | 項目・列の名前と破った規則。**値は入れない**(ペイロードの全文のログの禁止・機密区分) |
 | `eiaf.dlq.source.topic` / `eiaf.dlq.source.partition` / `eiaf.dlq.source.offset` | 元のメッセージの位置 |
-| `eiaf.dlq.attempts` | 処理を試みた回数(決定的な誤りはリトライしないので 1) |
+| `eiaf.dlq.attempts` | 処理を試みた回数(決定的な誤りはリトライしないので 1。一時的な失敗のリトライが尽きた場合は 4 = 初回 + 3 回。ADR-0028 §2) |
 | `eiaf.dlq.failed-at` | DLQ に送った時刻(ISO 8601 の UTC) |
+
+Consumer(`EventConsumer`。ADR-0028 §2)が自分で判定する `eiaf.dlq.reason` は `INVALID_HEADERS`(CloudEvents のヘッダの欠落・不正)・`UNDECODABLE`(Avro として読めない)・`UNEXPECTED_TOMBSTONE`(値がない)・`UNEXPECTED_EXCEPTION`(処理が想定しない例外を投げた)。それ以外は処理が返したコードを大文字にしたもの。自分の DB・Schema Registry が使えない間のメッセージは DLQ に送らず、読み直す(lag のアラートで検知する)。
 
 DLQ のトピックは、元のメッセージと同じ機密区分として扱う(値をそのまま運ぶため)。保持期間はトピックの定義(`infra/local/kafka/topics.conf`)に書く。
 

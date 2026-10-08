@@ -206,7 +206,7 @@ class InboxIT :
         test("purgeExpired は DB の時計で保持期間を過ぎた行だけを、上限の件数ずつ古い順に消す") {
             val database = newDatabase()
             app(database).connection.use { connection ->
-                (1..5).forEach { n -> consume(connection, Uuid.parse("0199b6a0-0000-7000-8000-00000000010$n"), "r-$n") }
+                for (n in 1..5) consume(connection, Uuid.parse("0199b6a0-0000-7000-8000-00000000010$n"), "r-$n")
             }
             // 3 件を 15 日前・14 日前 - 1 時間・13 日前に記録したことにする(所有者で書き換える)
             superuser(database).connection.use { connection ->
@@ -256,7 +256,9 @@ class InboxIT :
             superuser(database).connection.use { connection ->
                 shouldThrow<SQLException> {
                     connection.createStatement().use {
-                        it.execute("INSERT INTO inbox.processed_message (consumer_group, message_id, topic) VALUES ('x', gen_random_uuid(), 't')")
+                        it.execute(
+                            "INSERT INTO inbox.processed_message (consumer_group, message_id, topic) VALUES ('x', gen_random_uuid(), 't')",
+                        )
                     }
                 }.sqlState shouldBe "23514"
             }
