@@ -318,13 +318,19 @@ verify_legacy_cdc() {
   else
     fail "ACL(legacy): 登録した受注(${number:-登録できない})が $out に届かない"
   fi
-  anomaly="$("${compose[@]}" --profile legacy-sim-cli run --rm --build --no-deps legacy-sim simulate anomaly unknown-status 2>/dev/null | grep -E '^J[0-9]{9}$' | tail -1 || true)"
-  dlq_reason() { # dlq_reason <受注番号>(DLQ のその受注のレコードの eiaf.dlq.reason)
+  # DLQ のキーと値はバイト列のまま(Converter の Avro。contentId のバイトに改行の値が入ると、1 件が複数行に割れる)。
+  # そのため、テキストのヘッダだけを出し、原因が UNKNOWN_STATUS_CODE のレコードの件数が、変換できない受注の登録の後に増えたことを見る
+  dlq_unknown_status() {
     kafka_cli /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic "$dlq" --from-beginning --timeout-ms 5000 \
-      --property print.key=true --property print.headers=true 2>/dev/null | grep -a -F "$1" | grep -a -o 'eiaf.dlq.reason:[A-Z_]*' | tail -1
+      --property print.headers=true --property print.key=false --property print.value=false 2>/dev/null |
+      grep -a -c 'eiaf.dlq.reason:UNKNOWN_STATUS_CODE' || true
   }
-  if [[ -n "$anomaly" ]] && retry 30 2 equals "eiaf.dlq.reason:UNKNOWN_STATUS_CODE" dlq_reason "$anomaly"; then
-    pass "ACL(legacy): 変換できない受注($anomaly)が $dlq に原因のヘッダ付きで入る"
+  dlq_grew() { [[ "$(dlq_unknown_status)" -gt "$1" ]]; }
+  local before
+  before="$(dlq_unknown_status)"
+  anomaly="$("${compose[@]}" --profile legacy-sim-cli run --rm --build --no-deps legacy-sim simulate anomaly unknown-status 2>/dev/null | grep -E '^J[0-9]{9}$' | tail -1 || true)"
+  if [[ -n "$anomaly" ]] && retry 30 2 dlq_grew "${before:-0}"; then
+    pass "ACL(legacy): 変換できない受注($anomaly)が $dlq に原因のヘッダ(UNKNOWN_STATUS_CODE)付きで入る"
   else
     fail "ACL(legacy): 変換できない受注(${anomaly:-登録できない})が $dlq に入らない"
   fi
