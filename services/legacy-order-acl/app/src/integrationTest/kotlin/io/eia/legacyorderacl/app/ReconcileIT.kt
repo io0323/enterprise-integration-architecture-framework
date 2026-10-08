@@ -4,17 +4,26 @@ package io.eia.legacyorderacl.app
 
 import io.eia.legacyorderacl.adapters.outbound.LegacyOrderEventSchemas
 import io.eia.legacyorderacl.adapters.reconcile.JdbcLegacySource
+import io.eia.legacyorderacl.adapters.reconcile.JdbcSnapshotRequests
 import io.eia.legacyorderacl.adapters.reconcile.KafkaPublishedLegacyOrders
+import io.eia.legacyorderacl.adapters.reconcile.KafkaReconcileTombstones
 import io.eia.legacyorderacl.adapters.reconcile.PublishedReaderSettings
 import io.eia.legacyorderacl.adapters.reconcile.ReconcileWaits
 import io.eia.legacyorderacl.adapters.reconcile.Sha256Fingerprints
 import io.eia.legacyorderacl.application.port.inbound.Mismatch
 import io.eia.legacyorderacl.application.port.inbound.ReconciliationReport
+import io.eia.legacyorderacl.application.port.inbound.ResyncResult
 import io.eia.legacyorderacl.application.port.outbound.LegacySource
 import io.eia.legacyorderacl.application.port.outbound.ReconcileScope
 import io.eia.legacyorderacl.application.port.outbound.SourceSnapshot
 import io.eia.legacyorderacl.application.usecase.ReconcileLegacyOrdersService
+import io.eia.legacyorderacl.application.usecase.ResyncLegacyOrdersService
 import io.eia.platform.messagingkafka.ApicurioWireFormat
+import io.eia.platform.messagingkafka.EventProducer
+import io.eia.platform.messagingkafka.KafkaProducerSettings
+import io.eia.platform.observability.Observability
+import io.eia.platform.observability.ObservabilityConfig
+import io.eia.platform.observability.TelemetrySinks
 import io.eia.platform.schemaregistry.ApicurioRegistryClient
 import io.eia.platform.schemaregistry.ContentId
 import io.eia.platform.schemaregistry.SchemaRegistryConfig
@@ -48,10 +57,12 @@ import org.apache.avro.io.EncoderFactory
 import org.apache.kafka.clients.admin.Admin
 import org.apache.kafka.clients.admin.AdminClientConfig
 import org.apache.kafka.clients.admin.NewTopic
+import org.apache.kafka.clients.admin.OffsetSpec
 import org.apache.kafka.clients.consumer.KafkaConsumer
 import org.apache.kafka.clients.producer.KafkaProducer
 import org.apache.kafka.clients.producer.ProducerConfig
 import org.apache.kafka.clients.producer.ProducerRecord
+import org.apache.kafka.common.TopicPartition
 import org.apache.kafka.common.serialization.ByteArraySerializer
 import org.postgresql.ds.PGSimpleDataSource
 import org.testcontainers.containers.Network
@@ -111,9 +122,12 @@ class ReconcileIT :
         val appPassword = randomHex()
         val cdcPassword = randomHex()
         val reconcilePassword = randomHex()
+        val resyncPassword = randomHex()
         val connect = KafkaConnectContainer("kafka:19092", mapOf("DEBEZIUM_DB_PASSWORD" to cdcPassword)).withNetwork(network)
         val http = JdkHttpClient.newHttpClient()
         val registryHttp = HttpClient(CIO)
+        val runtime = Observability.init(ObservabilityConfig.of("reconcile-it").ok(), TelemetrySinks(), installLogAppender = false)
+        val producers = mutableListOf<KafkaProducer<ByteArray, ByteArray>>()
         lateinit var acl: AclServer
 
         // ACL と reconcile のサブコマンドの環境(コンテナの起動の後に決まる)
@@ -124,6 +138,7 @@ class ReconcileIT :
                 AclConfig.HEALTH_PORT to "0",
                 ReconcileConfig.DB_URL to postgres.jdbcUrl.replaceAfterLast('/', "legacy_sim"),
                 ReconcileConfig.PASSWORD.value to reconcilePassword,
+                ReconcileConfig.RESYNC_PASSWORD.value to resyncPassword,
                 ReconcileConfig.INTERVAL to "1h",
                 ReconcileConfig.RECHECK_AFTER to "3s",
                 ReconcileConfig.WAIT_TIMEOUT to "60s",
@@ -146,6 +161,11 @@ class ReconcileIT :
         }
 
         // クラスタの全体を見る(ロールと DB の作成・pg_stat_activity)ので、既定の DB に接続する
+        fun <T> superuserIn(
+            database: String,
+            block: (Connection) -> T,
+        ): T = dataSource(postgres.username, postgres.password, database).connection.use(block)
+
         fun <T> superuser(block: (Connection) -> T): T =
             dataSource(postgres.username, postgres.password, postgres.databaseName).connection.use(block)
 
@@ -305,17 +325,29 @@ class ReconcileIT :
                     s.execute("CREATE ROLE legacy_sim_app LOGIN PASSWORD '$appPassword'")
                     s.execute("CREATE ROLE debezium LOGIN REPLICATION PASSWORD '$cdcPassword'")
                     s.execute("CREATE ROLE eiaf_reconcile LOGIN PASSWORD '$reconcilePassword' CONNECTION LIMIT 4")
+                    s.execute("CREATE ROLE eiaf_resync LOGIN PASSWORD '$resyncPassword' CONNECTION LIMIT 2")
                     s.execute("ALTER ROLE eiaf_reconcile SET statement_timeout = '30s'")
                     s.execute("ALTER ROLE eiaf_reconcile SET idle_in_transaction_session_timeout = '60s'")
                     s.execute("ALTER ROLE eiaf_reconcile SET default_transaction_read_only = on")
                     s.execute("CREATE DATABASE legacy_sim OWNER legacy_sim")
-                    s.execute("GRANT CONNECT ON DATABASE legacy_sim TO legacy_sim_app, debezium, eiaf_reconcile")
+                    s.execute("GRANT CONNECT ON DATABASE legacy_sim TO legacy_sim_app, debezium, eiaf_reconcile, eiaf_resync")
                 }
             }
             // legacy-sim のマイグレーション(V1 レガシーの表、V2 CDC の設定、V3 照合の権限)を、所有者で適用する
-            val placeholders = mapOf("appRole" to "legacy_sim_app", "cdcRole" to "debezium", "reconcileRole" to "eiaf_reconcile")
+            val placeholders =
+                mapOf(
+                    "appRole" to "legacy_sim_app",
+                    "cdcRole" to "debezium",
+                    "reconcileRole" to "eiaf_reconcile",
+                    "resyncRole" to "eiaf_resync",
+                )
             dataSource("legacy_sim", ownerPassword).connection.use { c ->
-                listOf("V1__legacy_schema.sql", "V2__dba_cdc_setup.sql", "V3__dba_reconcile_grants.sql").forEach { file ->
+                listOf(
+                    "V1__legacy_schema.sql",
+                    "V2__dba_cdc_setup.sql",
+                    "V3__dba_reconcile_grants.sql",
+                    "V4__dba_resync_grants.sql",
+                ).forEach { file ->
                     val sql =
                         placeholders.entries.fold(
                             repositoryRoot.resolve("services/legacy-sim/app/src/main/resources/db/legacy/$file").readText(),
@@ -369,6 +401,8 @@ class ReconcileIT :
         }
 
         afterSpec {
+            producers.forEach { it.close() }
+            runtime.close()
             acl.stop()
             admin.close()
             registryHttp.close()
@@ -430,11 +464,100 @@ class ReconcileIT :
 
         test("reconcile のサブコマンド(Runbook の手動の照合)は、ずれのキーと種類を出して終了コード 1 で終わる") {
             val lines = mutableListOf<String>()
-            ReconcileCommand.run(aclEnv, lines::add) shouldBe ReconcileCommand.DRIFT
+            // --dry-run: 比べるだけで取り直さない(このテストの後の再同期のテストのために、ずれを残す)
+            ReconcileCommand.run(aclEnv, dryRun = true, output = lines::add) shouldBe ReconcileCommand.DRIFT
             lines.filter { it.startsWith("DRIFT ") || it.startsWith("UNCONVERTIBLE ") } shouldBe
                 listOf("DRIFT STALE R000000001", "DRIFT MISSING R000000004", "DRIFT EXTRA Z000000009", "UNCONVERTIBLE R000000003")
             lines.first() shouldStartWith "position="
             ReconcileCommand.run(aclEnv - ReconcileConfig.DB_URL) {} shouldBe ReconcileCommand.USAGE
+        }
+
+        /** 本番と同じアダプタで組み立てた再同期。[limit] は取り直すキーの上限。 */
+        fun resync(limit: Int = 100): ResyncLegacyOrdersService {
+            val producer =
+                KafkaProducer(
+                    KafkaProducerSettings(kafka.bootstrapServers, "reconcile-it").toProperties(),
+                    ByteArraySerializer(),
+                    ByteArraySerializer(),
+                )
+            producers += producer
+            return ResyncLegacyOrdersService(
+                source = source(),
+                snapshots = JdbcSnapshotRequests(dataSource("eiaf_resync", resyncPassword)),
+                tombstones = KafkaReconcileTombstones(EventProducer(producer, runtime, KafkaReconcileTombstones.SOURCE)),
+                limit = limit,
+            )
+        }
+
+        fun signals(): Long =
+            superuserIn("legacy_sim") { c ->
+                c.createStatement().use { s ->
+                    s.executeQuery("SELECT count(*) FROM eiaf_cdc.debezium_signal WHERE type = 'execute-snapshot'").use { rs ->
+                        rs.next()
+                        rs.getLong(1)
+                    }
+                }
+            }
+
+        fun outputEnd(): Long =
+            admin
+                .listOffsets(
+                    (0..2).associate { TopicPartition(OUTPUT_TOPIC, it) to OffsetSpec.latest() },
+                ).all()
+                .get()
+                .values
+                .sumOf { it.offset() }
+
+        test("ずれのキーが上限を超えたら、一部だけを取り直すこともせず、何もしない(signal 表にも出力にも書かない)") {
+            val report = reconcile().ok()
+            report.drift.size shouldBe 3
+            val signalsBefore = signals()
+            val outputBefore = outputEnd()
+
+            resync(limit = 2)(report).ok() shouldBe ResyncResult.OverLimit(3, 2)
+
+            signals() shouldBe signalsBefore
+            outputEnd() shouldBe outputBefore
+            // ずれはそのまま残る(人が判断する。LegacyReconcileDriftOverLimit)
+            reconcile().ok().drift.keys shouldBe setOf("R000000001", "R000000004", "Z000000009")
+        }
+
+        test("検出 → 再同期 → 一致: STALE・MISSING は signal 表で取り直し、EXTRA は照合の印(ce_source)を付けた tombstone で消す") {
+            val report = reconcile().ok()
+            val signalsBefore = signals()
+
+            val result = resync()(report).ok().shouldBeInstanceOf<ResyncResult.Requested>()
+
+            result.snapshotRequested shouldBe setOf("R000000001", "R000000004")
+            result.tombstoned shouldBe setOf("Z000000009")
+            signals() shouldBe signalsBefore + 1
+            // 照合が書いた tombstone は ce_source で見分けられる
+            val tombstone =
+                KafkaConsumer<ByteArray?, ByteArray?>(PublishedReaderSettings.properties(kafka.bootstrapServers)).use { consumer ->
+                    val partitions = (0..2).map { TopicPartition(OUTPUT_TOPIC, it) }
+                    consumer.assign(partitions)
+                    consumer.seekToBeginning(partitions)
+                    val found = mutableListOf<org.apache.kafka.clients.consumer.ConsumerRecord<ByteArray?, ByteArray?>>()
+                    val deadline = TimeSource.Monotonic.markNow() + 30.seconds
+                    while (found.none { String(checkNotNull(it.key())) == "Z000000009" && it.value() == null } &&
+                        deadline.hasNotPassedNow()
+                    ) {
+                        found += consumer.poll(Duration.ofMillis(500))
+                    }
+                    found.last { String(checkNotNull(it.key())) == "Z000000009" }
+                }
+            tombstone.value() shouldBe null
+            String(tombstone.headers().lastHeader("ce_source").value()) shouldBe "/sales/legacy-order-acl/reconcile"
+
+            // Debezium が取り直した今の状態を ACL が出力に書き、次の照合で一致に戻る
+            val deadline = TimeSource.Monotonic.markNow() + 120.seconds
+            var latest = reconcile().ok()
+            while (!latest.consistent) {
+                check(deadline.hasNotPassedNow()) { "再同期の後も一致に戻りません: ${latest.drift}" }
+                delay(3_000)
+                latest = reconcile().ok()
+            }
+            latest.unconvertible shouldBe setOf("R000000003")
         }
 
         test("ACL が止まっていて追いつかなければ、ずれではなく検査の失敗(待ちの上限の超過)") {
