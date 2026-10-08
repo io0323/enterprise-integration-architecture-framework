@@ -36,6 +36,7 @@ include(
     ":services:order:application",
     ":services:order:adapters",
     ":services:order:app",
+    ":services:legacy-sim:app",
     ":tools:architecture-test",
     ":tools:audit-verify",
     ":tools:contract-check",
