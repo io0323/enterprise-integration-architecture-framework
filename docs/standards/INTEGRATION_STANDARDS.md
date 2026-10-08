@@ -15,6 +15,8 @@
 | File 仕様 | `contracts/files/{system}_{dataset}.v{n}.yaml` | contracts/files/sales_daily.v1.yaml |
 | MQTT | `devices/{tenant}/{deviceId}/{channel}` | devices/t1/d-001/telemetry |
 
+- 連携 ID の `{DOMAIN}` は業務の領域(Topic の domain・API の `/{domain}` と同じ。CC-NAMING-010)で、データの出どころのシステムではない。出どころ(例: レガシー基幹)はカタログの `provider.system` と `description` に書く(例: レガシーの受注の CDC は INT-SALES-003)。
+
 ## 2. 標準ヘッダ
 | ヘッダ | HTTP | Kafka / MQTT v5 | 説明 |
 |---|---|---|---|

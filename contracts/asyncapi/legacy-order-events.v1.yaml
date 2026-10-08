@@ -1,0 +1,93 @@
+asyncapi: 3.0.0
+info:
+  title: Legacy Order Changes
+  version: 1.0.0
+  description: |
+    レガシー基幹(legacy-sim)の受注表の変更を CDC で取り込み、Anti-Corruption Layer(legacy-order-acl)で変換した
+    注文のヘッダの最新の状態(INT-SALES-003。ADR-0026)。State Transfer Event で、レガシーの内部の形式(表・列・コード値)は運ばない。
+
+    - トピックは compacted。キーは注文番号(文字列)で、同じ注文の変更は同じパーティションに順に届く。
+    - 削除は値のない tombstone(キーだけで値が null)で表す。
+    - 配信は At-Least-Once。ACL の再起動などで同じ状態や、少し前の状態が再送されることがある。
+      最後に届いた値が最新の状態になる(compacted の upsert として冪等)。状態が戻ることを許さない消費者は `source.lsn` で比べる。
+    - ヘッダは CloudEvents binary mode(`ce_*`)と `traceparent`・`correlationid`。レガシーはトレースを持たないため、トレースと
+      correlationid は ACL が始める。tombstone にも同じヘッダを付ける。
+
+    消費者の条件(tombstone の保持):
+    - tombstone は `delete.retention.ms`(1 日)の間だけ残り、その後のコンパクションで消える。
+    - 1 日より長く止まった消費者は、削除を見落とした可能性がある。その場合はトピックの最初から読み直して状態を作り直す
+      (自分の状態のうち、読み直して現れなかったキーを削除する)。
+    - 初めて購読する消費者も、トピックの最初から読む(auto.offset.reset=earliest)。
+  contact:
+    name: team-order
+defaultContentType: avro/binary
+servers:
+  local:
+    host: localhost:19092
+    protocol: kafka
+    description: ローカル(P03 の docker compose。ホスト用の EXTERNAL リスナー。コンテナ内からは kafka:9092)
+channels:
+  legacyOrderChanged:
+    address: sales.legacy-order.changed.v1
+    messages:
+      legacyOrderChanged:
+        $ref: "#/components/messages/LegacyOrderChanged"
+    bindings:
+      kafka:
+        bindingVersion: 0.5.0
+        partitions: 3
+        topicConfiguration:
+          cleanup.policy: [compact]
+          delete.retention.ms: 86400000
+operations:
+  publishLegacyOrderChanged:
+    action: send
+    channel:
+      $ref: "#/channels/legacyOrderChanged"
+    messages:
+      - $ref: "#/channels/legacyOrderChanged/messages/legacyOrderChanged"
+components:
+  messages:
+    LegacyOrderChanged:
+      name: LegacyOrderChanged
+      title: レガシーの注文の変更(最新の状態。削除は tombstone)
+      contentType: avro/binary
+      headers:
+        $ref: "#/components/schemas/StandardHeaders"
+      payload:
+        schemaFormat: application/vnd.apache.avro+json;version=1.9.0
+        schema:
+          $ref: "../avro/sales/LegacyOrderChanged.avsc"
+      bindings:
+        kafka:
+          bindingVersion: 0.5.0
+          key:
+            type: string
+            description: 注文番号(orderNumber と同じ値)
+  schemas:
+    StandardHeaders:
+      type: object
+      description: 全イベント共通のヘッダ(INTEGRATION_STANDARDS §2)
+      required: [ce_id, ce_source, ce_type, ce_time, ce_specversion, traceparent, correlationid]
+      properties:
+        ce_id:
+          type: string
+          description: イベント ID(UUIDv7。再送では別の値になる。状態の比較には source.lsn を使う)
+        ce_source:
+          type: string
+          description: 発行元(/sales/legacy-order-acl)
+        ce_type:
+          type: string
+          description: イベント種別(sales.legacy-order.changed)
+        ce_time:
+          type: string
+          format: date-time
+        ce_specversion:
+          type: string
+          const: "1.0"
+        traceparent:
+          type: string
+          description: W3C Trace Context(ACL が始めたトレース)
+        correlationid:
+          type: string
+          description: 業務トランザクション ID(ACL が変更ごとに採番する)

@@ -1,0 +1,54 @@
+{
+  "type": "record",
+  "name": "LegacyOrderChanged",
+  "namespace": "io.eia.events.sales",
+  "doc": "レガシー基幹の受注(注文のヘッダ)の最新の状態(sales.legacy-order.changed.v1。State Transfer Event)。legacy-order-acl が CDC の変更を変換して発行する(ADR-0026)。キーは注文番号で、削除は値のない tombstone で表す。",
+  "fields": [
+    { "name": "orderNumber", "type": "string", "doc": "注文番号(レガシーの固定長の文字列から末尾の空白を除いた値)。メッセージのキーと同じ" },
+    { "name": "customerCode", "type": "string" },
+    { "name": "customerName", "type": "string", "doc": "顧客名(個人情報になりうる。dataClassification: confidential)" },
+    {
+      "name": "status",
+      "type": {
+        "type": "enum",
+        "name": "LegacyOrderStatus",
+        "doc": "レガシーのコード値の対応(ADR-0026): '1' 受付 = ACCEPTED、'2' 引当済 = ALLOCATED、'3' 出荷済 = SHIPPED、'9' 取消 = CANCELLED",
+        "symbols": ["ACCEPTED", "ALLOCATED", "SHIPPED", "CANCELLED"]
+      }
+    },
+    {
+      "name": "totalAmount",
+      "type": {
+        "type": "record",
+        "name": "Money",
+        "namespace": "io.eia.events.common",
+        "doc": "金額。minorUnits は最小通貨単位(JPY は円、USD はセント)。小数桁数は currency から引く(ADR-0012)。",
+        "fields": [
+          { "name": "minorUnits", "type": "long" },
+          { "name": "currency", "type": "string", "doc": "ISO 4217 の通貨コード" }
+        ]
+      },
+      "doc": "受注金額。レガシーは通貨を持たないため JPY とする(ADR-0026)"
+    },
+    { "name": "orderedAt", "type": { "type": "long", "logicalType": "timestamp-micros" }, "doc": "受注日時(レガシーの JST の現地時刻を UTC に変換した値)" },
+    {
+      "name": "legacyUpdatedAt",
+      "type": ["null", { "type": "long", "logicalType": "timestamp-micros" }],
+      "default": null,
+      "doc": "レガシーの最終更新日時(JST から UTC に変換)。レガシーの「未設定」(9999-12-31 00:00:00)は null"
+    },
+    {
+      "name": "source",
+      "type": {
+        "type": "record",
+        "name": "LegacyChangeSource",
+        "doc": "変換元の変更の位置(ADR-0026)。再送で古い状態が後から届いたことを消費者が判断するのに使える",
+        "fields": [
+          { "name": "lsn", "type": "long", "doc": "PostgreSQL の WAL の位置。Snapshot のレコードは同じ値を共有する" },
+          { "name": "committedAt", "type": { "type": "long", "logicalType": "timestamp-micros" }, "doc": "レガシーの DB でコミットされた時刻(Snapshot では読み取った時刻)" },
+          { "name": "snapshot", "type": "boolean", "doc": "Snapshot(初回・Incremental)で読んだレコードなら true" }
+        ]
+      }
+    }
+  ]
+}

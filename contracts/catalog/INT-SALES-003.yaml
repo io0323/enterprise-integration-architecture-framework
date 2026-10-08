@@ -1,0 +1,17 @@
+id: INT-SALES-003
+name: Legacy Order Changes
+description: >-
+  レガシー基幹(legacy-sim。改修できない)の受注表の変更を Log-based CDC で取り込み、Anti-Corruption Layer で変換した
+  注文のヘッダの最新の状態(compacted。削除は tombstone)。「レガシー」はデータの出どころのシステムで、業務の領域は sales(ADR-0026)。
+  生の CDC のトピック(_cdc.legacy.*)は ACL だけが読む内部のトピックで、契約には含めない。
+style: cdc
+pattern: cdc
+provider: { owner: team-order, system: legacy-order-acl }
+consumers: []
+contract: contracts/asyncapi/legacy-order-events.v1.yaml
+channels:
+  - sales.legacy-order.changed.v1
+tier: 2
+dataClassification: confidential
+slo: { availability: "99.9", latencyP99: "60s" }
+lifecycle: design
