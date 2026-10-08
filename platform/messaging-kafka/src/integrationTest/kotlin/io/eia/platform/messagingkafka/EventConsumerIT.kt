@@ -189,8 +189,12 @@ class EventConsumerIT :
             }
 
         /** サービスの adapters と同じ形の処理。[outcomes] に結果を記録する。 */
-        fun handler(outcomes: MutableList<Handled>): EventHandler<ParcelScanned> =
+        fun handler(
+            outcomes: MutableList<Handled>,
+            reject: (ParcelScanned) -> Boolean,
+        ): EventHandler<ParcelScanned> =
             EventHandler { event ->
+                if (reject(event.value)) return@EventHandler Result.Err(HandlingFailure.Rejected("unknown_location", "location: 拠点の台帳にない"))
                 withContext(Dispatchers.IO) {
                     try {
                         app.connection.use { connection ->
@@ -240,6 +244,7 @@ class EventConsumerIT :
             topic: EventTopic,
             outcomes: MutableList<Handled>,
             committer: OffsetCommitter = OffsetCommitter { c, offsets -> c.commitSync(offsets) },
+            reject: (ParcelScanned) -> Boolean = { false },
         ): Running {
             val kafkaConsumer =
                 KafkaConsumer<ByteArray?, ByteArray?>(
@@ -250,7 +255,7 @@ class EventConsumerIT :
                     topic,
                     AvroEventDeserializer(ParcelScanned.serializer(), WriterSchemas(client)),
                     "INT-TEST-001",
-                    handler(outcomes),
+                    handler(outcomes, reject),
                 )
             val consumer =
                 EventConsumer(
@@ -332,7 +337,7 @@ class EventConsumerIT :
             publish(topic, ParcelScanned("p-2", "a"), ParcelScanned("p-2", "b"), ParcelScanned("p-2", "c"))
 
             // 最初のコミットで落ちる(処理は確定している)
-            val crashing = start(topic, first) { _, _ -> throw IllegalStateException("コミットの前に落ちた") }
+            val crashing = start(topic, first, committer = { _, _ -> throw IllegalStateException("コミットの前に落ちた") })
             crashing.job.join()
             synchronized(first) { first.toList() } shouldBe List(first.size) { Handled.PROCESSED }
             (first.size >= 1) shouldBe true
@@ -345,6 +350,43 @@ class EventConsumerIT :
                 waitUntil("送り直しの処理") { synchronized(second) { second.count { it == Handled.DUPLICATE } } == first.size }
                 scans("p-2") shouldBe 3L
                 deadLetters(topic).size shouldBe 0
+            } finally {
+                running.job.cancelAndJoin()
+            }
+        }
+
+        test("DLQ に入ったメッセージを、原因を除いた後に Replay で戻すと 1 回だけ処理され、2 回戻しても重複になる(dry-run は送らない)") {
+            val topic = newTopic()
+            val outcomes = mutableListOf<Handled>()
+            // 拠点の台帳にない "nowhere" は Rejected(原因を除くまで)
+            var ledgerFixed = false
+            val running = start(topic, outcomes, reject = { it.location == "nowhere" && !ledgerFixed })
+            try {
+                publish(topic, ParcelScanned("p-4", "a"), ParcelScanned("p-4", "nowhere"), ParcelScanned("p-4", "c"))
+                waitUntil("前後の 2 件の処理") { scans("p-4") == 2L }
+                waitUntil("DLQ への隔離") { deadLetters(topic).size == 1 }
+                val dlq = DeadLetterPublisher.deadLetterTopic(topic.name)
+
+                DeadLetterReplayer.connect(kafka.bootstrapServers, "dlq-replay-it").use { replayer ->
+                    val dryRun = replayer.replay(ReplayRequest(dlq, ReplayFilter(reason = "UNKNOWN_LOCATION"), 10, execute = false)).ok()
+                    dryRun.matched shouldBe 1
+                    dryRun.entries.single().key shouldBe "p-4"
+                    dryRun.entries.single().outcome shouldBe ReplayOutcome.PLANNED
+                    delay(2.seconds)
+                    scans("p-4") shouldBe 2L
+
+                    // 原因を除く(拠点の台帳を直す)
+                    ledgerFixed = true
+                    val executed = replayer.replay(ReplayRequest(dlq, ReplayFilter(reason = "UNKNOWN_LOCATION"), 10, execute = true)).ok()
+                    executed.count(ReplayOutcome.REPLAYED) shouldBe 1
+                    waitUntil("戻したメッセージの処理") { scans("p-4") == 3L }
+
+                    // 同じ DLQ のレコードをもう一度戻す(誤り)。ce_id が同じなので重複になる
+                    replayer.replay(ReplayRequest(dlq, ReplayFilter(reason = "UNKNOWN_LOCATION"), 10, execute = true)).ok()
+                    waitUntil("2 回目の受信") { synchronized(outcomes) { outcomes.count { it == Handled.DUPLICATE } } == 1 }
+                }
+                scans("p-4") shouldBe 3L
+                synchronized(outcomes) { outcomes.count { it == Handled.PROCESSED } } shouldBe 3
             } finally {
                 running.job.cancelAndJoin()
             }
