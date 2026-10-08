@@ -164,3 +164,4 @@ Docker のヘルスチェックはコンテナの中で実行されるため、�
   - `make up PROFILE=cdc` の `legacy-dist` は legacy-order-acl と schema-publish の中身も作る。CI の e2e は `make up PROFILE="order cdc"` で起動する。
   - Prometheus のルールに `acl.rules.yml` を、Grafana に **CDC — Legacy** を加えた。`make verify PROFILE=cdc` が、整形済みのトピックへの到達・DLQ・トピックの設定・メトリクス・ルール・ダッシュボードを確かめる。
   - 開発機(Docker に 7.7GiB。別のプロジェクトのコンテナと共有)で core + order + cdc を同時に起動すると、PostgreSQL のプロセスが強制終了されて復旧(recovery)に入った。手元の検証は cdc だけで行い、order と cdc の組み合わせは CI(16GB)で確かめる。
+- 2026-10-08: P06 ⑥a で、照合のロール `eiaf_reconcile`(`postgres/init/40-reconcile.sh`。接続数 4・statement_timeout 30s・idle_in_transaction_session_timeout 60s・読み取り専用。パスワードは `make env` の `LEGACY_RECONCILE_DB_PASSWORD`)を加えた。初期化スクリプトなので、前のボリュームでは `make clean` が要る。`legacy-order-acl` は 2 分ごとに照合し(`legacy-migrate` の完了も待つ)、Prometheus のルールに `reconcile.rules.yml` を、Grafana の CDC — Legacy に照合の行を加えた。`make verify PROFILE=cdc` が、ロールの上限・定期の照合の成功とずれ 0 件・手動の照合(`legacy-order-acl reconcile`)を確かめる(ADR-0027)。
