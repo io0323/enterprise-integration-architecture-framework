@@ -92,7 +92,8 @@ services:
       context: ./images/kafka-connect
       args:
         KAFKA_IMAGE: ${KAFKA_IMAGE:?}
-    # order でも起動する: 注文のイベントは Outbox から Debezium で発行する(ADR-0007。コネクタは make up が登録する)
+    # cdc: レガシーの受注表の CDC(コネクタ legacy-juchu。ADR-0026)。order: 注文のイベントを Outbox から発行する(ADR-0007)。
+    # コネクタはどちらも make up が登録する
     profiles: [cdc, order]
     depends_on:
       kafka:
@@ -101,6 +102,11 @@ services:
         condition: service_healthy
       apicurio:
         condition: service_healthy
+      # cdc: レガシーの CDC の設定(publication・権限)ができてから起動する。make up --wait は、どのサービスも待たない 1 回だけの
+      # コンテナが終わると失敗にするため、ここで待つ。order の profile では legacy-migrate がないので required: false
+      legacy-migrate:
+        condition: service_completed_successfully
+        required: false
     environment:
       # CONNECT_<NAME> は connect-distributed.properties の <name>(大文字 → 小文字、_ → .)。images/kafka-connect/connect-entrypoint.sh
       CONNECT_BOOTSTRAP_SERVERS: kafka:9092
@@ -114,7 +120,7 @@ services:
       CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
       # auto.create.topics.enable=false のため、コネクタの出力先トピックは Connect が明示的に作る(topic.creation.*)
       CONNECT_TOPIC_CREATION_ENABLE: "true"
-      # Apicurio の Avro Converter はイメージに含めている(plugin.path の apicurio-converter。P06 の Outbox で使う)
+      # Apicurio の Avro Converter はイメージに含めている(plugin.path の apicurio-converter。レガシーの生の CDC で使う。ADR-0026)
       # コネクタの設定に秘密情報を平文で書かず、${env:VAR} で参照させる(Framework 12.2。ADR-0016 §7)。
       # 平文で書くと _connect.configs トピックと REST(GET /connectors/{name}/config)から読めてしまう
       CONNECT_CONFIG_PROVIDERS: env
@@ -162,6 +168,41 @@ services:
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "/probe/bin/wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9308/metrics"]
+
+  # ---------------------------------------------------------------- legacy-sim(P06 ⑤。ADR-0026)
+  # レガシー基幹の模擬(改修できないレガシー)。イメージは services/legacy-sim/app/Dockerfile で、中身は make up PROFILE=cdc が先に作る
+  # マイグレーション(1 回だけ動いて終わる): レガシーの表と、DBA の CDC の設定(publication・権限・signal 表)。
+  # コネクタ legacy-juchu(kafka-connect/legacy-juchu.json)は、これが終わった後に make up が登録する
+  legacy-migrate:
+    build: &legacy-sim-build
+      context: ../../services/legacy-sim/app
+      args:
+        JAVA_RUNTIME_IMAGE: ${JAVA_RUNTIME_IMAGE:?}
+    profiles: [cdc]
+    command: ["migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      LEGACY_SIM_DB_URL: jdbc:postgresql://postgres:5432/legacy_sim
+      LEGACY_SIM_DB_PASSWORD: ${LEGACY_SIM_DB_PASSWORD:?make env を実行してください}
+      OTEL_SERVICE_NAME: legacy-sim
+    mem_limit: 256m
+    restart: "no"
+
+  # レガシーのアプリの操作(make legacy-simulate ARGS="seed 10")。常駐しないため、make up では起動しない専用の profile に置く。
+  # アプリのロールのパスワードだけを渡す
+  legacy-sim:
+    build: *legacy-sim-build
+    # make up PROFILE=cdc で起動した postgres に接続する(この profile だけで動かすため depends_on は書かない)
+    profiles: [legacy-sim-cli]
+    environment:
+      LEGACY_SIM_DB_URL: jdbc:postgresql://postgres:5432/legacy_sim
+      LEGACY_SIM_APP_DB_PASSWORD: ${LEGACY_SIM_APP_DB_PASSWORD:?make env を実行してください}
+      OTEL_SERVICE_NAME: legacy-sim
+      EIA_LOG_FORMAT: console
+    mem_limit: 256m
+    restart: "no"
 
   # ---------------------------------------------------------------- iot
   mosquitto:

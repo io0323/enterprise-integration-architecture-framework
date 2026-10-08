@@ -1,7 +1,7 @@
 # EIAF ローカル開発用コマンド(CLAUDE.md §7)
 GRADLE := ./gradlew
 
-.PHONY: help setup build check arch-test contract-check schemas alerts-test integration-test format env not-root certs order-dist up down logs ps verify stats clean e2e audit-verify
+.PHONY: help setup build check arch-test contract-check schemas alerts-test integration-test format env not-root certs order-dist legacy-dist up down logs ps verify stats clean e2e audit-verify legacy-simulate
 
 # ローカル基盤(infra/local。ADR-0016)
 # PROFILE: core / cdc / iot / file / b2b / chaos / order。core は常に含まれる(積み上げ方式)。空白区切りで複数指定できる。
@@ -68,9 +68,12 @@ certs: not-root ## 開発用の CA と mTLS の証明書を作る。残りが 7 
 order-dist: ## order-service と schema-publish(契約のスキーマの登録)のイメージの中身(installDist)を作る
 	$(GRADLE) :services:order:app:installDist :tools:schema-publish:installDist
 
+legacy-dist: ## legacy-sim(レガシー基幹の模擬)のイメージの中身(installDist)を作る
+	$(GRADLE) :services:legacy-sim:app:installDist
+
 # --build: 自前で組み立てるイメージ(kafka-connect・order-service・schema-publish。ADR-0016 §9)の変更を反映する(変更がなければキャッシュを使う)
 # 証明書の有効期限は毎回確かめる(期限切れの証明書で起動に失敗しないように)
-up: not-root env certs $(if $(filter order,$(PROFILE)),order-dist) ## ローカル基盤を起動し、全コンテナが healthy になるまで待つ(例: make up PROFILE=cdc)
+up: not-root env certs $(if $(filter order,$(PROFILE)),order-dist) $(if $(filter cdc,$(PROFILE)),legacy-dist) ## ローカル基盤を起動し、全コンテナが healthy になるまで待つ(例: make up PROFILE=cdc)
 	@if [ -f $(INFRA)/certs/.renewed ]; then \
 		$(COMPOSE) --profile '*' rm --stop --force $(CERT_CONSUMERS) >/dev/null 2>&1 || true; \
 		rm -f $(INFRA)/certs/.renewed; \
@@ -78,6 +81,8 @@ up: not-root env certs $(if $(filter order,$(PROFILE)),order-dist) ## ローカ�
 	$(COMPOSE) $(COMPOSE_PROFILES_ARGS) up -d --build --wait --wait-timeout 420
 	@# 注文のイベントの発行(Outbox → Debezium。ADR-0007)。order-migrate が Outbox の表と publication を作った後に登録する
 	@if [ -n "$(filter order,$(PROFILE))" ]; then $(INFRA)/scripts/connectors.sh order-outbox; fi
+	@# レガシーの受注表の CDC(ADR-0026)。kafka-connect は legacy-migrate(publication・権限・signal 表)の成功を待って起動している
+	@if [ -n "$(filter cdc,$(PROFILE))" ]; then $(INFRA)/scripts/connectors.sh legacy-juchu; fi
 
 down: env ## ローカル基盤を停止する(全 profile。データは残す)
 	$(COMPOSE) --profile '*' down --remove-orphans
@@ -90,6 +95,12 @@ logs: env ## ログを表示する(例: make logs SERVICE=kafka)
 
 ps: env ## コンテナの状態を表示する
 	$(COMPOSE) --profile '*' ps
+
+# レガシーのアプリとして受注を書き換える(make up PROFILE=cdc の後。変えた受注番号を 1 行ずつ出す)。
+# 例: make legacy-simulate ARGS="seed 10" / ARGS="advance 3" / ARGS="anomaly garbled-name"(種類は ARGS= で使い方を表示)
+ARGS ?=
+legacy-simulate: env legacy-dist ## レガシーの受注表を書き換える(例: make legacy-simulate ARGS="seed 10"。ADR-0026)
+	@$(COMPOSE) --profile legacy-sim-cli run --rm --build --no-deps legacy-sim simulate $(ARGS)
 
 verify: ## profile ごとの検証(healthy・機能の疎通。例: make verify PROFILE=file)
 	@$(INFRA)/scripts/verify.sh $(PROFILE)
