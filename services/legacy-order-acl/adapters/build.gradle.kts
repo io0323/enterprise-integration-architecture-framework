@@ -16,6 +16,8 @@ dependencies {
     testImplementation(libs.ktor.client.mock)
 
     integrationTestImplementation(project(":platform:test-support"))
+    integrationTestImplementation(libs.testcontainers.postgresql)
+    integrationTestImplementation(libs.postgresql)
     integrationTestImplementation(libs.testcontainers.kafka)
     integrationTestImplementation(libs.ktor.client.cio)
     integrationTestImplementation(libs.kotlinx.coroutines.core)
