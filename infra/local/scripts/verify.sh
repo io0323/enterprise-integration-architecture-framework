@@ -56,7 +56,7 @@ client_token() {
 header_value() { awk -v name="$(tr '[:upper:]' '[:lower:]' <<<"$1")" -F': ' 'tolower($1) == name { sub(/\r$/, "", $2); print $2; exit }'; }
 
 # 1 回だけ動いて終わるコンテナ(終了コード 0 で終わっていれば正常)
-oneshot_services=" order-migrate schema-publish "
+oneshot_services=" order-migrate schema-publish legacy-migrate "
 
 # ------------------------------------------------------------------ 共通: healthy
 verify_health() {
@@ -277,7 +277,39 @@ verify_cdc() {
     fail "CDC: $topic に届いた変更イベントが 2 件でない ('$events')"
   fi
   cleanup_cdc
+  verify_legacy_cdc
   verify_cdc_monitoring
+}
+
+# レガシーの受注表の CDC(P06 ⑤。ADR-0026): legacy-sim → コネクタ legacy-juchu → 生の CDC のトピック(Avro。Apicurio のグループ cdc-raw)
+verify_legacy_cdc() {
+  local connect=http://localhost:19083 topic=_cdc.legacy.public.t_juchu
+  legacy_db() { "${compose[@]}" exec -T postgres psql -U postgres -d legacy_sim -tAc "$1"; }
+  legacy_change_arrived() { # legacy_change_arrived <トピック> <受注番号>
+    kafka_cli /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic "$1" --from-beginning \
+      --timeout-ms 5000 --property print.key=true 2>/dev/null | grep -a -q -F "$2"
+  }
+  check "CDC(legacy): コネクタ legacy-juchu とタスクが RUNNING" bash -c \
+    "curl -fsS $connect/connectors/legacy-juchu/status | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d[\"connector\"][\"state\"]==\"RUNNING\" and d[\"tasks\"] and all(t[\"state\"]==\"RUNNING\" for t in d[\"tasks\"]) else 1)'"
+  check "CDC(legacy): レプリケーションスロット legacy_juchu が使用中" equals "t" \
+    psql_super "select active from pg_replication_slots where slot_name = 'legacy_juchu'"
+  # DBA の設定の範囲(ADR-0026): 受注表は SELECT だけ、signal 表は Snapshot の印を書いて消すための SELECT・INSERT・DELETE
+  check "CDC(legacy): debezium の権限は t_juchu の SELECT と signal 表の SELECT・INSERT・DELETE だけ" \
+    equals "eiaf_cdc.debezium_signal:DELETE,eiaf_cdc.debezium_signal:INSERT,eiaf_cdc.debezium_signal:SELECT,public.t_juchu:SELECT" \
+    legacy_db "select string_agg(g, ',' order by g) from (select table_schema || '.' || table_name || ':' || privilege_type as g from information_schema.role_table_grants where grantee = 'debezium') t"
+  check "CDC(legacy): 受注表は REPLICA IDENTITY FULL(削除の変更に受注番号が載る)" equals "f" \
+    legacy_db "select relreplident from pg_class where oid = 'public.t_juchu'::regclass"
+
+  # レガシーのアプリとして受注を 1 件登録し、受注番号のキーで生のトピックに届く(Avro の文字列は UTF-8 のまま入るため、バイト列で探す)
+  local number
+  number="$("${compose[@]}" --profile legacy-sim-cli run --rm --no-deps legacy-sim simulate seed 1 2>/dev/null | grep -E '^J[0-9]{9}$' | tail -1 || true)"
+  if [[ -n "$number" ]] && retry 30 2 legacy_change_arrived "$topic" "$number"; then
+    pass "CDC(legacy): 登録した受注($number)が $topic に届く"
+  else
+    fail "CDC(legacy): 登録した受注(${number:-登録できない})が $topic に届かない"
+  fi
+  check "CDC(legacy): 生の CDC のスキーマが Apicurio のグループ cdc-raw にある(Converter の自動登録)" bash -c \
+    "curl -fsS 'http://localhost:19081/apis/registry/v3/groups/cdc-raw/artifacts?limit=100' | python3 -c 'import json,sys; ids={a[\"artifactId\"] for a in json.load(sys.stdin)[\"artifacts\"]}; sys.exit(0 if {\"$topic-key\",\"$topic-value\"} <= ids else 1)'"
 }
 
 # ------------------------------------------------------------------ iot

@@ -38,7 +38,8 @@ internal object LegacySimCommands {
     ): Int =
         when (val prepared = prepare(args, env)) {
             is Result.Err -> {
-                USAGE.also { logger.error(prepared.error) }
+                // 使い方は複数行のため、ログ(1 行の JSON)ではなく標準エラーに出す
+                USAGE.also { System.err.println(prepared.error) }
             }
 
             is Result.Ok -> {
