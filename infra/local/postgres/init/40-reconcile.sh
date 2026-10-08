@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# レガシーの受注の照合(legacy-order-acl の reconcile。P06 ⑥。ADR-0027)がレガシーの DB を読むユーザー。
+# レガシーの受注の照合(legacy-order-acl の reconcile。P06 ⑥。ADR-0027)がレガシーの DB を読むユーザーと、部分の再同期のユーザー。
 # 表の SELECT は、表の所有者(legacy_sim)が DBA の作業のマイグレーション(legacy-sim の V3)で付ける。
 # レガシーの DB の負荷と VACUUM を守るため、ロールの設定で次を強制する(本番ではレプリカから読む。ADR-0027 §4):
 # - CONNECTION LIMIT 4(1 回の照合は同時に 2 本まで使う: スナップショットの読み取りと、スロットの位置の確認。
@@ -15,4 +15,13 @@ ALTER ROLE eiaf_reconcile SET statement_timeout = '30s';
 ALTER ROLE eiaf_reconcile SET idle_in_transaction_session_timeout = '60s';
 ALTER ROLE eiaf_reconcile SET default_transaction_read_only = on;
 GRANT CONNECT ON DATABASE legacy_sim TO eiaf_reconcile;
+SQL
+
+# 部分の再同期(ADR-0027 §6)で signal 表に Incremental Snapshot の指示を書くユーザー。signal 表の INSERT だけを、V4(DBA)で付ける。
+# Debezium のロール(signal 表の SELECT・INSERT・DELETE と REPLICATION)は使わない。1 回の再同期は 1 本の接続で 1 行を書くだけ
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname postgres -v password="$LEGACY_RESYNC_DB_PASSWORD" <<'SQL'
+CREATE ROLE eiaf_resync LOGIN PASSWORD :'password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION CONNECTION LIMIT 2;
+ALTER ROLE eiaf_resync SET statement_timeout = '10s';
+ALTER ROLE eiaf_resync SET idle_in_transaction_session_timeout = '30s';
+GRANT CONNECT ON DATABASE legacy_sim TO eiaf_resync;
 SQL

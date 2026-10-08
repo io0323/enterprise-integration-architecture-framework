@@ -30,8 +30,8 @@ internal object ReconcileCommand {
 
     fun run(
         env: Map<String, String>,
-        output: (String) -> Unit,
         dryRun: Boolean = false,
+        output: (String) -> Unit,
     ): Int =
         when (val prepared = prepare(env)) {
             is Result.Err -> {
