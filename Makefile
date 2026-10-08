@@ -68,8 +68,8 @@ certs: not-root ## 開発用の CA と mTLS の証明書を作る。残りが 7 
 order-dist: ## order-service と schema-publish(契約のスキーマの登録)のイメージの中身(installDist)を作る
 	$(GRADLE) :services:order:app:installDist :tools:schema-publish:installDist
 
-legacy-dist: ## legacy-sim(レガシー基幹の模擬)のイメージの中身(installDist)を作る
-	$(GRADLE) :services:legacy-sim:app:installDist
+legacy-dist: ## legacy-sim(レガシー基幹の模擬)・legacy-order-acl・schema-publish のイメージの中身(installDist)を作る
+	$(GRADLE) :services:legacy-sim:app:installDist :services:legacy-order-acl:app:installDist :tools:schema-publish:installDist
 
 # --build: 自前で組み立てるイメージ(kafka-connect・order-service・schema-publish。ADR-0016 §9)の変更を反映する(変更がなければキャッシュを使う)
 # 証明書の有効期限は毎回確かめる(期限切れの証明書で起動に失敗しないように)

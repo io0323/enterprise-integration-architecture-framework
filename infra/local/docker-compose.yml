@@ -204,6 +204,46 @@ services:
     mem_limit: 256m
     restart: "no"
 
+  # アプリが書くトピックを、kafka/topics.conf のとおりに作って終わる(compacted の出力・DLQ の保持期間。auto.create.topics.enable=false)
+  kafka-topics:
+    image: ${KAFKA_IMAGE:?}
+    profiles: [cdc]
+    entrypoint: ["/bin/bash", "/topics/create-topics.sh", "kafka:9092", "/topics/topics.conf"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./kafka:/topics:ro
+    mem_limit: 256m
+    restart: "no"
+
+  # レガシーの受注の CDC の Anti-Corruption Layer(P06 ⑤b。ADR-0026)。生の CDC を読み、sales.legacy-order.changed.v1 と DLQ に書く。
+  # 書き込むイベントのスキーマ(契約)を schema-publish が登録し、トピックを kafka-topics が作ってから起動する
+  legacy-order-acl:
+    build:
+      context: ../../services/legacy-order-acl/app
+      args:
+        JAVA_RUNTIME_IMAGE: ${JAVA_RUNTIME_IMAGE:?}
+    profiles: [cdc]
+    depends_on:
+      kafka-topics:
+        condition: service_completed_successfully
+      schema-publish:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_healthy
+    environment:
+      LEGACY_ORDER_ACL_KAFKA_BOOTSTRAP: kafka:9092
+      LEGACY_ORDER_ACL_SCHEMA_REGISTRY_URL: http://apicurio:8080/apis/registry/v3
+      OTEL_SERVICE_NAME: legacy-order-acl
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    volumes:
+      - *probe-volume
+    mem_limit: 384m
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "/probe/bin/wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/health/ready"]
+
   # ---------------------------------------------------------------- iot
   mosquitto:
     image: ${MOSQUITTO_IMAGE:?}
@@ -391,7 +431,8 @@ services:
       context: ../../tools/schema-publish
       args:
         JAVA_RUNTIME_IMAGE: ${JAVA_RUNTIME_IMAGE:?}
-    profiles: [order]
+    # cdc: legacy-order-acl が書くイベントのスキーマ(ADR-0026)。order: order-service のイベント
+    profiles: [order, cdc]
     command: ["--registry", "http://apicurio:8080/apis/registry/v3", "--root", "/repo"]
     depends_on:
       apicurio:
