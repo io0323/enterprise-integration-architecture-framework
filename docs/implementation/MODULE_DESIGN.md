@@ -115,7 +115,7 @@ services/legacy-sim/app/
 | payment | 決済(モック) | Kafka |
 | shipping | 出荷 | Kafka |
 | legacy-sim | レガシー基幹 DB 模擬(改修できないレガシー。表と `simulate` だけ。1 モジュール。ADR-0026) | CDC(生の CDC のトピック `_cdc.legacy.*`) |
-| legacy-order-acl | レガシーの受注の CDC の Anti-Corruption Layer(状態を持たない変換・DLQ。P06 ⑤b。ADR-0026)。4 モジュール。domain に変換の規則(`LegacyOrderTranslation`)、application にユースケースと発行の Port、adapters に Debezium の Envelope の型・読み取りのループ(`LegacyChangeConsumer`。At-Least-Once)・発行(`KafkaLegacyOrderStatePublisher`)、app に起動とヘルスチェック | CDC → Kafka(`sales.legacy-order.changed.v1`。INT-SALES-003) |
+| legacy-order-acl | レガシーの受注の CDC の Anti-Corruption Layer(状態を持たない変換・DLQ。P06 ⑤b。ADR-0026)。4 モジュール。domain に変換の規則(`LegacyOrderTranslation`)、application にユースケースと発行の Port、adapters に Debezium の Envelope の型・読み取りのループ(`LegacyChangeConsumer`。At-Least-Once)・発行(`KafkaLegacyOrderStatePublisher`)、app に起動とヘルスチェック。照合(P06 ⑥。ADR-0027): domain に `LegacyOrderFingerprint`、application に `ReconcileLegacyOrdersUseCase` と Port(`LegacySource`・`PublishedLegacyOrders`)、adapters に `reconcile/`(`JdbcLegacySource`・`KafkaPublishedLegacyOrders`・`ReconcileMetrics`)、app に定期の照合(`ReconcileJob`)と `reconcile` のサブコマンド。レガシーの DB は読み取り専用のロールで読む(ADR-0027 §1 の例外) | CDC → Kafka(`sales.legacy-order.changed.v1`。INT-SALES-003) |
 | batch-etl | 分析基盤への ELT/ETL | Batch |
 | file-exchange | ファイル授受 | MFT (S3 互換ストレージ/SFTP) |
 | saas-mock / webhook-receiver / integration-flow | SaaS 連携 | REST, Webhook |

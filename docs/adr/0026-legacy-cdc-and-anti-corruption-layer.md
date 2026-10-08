@@ -171,3 +171,4 @@ signal 表への書き込み(再同期の指示)は DBA(所有者のロール)�
   - 確認点 3(avro4k で Debezium の名前を読めるか): 読める。ただし Converter の既定では Envelope が参照つきで登録され、contentId だけでは解釈できないため、`apicurio.registry.dereference-schema=true` を加えた(§4)。
   - `/health/ready` はパーティションの割り当てを条件にしない(§6)。DLQ の詳細(キー・変換の後の失敗の reason・`topics.conf`。§7)、監視(§10)を書いた。INT-SALES-003 を active にした。
   - `platform/messaging-kafka` に `EventProducer.sendTombstone` と `DeadLetterPublisher` を加えた(ADR-0025 の改訂履歴)。
+- 2026-10-08: P06 ⑥a で、照合(レガシーの表と出力の最新の状態の比較)を ADR-0027 に決めた。照合は legacy-order-acl の中で動き、読み取り専用のロール `eiaf_reconcile` でレガシーの DB を読む(ADR-0027 §1 の例外)。§7 の「回復は signal 表の部分の再同期」の自動化(上限 100 件)は P06 ⑥b。

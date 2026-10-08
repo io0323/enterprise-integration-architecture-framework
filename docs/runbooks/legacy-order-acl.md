@@ -8,6 +8,9 @@
 | `LegacyAclDeadLetters` | warning | [DLQ に入ったとき](#dlq-に入ったとき) |
 | `LegacyAclLagHigh` | warning | [処理が遅れているとき](#処理が遅れているとき) |
 | `LegacyAclDown` | critical | [ACL が動いていないとき](#acl-が動いていないとき) |
+| `LegacyReconcileStale` | warning | [照合が成功していないとき](#照合が成功していないとき) |
+| `LegacyReconcileDrift` | warning | [ずれがあるとき](#ずれがあるとき) |
+| `LegacyReconcileDriftOverLimit` | critical | [ずれがあるとき](#ずれがあるとき) |
 
 レガシーのスロット `legacy_juchu` とコネクタ `legacy-juchu` のアラート(`Cdc*`。`slot_name` / `connector` のラベルで見分ける)は `docs/runbooks/cdc-outbox-lag.md`。
 
@@ -66,7 +69,41 @@
 2. 起動の順序: `kafka-topics`(トピックの作成)と `schema-publish`(契約のスキーマの登録)が終わってから起動する。どちらかが失敗していれば、その原因を直して `make up PROFILE=cdc`。
 3. 再開した後、lag が減っていくことをダッシュボードで確かめる。
 
+## 照合
+legacy-order-acl は、レガシーの受注表と整形済みのトピックの最新の状態を、定期的に照合する(ADR-0027。既定 15 分ごと、ローカルは 2 分ごと)。
+レガシーを読んだ時点の位置(LSN)まで CDC と ACL が処理し終えてから比べ、食い違ったキーは時間をおいて比べ直す。それでも食い違うキーを「ずれ」とする。
+変換できない行(DLQ に入る)は既知の差として別に数え、ずれにしない。
+
+手動で照合する(結果をキーごとに出す。終了コード 0 = 一致 / 1 = ずれ / 2 = 設定の誤り / 3 = 検査の失敗):
+```bash
+docker compose -f infra/local/docker-compose.yml --env-file infra/local/images.env --env-file infra/local/.env \
+  run --rm --no-deps legacy-order-acl reconcile
+# position=0/1A2B3C4 compared=120 drift=2 unconvertible=1
+# digest=<全体の SHA-256>
+# DRIFT STALE J000000004
+# DRIFT EXTRA J000000099
+# UNCONVERTIBLE J000000010
+```
+
+### 照合が成功していないとき
+`LegacyReconcileStale`(間隔の 3 倍を超えて成功していない)。ずれがあるかどうかは分からない状態。
+1. ACL のログの `照合を終えられませんでした(ずれではなく検査の失敗)` で原因を見る。
+   - `レプリケーションスロット legacy_juchu が … まで取り込みません`: Debezium が止まっている。コネクタを復旧する(`docs/runbooks/cdc-outbox-lag.md`)。
+   - `legacy-order-acl.translate が … の末尾まで処理しません`: ACL の変換が止まっている・遅れている([処理が遅れているとき](#処理が遅れているとき))。
+   - `レガシーの DB の読み取りに失敗しました(SQLState 57014)`: 1 回の問い合わせが statement_timeout(30 秒)を超えた。表が大きくなったなら、間隔と照合の方式(範囲の分割)を見直す(ADR-0027 §4)。`08xxx` は接続できない。
+2. 原因を直すと、次の照合で `last_success` が進み、アラートは解消する。
+
+### ずれがあるとき
+`LegacyReconcileDrift`(ずれが 30 分続く)/ `LegacyReconcileDriftOverLimit`(100 件を超えた)。
+1. ずれのキーと種類を見る: ACL のログの `照合: ずれ …`(種類ごとに 20 件まで)、全件は手動の照合。
+   - `MISSING`(レガシーにあるが出力にない)・`STALE`(状態が違う): 変更が出力に届いていない。DLQ に入っていないか、ACL・コネクタが変更を飛ばしていないかを確かめる。
+   - `EXTRA`(レガシーにないが出力に値がある): 削除の tombstone が出ていない。
+2. 回復: 対象のキーだけを取り直す(signal 表の Incremental Snapshot。[DLQ に入ったとき](#dlq-に入ったとき)の 3 の SQL の `filter` にキーを並べる)。`EXTRA` は Snapshot では消えないので、tombstone を書く。
+   部分の再同期の自動化(上限 100 件)と `EXTRA` の tombstone、全体の再同期は P06 ⑥b で入れ、手順は `docs/runbooks/cdc-resync.md` に書く。
+3. 100 件を超えたら(`LegacyReconcileDriftOverLimit`)、個々のキーではなく仕組みの問題を疑う(スロットの無効化・ACL の不具合・コネクタのオフセットの消失)。原因を直してから、全体の再同期を判断する。
+
 ## 本番では
 - 通知は Alertmanager か監視基盤につなぐ。`LegacyAclDown` は当番に通知する。
 - DLQ のトピックは、読み取りの権限を調査の担当に限る(ローカルは未認証。secure profile は #26)。
 - lag の閾値は、レガシーの更新の量と INT-SALES-003 の SLO(p99 60 秒)から決め直す。
+- 照合はレプリカから読み、間隔はレガシーの業務の負荷を見て決める(ADR-0027 §4)。
