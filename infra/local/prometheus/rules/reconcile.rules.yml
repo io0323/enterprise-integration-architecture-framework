@@ -1,0 +1,41 @@
+# レガシーの受注の照合(legacy-order-acl の reconcile。P06 ⑥。ADR-0027)のアラート。対応は docs/runbooks/legacy-order-acl.md#照合。
+# 単体テストは reconcile.test.yml(make alerts-test)。
+#
+# 監視は「最後に照合が成功した時刻」と「ずれの件数」で行う(監査のアンカーと同じ形)。照合は変更がない時間帯にも成功する
+# (比べ終えれば成功)ので、静かな時間帯に誤報を出さない。変換できないキー(DLQ に入る既知の差)はここでは扱わない(LegacyAclDeadLetters)。
+groups:
+  - name: legacy-order-reconcile
+    rules:
+      # 照合が 3 回分の間隔の間、成功していない(待ちの上限の超過・レガシーの DB や Kafka に届かない・照合が動いていない)
+      - alert: LegacyReconcileStale
+        expr: |
+          time() - eia_reconcile_last_success_seconds{job="legacy-order-acl"}
+            > on(job) (3 * eia_reconcile_interval_seconds{job="legacy-order-acl"})
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "レガシーの受注の照合が、間隔の 3 倍を超えて成功していない"
+          runbook: docs/runbooks/legacy-order-acl.md#照合が成功していないとき
+
+      # 比べ直しても食い違うキー(ずれ)がある状態が、照合 2 回分続く(処理中の変更ではない)
+      - alert: LegacyReconcileDrift
+        expr: |
+          sum by (job) (eia_reconcile_drift_keys{job="legacy-order-acl"}) > 0
+          and on(job)
+          (time() - eia_reconcile_last_success_seconds{job="legacy-order-acl"} < on(job) (3 * eia_reconcile_interval_seconds{job="legacy-order-acl"}))
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "レガシーの受注と整形済みのトピックに、ずれ({{ $value }} 件)がある"
+          runbook: docs/runbooks/legacy-order-acl.md#ずれがあるとき
+
+      # ずれが自動の再同期の上限(100 件)を超えた。仕組みの問題(ACL の不具合・スロットの無効化)を疑い、人が判断する
+      - alert: LegacyReconcileDriftOverLimit
+        expr: sum by (job) (eia_reconcile_drift_keys{job="legacy-order-acl"}) > 100
+        labels:
+          severity: critical
+        annotations:
+          summary: "レガシーの受注のずれ({{ $value }} 件)が、自動の再同期の上限(100 件)を超えた"
+          runbook: docs/runbooks/legacy-order-acl.md#ずれがあるとき

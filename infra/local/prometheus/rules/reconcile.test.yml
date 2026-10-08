@@ -1,0 +1,129 @@
+# reconcile.rules.yml の単体テスト(promtool test rules。make alerts-test)。
+# 時刻の系列: 照合が成功するたびに last_success が評価の時刻に進む(1 分ごとの系列で、値は UNIX 時刻の秒)。
+rule_files:
+  - reconcile.rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ---------------------------------------------------------------- LegacyReconcileStale
+  - name: 変更がない時間帯でも、照合が 2 分ごとに成功していれば出さない
+    interval: 1m
+    input_series:
+      # 2 分ごとに成功(0, 0, 120, 120, 240, ...)。間隔は 120 秒
+      - series: 'eia_reconcile_last_success_seconds{job="legacy-order-acl"}'
+        values: "0 0 120 120 240 240 360 360 480 480 600 600 720 720 840 840 960 960 1080 1080 1200 1200"
+      - series: 'eia_reconcile_interval_seconds{job="legacy-order-acl"}'
+        values: "120x21"
+      - series: 'eia_reconcile_drift_keys{job="legacy-order-acl",kind="stale"}'
+        values: "0x21"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LegacyReconcileStale
+        exp_alerts: []
+
+  - name: 照合が止まり、間隔の 3 倍(6 分)を超えて成功しなければ警告する
+    interval: 1m
+    input_series:
+      # 2 分で最後の成功、その後は成功しない
+      - series: 'eia_reconcile_last_success_seconds{job="legacy-order-acl"}'
+        values: "0 0 120x20"
+      - series: 'eia_reconcile_interval_seconds{job="legacy-order-acl"}'
+        values: "120x21"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: LegacyReconcileStale
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: LegacyReconcileStale
+        exp_alerts:
+          - exp_labels: { severity: warning, job: legacy-order-acl }
+            exp_annotations:
+              summary: "レガシーの受注の照合が、間隔の 3 倍を超えて成功していない"
+              runbook: docs/runbooks/legacy-order-acl.md#照合が成功していないとき
+
+  - name: 間隔を変えると、閾値も追従する(間隔 10 分なら、成功から 14 分では出さない)
+    interval: 1m
+    input_series:
+      - series: 'eia_reconcile_last_success_seconds{job="legacy-order-acl"}'
+        values: "0x20"
+      - series: 'eia_reconcile_interval_seconds{job="legacy-order-acl"}'
+        values: "600x20"
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: LegacyReconcileStale
+        exp_alerts: []
+
+  # ---------------------------------------------------------------- LegacyReconcileDrift
+  - name: ずれのある状態が 30 分続けば警告する(照合は成功し続けている)
+    interval: 1m
+    input_series:
+      - series: 'eia_reconcile_last_success_seconds{job="legacy-order-acl"}'
+        values: "0+60x40"
+      - series: 'eia_reconcile_interval_seconds{job="legacy-order-acl"}'
+        values: "120x40"
+      - series: 'eia_reconcile_drift_keys{job="legacy-order-acl",kind="stale"}'
+        values: "2x40"
+      - series: 'eia_reconcile_drift_keys{job="legacy-order-acl",kind="missing"}'
+        values: "1x40"
+      - series: 'eia_reconcile_drift_keys{job="legacy-order-acl",kind="extra"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LegacyReconcileDrift
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: LegacyReconcileDrift
+        exp_alerts:
+          - exp_labels: { severity: warning, job: legacy-order-acl }
+            exp_annotations:
+              summary: "レガシーの受注と整形済みのトピックに、ずれ(3 件)がある"
+              runbook: docs/runbooks/legacy-order-acl.md#ずれがあるとき
+
+  - name: 一度だけのずれ(次の照合で解消)では出さない
+    interval: 1m
+    input_series:
+      - series: 'eia_reconcile_last_success_seconds{job="legacy-order-acl"}'
+        values: "0+60x40"
+      - series: 'eia_reconcile_interval_seconds{job="legacy-order-acl"}'
+        values: "120x40"
+      - series: 'eia_reconcile_drift_keys{job="legacy-order-acl",kind="stale"}'
+        values: "0 0 0 1 1 0x35"
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: LegacyReconcileDrift
+        exp_alerts: []
+
+  - name: 照合が成功していない間は、古いずれの値で判定しない(Stale で知らせる)
+    interval: 1m
+    input_series:
+      - series: 'eia_reconcile_last_success_seconds{job="legacy-order-acl"}'
+        values: "0x40"
+      - series: 'eia_reconcile_interval_seconds{job="legacy-order-acl"}'
+        values: "120x40"
+      - series: 'eia_reconcile_drift_keys{job="legacy-order-acl",kind="stale"}'
+        values: "5x40"
+    alert_rule_test:
+      - eval_time: 38m
+        alertname: LegacyReconcileDrift
+        exp_alerts: []
+
+  # ---------------------------------------------------------------- LegacyReconcileDriftOverLimit
+  - name: ずれが 100 件を超えたら critical、100 件ちょうどなら出さない
+    interval: 1m
+    input_series:
+      - series: 'eia_reconcile_drift_keys{job="legacy-order-acl",kind="missing"}'
+        values: "60 60 60 60 60"
+      - series: 'eia_reconcile_drift_keys{job="legacy-order-acl",kind="stale"}'
+        values: "40 40 41 41 41"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: LegacyReconcileDriftOverLimit
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: LegacyReconcileDriftOverLimit
+        exp_alerts:
+          - exp_labels: { severity: critical, job: legacy-order-acl }
+            exp_annotations:
+              summary: "レガシーの受注のずれ(101 件)が、自動の再同期の上限(100 件)を超えた"
+              runbook: docs/runbooks/legacy-order-acl.md#ずれがあるとき
