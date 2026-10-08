@@ -49,16 +49,30 @@ public class EventProducer(
         serializer: AvroEventSerializer<T>,
         key: String,
         value: T,
-    ): Result<PublishedEvent, MessagingError> {
-        val topic = serializer.topic
-        return observability.withSpan("${topic.name} publish", SpanKind.PRODUCER) { span ->
+    ): Result<PublishedEvent, MessagingError> = publish(serializer.topic, key) { serializer.serialize(value) }
+
+    /**
+     * [topic] に [key] の tombstone(値のないレコード)を送る。compacted のトピックで、そのキーの削除を表す(ADR-0026 §9)。
+     * ヘッダ(CloudEvents・traceparent・correlationid)は [send] と同じものを付ける。
+     */
+    public suspend fun sendTombstone(
+        topic: EventTopic,
+        key: String,
+    ): Result<PublishedEvent, MessagingError> = publish(topic, key) { ok(null) }
+
+    private suspend fun publish(
+        topic: EventTopic,
+        key: String,
+        payload: () -> Result<ByteArray?, MessagingError>,
+    ): Result<PublishedEvent, MessagingError> =
+        observability.withSpan("${topic.name} publish", SpanKind.PRODUCER) { span ->
             span.setAttribute(MESSAGING_SYSTEM, KAFKA)
             span.setAttribute(MESSAGING_DESTINATION, topic.name)
             span.setAttribute(MESSAGING_OPERATION, OPERATION_SEND)
-            when (val payload = serializer.serialize(value)) {
+            when (val serialized = payload()) {
                 is Result.Err -> {
-                    span.setAttribute(ERROR_TYPE, payload.error.code)
-                    payload
+                    span.setAttribute(ERROR_TYPE, serialized.error.code)
+                    serialized
                 }
 
                 is Result.Ok -> {
@@ -73,18 +87,17 @@ public class EventProducer(
                             correlationId = requireNotNull(trace.correlationId) { "Correlation ID がありません" },
                         )
                     span.setAttribute(MESSAGING_MESSAGE_ID, metadata.id.toString())
-                    send(topic, key, payload.value, metadata).also { result ->
+                    send(topic, key, serialized.value, metadata).also { result ->
                         (result as? Result.Err)?.let { span.setAttribute(ERROR_TYPE, it.error.code) }
                     }
                 }
             }
         }
-    }
 
     private suspend fun send(
         topic: EventTopic,
         key: String,
-        payload: ByteArray,
+        payload: ByteArray?,
         metadata: EventMetadata,
     ): Result<PublishedEvent, MessagingError> {
         val record = ProducerRecord(topic.name, null, key.toByteArray(Charsets.UTF_8), payload, metadata.toHeaders())
