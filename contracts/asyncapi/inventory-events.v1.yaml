@@ -1,0 +1,112 @@
+asyncapi: 3.0.0
+info:
+  title: Inventory Stock Events
+  version: 1.0.0
+  description: |
+    inventory-service が発行する、在庫のコマンドの結果(INT-INVENTORY-002)。
+    - 送信は Outbox + Debezium(ADR-0007)。キーは Saga ID。購読者は Saga の Orchestrator(order-service の `order.saga`)。
+    - 配信は At-Least-Once。同じ結果が 2 回以上届くことがある(コマンドの再送に答え直すため)。Orchestrator は Saga の状態で判定し、
+      今の段に関係しない結果は無視する(ADR-0029 §3)。
+    - 処理できないメッセージは `{topic}.dlq` に隔離する(ADR-0028 §2)。
+  contact:
+    name: team-inventory
+defaultContentType: avro/binary
+servers:
+  local:
+    host: localhost:19092
+    protocol: kafka
+    description: ローカル(P03 の docker compose。ホスト用の EXTERNAL リスナー。コンテナ内からは kafka:9092)
+channels:
+  stockReserved:
+    address: inventory.stock.reserved.v1
+    messages:
+      stockReserved:
+        $ref: "#/components/messages/StockReserved"
+  stockReservationRejected:
+    address: inventory.stock.reservation-rejected.v1
+    messages:
+      stockReservationRejected:
+        $ref: "#/components/messages/StockReservationRejected"
+  stockReleased:
+    address: inventory.stock.released.v1
+    messages:
+      stockReleased:
+        $ref: "#/components/messages/StockReleased"
+operations:
+  publishStockReserved:
+    action: send
+    channel:
+      $ref: "#/channels/stockReserved"
+    messages:
+      - $ref: "#/channels/stockReserved/messages/stockReserved"
+  publishStockReservationRejected:
+    action: send
+    channel:
+      $ref: "#/channels/stockReservationRejected"
+    messages:
+      - $ref: "#/channels/stockReservationRejected/messages/stockReservationRejected"
+  publishStockReleased:
+    action: send
+    channel:
+      $ref: "#/channels/stockReleased"
+    messages:
+      - $ref: "#/channels/stockReleased/messages/stockReleased"
+components:
+  messages:
+    StockReserved:
+      name: StockReserved
+      title: 在庫の引当の完了
+      contentType: avro/binary
+      headers:
+        $ref: "#/components/schemas/StandardHeaders"
+      payload:
+        schemaFormat: application/vnd.apache.avro+json;version=1.9.0
+        schema:
+          $ref: "../avro/inventory/StockReserved.avsc"
+    StockReservationRejected:
+      name: StockReservationRejected
+      title: 在庫の引当の拒否
+      contentType: avro/binary
+      headers:
+        $ref: "#/components/schemas/StandardHeaders"
+      payload:
+        schemaFormat: application/vnd.apache.avro+json;version=1.9.0
+        schema:
+          $ref: "../avro/inventory/StockReservationRejected.avsc"
+    StockReleased:
+      name: StockReleased
+      title: 在庫の解放の完了
+      contentType: avro/binary
+      headers:
+        $ref: "#/components/schemas/StandardHeaders"
+      payload:
+        schemaFormat: application/vnd.apache.avro+json;version=1.9.0
+        schema:
+          $ref: "../avro/inventory/StockReleased.avsc"
+  schemas:
+    StandardHeaders:
+      type: object
+      description: 全イベント・コマンド共通のヘッダ(INTEGRATION_STANDARDS §2)
+      required: [ce_id, ce_source, ce_type, ce_time, ce_specversion, traceparent, correlationid]
+      properties:
+        ce_id:
+          type: string
+          description: イベント ID(冪等消費のキー)
+        ce_source:
+          type: string
+          description: 発行元(例 /sales/order-service)
+        ce_type:
+          type: string
+          description: 種別。トピック名から `.v{n}` を除いた値(例 inventory.stock.cmd-reserve)
+        ce_time:
+          type: string
+          format: date-time
+        ce_specversion:
+          type: string
+          const: "1.0"
+        traceparent:
+          type: string
+          description: W3C Trace Context(Saga の注文の受付から 1 つのトレースでつながる)
+        correlationid:
+          type: string
+          description: 業務トランザクション ID(注文の受付で採番したもの)

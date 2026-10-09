@@ -1,0 +1,33 @@
+{
+  "type": "record",
+  "name": "ShipmentCancelled",
+  "namespace": "io.eia.events.shipping",
+  "doc": "出荷の取消の結果。ALREADY_SHIPPED なら取り消していない(Saga は補償をやめて完了に進む。ADR-0029 §3)。(shipping.shipment.cancelled.v1)",
+  "fields": [
+    {
+      "name": "sagaId",
+      "type": "string",
+      "doc": "Saga ID(UUIDv7。Kafka のキー = パーティションキー。受信側の業務キーの冪等の単位。ADR-0029)"
+    },
+    {
+      "name": "orderId",
+      "type": "string",
+      "doc": "注文 ID"
+    },
+    {
+      "name": "outcome",
+      "type": {
+        "type": "enum",
+        "name": "ShipmentCancelOutcome",
+        "doc": "UNKNOWN は読み手が知らない値(新しい版で増えた値)を読んだときの既定値(Avro の enum の default。FULL 互換で値を増やせるようにする。ADR-0029 §4)。送り手は使わない。",
+        "symbols": [
+          "CANCELLED",
+          "NOT_ARRANGED",
+          "ALREADY_SHIPPED",
+          "UNKNOWN"
+        ],
+        "default": "UNKNOWN"
+      }
+    }
+  ]
+}

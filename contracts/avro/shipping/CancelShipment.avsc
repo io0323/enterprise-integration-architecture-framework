@@ -1,0 +1,18 @@
+{
+  "type": "record",
+  "name": "CancelShipment",
+  "namespace": "io.eia.events.shipping",
+  "doc": "出荷の取消の指示(補償)。出荷の手配がなければ「取消済み」の印を残し、後から届いた手配の指示を拒否する。出荷済みなら取り消さない(ADR-0029 §3・§5)。(shipping.shipment.cmd-cancel.v1)",
+  "fields": [
+    {
+      "name": "sagaId",
+      "type": "string",
+      "doc": "Saga ID(UUIDv7。Kafka のキー = パーティションキー。受信側の業務キーの冪等の単位。ADR-0029)"
+    },
+    {
+      "name": "orderId",
+      "type": "string",
+      "doc": "注文 ID"
+    }
+  ]
+}

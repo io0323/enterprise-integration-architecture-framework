@@ -1,0 +1,18 @@
+id: INT-INVENTORY-001
+name: Inventory Stock Commands
+description: 注文 Saga(Orchestration)の在庫の引当・解放のコマンド(ADR-0006・ADR-0029)。受信は inventory-service の inventory.command だけ。
+style: event
+pattern: queue
+provider: { owner: team-inventory, system: inventory-service }
+consumers:
+  - { owner: team-inventory, system: inventory-service, group: inventory.command }
+senders:
+  - { owner: team-order, system: order-service }
+contract: contracts/asyncapi/inventory-commands.v1.yaml
+channels:
+  - inventory.stock.cmd-reserve.v1
+  - inventory.stock.cmd-release.v1
+tier: 1
+dataClassification: internal
+slo: { availability: "99.9", latencyP99: "5s" }
+lifecycle: design

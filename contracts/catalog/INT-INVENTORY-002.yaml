@@ -1,0 +1,17 @@
+id: INT-INVENTORY-002
+name: Inventory Stock Events
+description: 在庫のコマンドの結果(引当・拒否・解放)。Saga の Orchestrator が購読する(ADR-0029)。
+style: event
+pattern: pub-sub
+provider: { owner: team-inventory, system: inventory-service }
+consumers:
+  - { owner: team-order, system: order-service, group: order.saga }
+contract: contracts/asyncapi/inventory-events.v1.yaml
+channels:
+  - inventory.stock.reserved.v1
+  - inventory.stock.reservation-rejected.v1
+  - inventory.stock.released.v1
+tier: 1
+dataClassification: internal
+slo: { availability: "99.9", latencyP99: "5s" }
+lifecycle: design

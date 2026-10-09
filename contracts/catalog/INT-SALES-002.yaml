@@ -5,7 +5,6 @@ style: event
 pattern: pub-sub
 provider: { owner: team-order, system: order-service }
 consumers:
-  - { owner: team-inventory, system: inventory-service, group: inventory.reservation }
   - { owner: team-analytics, system: batch-etl, group: batch-etl.order-ingest }
 contract: contracts/asyncapi/order-events.v1.yaml
 channels:

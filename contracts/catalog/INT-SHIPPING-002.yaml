@@ -1,0 +1,17 @@
+id: INT-SHIPPING-002
+name: Shipping Events
+description: 出荷のコマンドの結果(出荷・拒否・取消)。Saga の Orchestrator が購読する(ADR-0029)。
+style: event
+pattern: pub-sub
+provider: { owner: team-logistics, system: shipping-service }
+consumers:
+  - { owner: team-order, system: order-service, group: order.saga }
+contract: contracts/asyncapi/shipping-events.v1.yaml
+channels:
+  - shipping.shipment.shipped.v1
+  - shipping.shipment.rejected.v1
+  - shipping.shipment.cancelled.v1
+tier: 1
+dataClassification: internal
+slo: { availability: "99.9", latencyP99: "5s" }
+lifecycle: design

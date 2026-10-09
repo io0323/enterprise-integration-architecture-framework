@@ -1,0 +1,86 @@
+{
+  "type": "record",
+  "name": "ArrangeShipment",
+  "namespace": "io.eia.events.shipping",
+  "doc": "出荷の手配の指示。同じ sagaId の 2 回目以降は、最初の結果を返し直す。(shipping.shipment.cmd-arrange.v1)",
+  "fields": [
+    {
+      "name": "sagaId",
+      "type": "string",
+      "doc": "Saga ID(UUIDv7。Kafka のキー = パーティションキー。受信側の業務キーの冪等の単位。ADR-0029)"
+    },
+    {
+      "name": "orderId",
+      "type": "string",
+      "doc": "注文 ID"
+    },
+    {
+      "name": "shippingAddress",
+      "type": {
+        "type": "record",
+        "name": "Address",
+        "namespace": "io.eia.events.common",
+        "fields": [
+          {
+            "name": "countryCode",
+            "type": "string",
+            "doc": "ISO 3166-1 alpha-2"
+          },
+          {
+            "name": "postalCode",
+            "type": "string"
+          },
+          {
+            "name": "city",
+            "type": "string"
+          },
+          {
+            "name": "line1",
+            "type": "string"
+          },
+          {
+            "name": "region",
+            "type": [
+              "null",
+              "string"
+            ],
+            "default": null
+          },
+          {
+            "name": "line2",
+            "type": [
+              "null",
+              "string"
+            ],
+            "default": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "lines",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "ShipmentLine",
+          "fields": [
+            {
+              "name": "lineNumber",
+              "type": "int"
+            },
+            {
+              "name": "sku",
+              "type": "string"
+            },
+            {
+              "name": "quantity",
+              "type": "long",
+              "doc": "1 以上"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
