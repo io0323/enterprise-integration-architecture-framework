@@ -127,10 +127,7 @@ class InventoryPersistenceIT :
 
             fun query(sql: String): String = checkNotNull(queryOrNull(sql)) { "行がありません: $sql" }
 
-            fun queryOrNull(sql: String): String? =
-                superuser(name).connection.use { c ->
-                    c.createStatement().use { s -> s.executeQuery(sql).use { rows -> if (rows.next()) rows.getString(1) else null } }
-                }
+            fun queryOrNull(sql: String): String? = superuser(name).connection.use { firstValue(it, sql) }
         }
 
         /** inventory の DB を作り、所有者でマイグレーションする(2 回目は何もしない)。 */
@@ -244,7 +241,7 @@ class InventoryPersistenceIT :
 
         test("保持期間の削除は、上限の件数ずつ全部を消す。冪等消費の記録も 14 日を過ぎたものだけ消す") {
             val service = newService()
-            (1..5).forEach { n -> service.release(envelope("saga-$n")).ok() }
+            for (n in 1..5) service.release(envelope("saga-$n")).ok()
             service.execute("UPDATE reservation SET settled_at = clock_timestamp() - interval '40 days'")
             service.execute("UPDATE inbox.processed_message SET processed_at = clock_timestamp() - interval '15 days'")
             service.release(envelope("saga-new")).ok()
@@ -278,3 +275,8 @@ class InventoryPersistenceIT :
     })
 
 private fun randomHex(): String = HexFormat.of().formatHex(ByteArray(16).also { SecureRandom().nextBytes(it) })
+
+private fun firstValue(
+    connection: java.sql.Connection,
+    sql: String,
+): String? = connection.createStatement().use { s -> s.executeQuery(sql).use { rows -> if (rows.next()) rows.getString(1) else null } }

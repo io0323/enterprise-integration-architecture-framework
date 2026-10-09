@@ -56,10 +56,11 @@ public class JdbcReservationStore(
             if (reservation.lines.isNotEmpty()) {
                 connection.prepareStatement(INSERT_LINE).use { statement ->
                     reservation.lines.forEach { line ->
-                        statement.setString(1, reservation.sagaId)
-                        statement.setInt(2, line.lineNumber)
-                        statement.setString(3, line.sku)
-                        statement.setLong(4, line.quantity)
+                        var column = 0
+                        statement.setString(++column, reservation.sagaId)
+                        statement.setInt(++column, line.lineNumber)
+                        statement.setString(++column, line.sku)
+                        statement.setLong(++column, line.quantity)
                         statement.addBatch()
                     }
                     statement.executeBatch()

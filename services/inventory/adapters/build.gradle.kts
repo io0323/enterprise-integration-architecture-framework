@@ -36,3 +36,13 @@ tasks.named<ProcessResources>("processResources") {
         into("contracts/avro/inventory")
     }
 }
+
+// テストで、リソースのスキーマが契約のファイルと同じであること・コマンドの型が契約のスキーマで読み書きできることを確かめる
+tasks.named<Test>("test") {
+    systemProperty(
+        "eia.contractsAvro",
+        rootProject.layout.projectDirectory
+            .dir("contracts/avro")
+            .asFile.absolutePath,
+    )
+}
