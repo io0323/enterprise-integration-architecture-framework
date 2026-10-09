@@ -38,6 +38,15 @@
 
 Consumer(`EventConsumer`。ADR-0028 §2)が自分で判定する `eiaf.dlq.reason` は `INVALID_HEADERS`(CloudEvents のヘッダの欠落・不正)・`UNDECODABLE`(Avro として読めない)・`UNEXPECTED_TOMBSTONE`(値がない)・`UNEXPECTED_EXCEPTION`(処理が想定しない例外を投げた)。それ以外は処理が返したコードを大文字にしたもの。自分の DB・Schema Registry が使えない間のメッセージは DLQ に送らず、読み直す(lag のアラートで検知する)。
 
+### Replay のヘッダ(ADR-0028 §6)
+DLQ から元のトピックに戻すときは、キー・値・`ce_id` を含むヘッダを DLQ のまま使い(受信側の冪等消費で重複を捨てられるように)、`eiaf.dlq.*` を外して次を加える(`DeadLetterReplayer`。`make dlq-replay`。値は UTF-8 の文字列)。
+
+| ヘッダ | 内容 |
+|---|---|
+| `eiaf.replay.dlq.partition` / `eiaf.replay.dlq.offset` | 戻した元の DLQ の位置 |
+| `eiaf.replay.reason` | DLQ に入ったときの原因(`eiaf.dlq.reason`) |
+| `eiaf.replay.replayed-at` | 戻した時刻(ISO 8601 の UTC) |
+
 DLQ のトピックは、元のメッセージと同じ機密区分として扱う(値をそのまま運ぶため)。保持期間はトピックの定義(`infra/local/kafka/topics.conf`)に書く。
 
 ### Idempotency-Key の応答(ADR-0022 §3)

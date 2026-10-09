@@ -135,6 +135,7 @@ curl -s -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token
   - トピックは `kafka-topics`(1 回だけ動くコンテナ)が `kafka/topics.conf` のとおりに作る。`legacy-order-acl` は、それと `schema-publish`(書くイベントの契約の登録)の完了を待って起動する。
   - 監視: Grafana の **CDC — Legacy**(http://localhost:19300/d/eiaf-cdc-legacy)と `prometheus/rules/acl.rules.yml` のアラート。対応は `docs/runbooks/legacy-order-acl.md`。
   - 照合(ADR-0027): `legacy-order-acl` が 2 分ごとに、レガシーの受注表と出力の最新の状態をキーごとのハッシュで比べる。レガシーの DB は読み取り専用のロール `eiaf_reconcile`(`postgres/init/40-reconcile.sh`。接続数・問い合わせの時間の上限つき)で読む。ずれは上限 100 件の範囲で自動で取り直す(再同期のロール `eiaf_resync` は signal 表の INSERT だけ)。手動の照合は `docker compose ... run --rm --no-deps legacy-order-acl reconcile`(`--dry-run` で比べるだけ)。再同期と DDL の変更の手順は `docs/runbooks/cdc-resync.md`。アラートは `prometheus/rules/reconcile.rules.yml`。ロールは初期化スクリプトで作るので、P06 ⑥ より前のボリュームでは `make clean` が要る。
+- **イベント・コマンドの受信(ADR-0028)**: サービスの Consumer(`EventConsumer`)の DLQ・遅れは `prometheus/rules/consumer.rules.yml` のアラートで見る(処理が止まった Consumer は「lag があるのにオフセットが進まない」で判定する)。DLQ のメッセージを戻すのは `make dlq-replay ARGS="--topic <topic>.dlq --limit <n> [--execute]"`(既定は dry-run。ホストの `localhost:19092` に接続する)。手順は `docs/runbooks/event-dlq-replay.md`。
 - **Toxiproxy**: 起動時に `kafka-host`(19094)、`kafka-internal`(19095)、`postgres`(19433)の proxy を作る(`toxiproxy/toxiproxy.json`)。
 
 ## イメージの更新

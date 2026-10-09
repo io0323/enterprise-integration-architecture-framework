@@ -26,6 +26,7 @@ private const val SOURCE = "inventory.stock.cmd-reserve.v1"
 private const val DLQ = "$SOURCE.dlq"
 private val REPLAYED_AT = Instant.parse("2026-10-09T09:00:00Z")
 
+@Suppress("LongParameterList") // DLQ のレコードの項目ごとの既定値
 private fun dead(
     partition: Int,
     offset: Long,

@@ -101,27 +101,28 @@ public class DeadLetterReplayer(
             val end = consumer.endOffsets(selected)
             val begin = consumer.beginningOffsets(selected)
             selected.forEach { p -> consumer.seek(p, maxOf(begin.getValue(p), request.filter.fromOffset ?: 0L)) }
-            val started = TimeSource.Monotonic.markNow()
-            var scanned = 0
-            val matched = mutableListOf<Candidate>()
-
-            fun remaining() = selected.filter { consumer.position(it) < end.getValue(it) }
-            while (remaining().isNotEmpty()) {
-                if (started.elapsedNow() > readTimeout) {
-                    return err(ReplayError.Unavailable("${request.deadLetterTopic} を $readTimeout の間に末尾まで読めません"))
-                }
-                consumer.poll(pollTimeout.toJavaDuration()).forEach { record ->
-                    if (record.offset() < end.getValue(TopicPartition(record.topic(), record.partition()))) {
-                        scanned++
-                        val entry = entryOf(record)
-                        if (request.filter.matches(entry)) matched += Candidate(record, entry)
-                    }
-                }
-            }
-            ok(Read(scanned, matched.sortedWith(compareBy({ it.entry.partition }, { it.entry.offset }))))
+            val records = readUntil(end, request.deadLetterTopic)
+            records?.let { read ->
+                val matched = read.map { Candidate(it, entryOf(it)) }.filter { request.filter.matches(it.entry) }
+                ok(Read(read.size, matched.sortedWith(compareBy({ it.entry.partition }, { it.entry.offset }))))
+            } ?: err(ReplayError.Unavailable("${request.deadLetterTopic} を $readTimeout の間に末尾まで読めません"))
         } catch (e: KafkaException) {
             err(ReplayError.Unavailable("${request.deadLetterTopic} を読めません(${e::class.simpleName})"))
         }
+
+    /** 各パーティションを [end] の手前まで読む。[readTimeout] を超えたら null。 */
+    private fun readUntil(
+        end: Map<TopicPartition, Long>,
+        topic: String,
+    ): List<ConsumerRecord<ByteArray?, ByteArray?>>? {
+        val started = TimeSource.Monotonic.markNow()
+        val read = mutableListOf<ConsumerRecord<ByteArray?, ByteArray?>>()
+        while (end.any { (p, last) -> consumer.position(p) < last }) {
+            if (started.elapsedNow() > readTimeout) return null
+            read += consumer.poll(pollTimeout.toJavaDuration()).filter { it.offset() < end.getValue(TopicPartition(topic, it.partition())) }
+        }
+        return read
+    }
 
     private suspend fun send(
         candidate: Candidate,
