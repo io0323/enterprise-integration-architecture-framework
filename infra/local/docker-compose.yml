@@ -93,8 +93,8 @@ services:
       args:
         KAFKA_IMAGE: ${KAFKA_IMAGE:?}
     # cdc: レガシーの受注表の CDC(コネクタ legacy-juchu。ADR-0026)。order: 注文のイベントを Outbox から発行する(ADR-0007)。
-    # コネクタはどちらも make up が登録する
-    profiles: [cdc, order]
+    # saga: Saga の参加者の返事を Outbox から発行する(コネクタ inventory-outbox など。ADR-0029)。コネクタはどれも make up が登録する
+    profiles: [cdc, order, saga]
     depends_on:
       kafka:
         condition: service_healthy
@@ -105,6 +105,10 @@ services:
       # cdc: レガシーの CDC の設定(publication・権限)ができてから起動する。make up --wait は、どのサービスも待たない 1 回だけの
       # コンテナが終わると失敗にするため、ここで待つ。order の profile では legacy-migrate がないので required: false
       legacy-migrate:
+        condition: service_completed_successfully
+        required: false
+      # saga: 参加者の Outbox の表・publication・Debezium の CONNECT ができてから起動する(同じ理由)
+      inventory-migrate:
         condition: service_completed_successfully
         required: false
     environment:
@@ -141,7 +145,7 @@ services:
   # レプリケーションスロット(wal_status・safe_wal_size・位置)と設定(max_slot_wal_keep_size)を出す。接続は pg_monitor だけのユーザー
   postgres-exporter:
     image: ${POSTGRES_EXPORTER_IMAGE:?}
-    profiles: [cdc, order]
+    profiles: [cdc, order, saga]
     depends_on:
       postgres:
         condition: service_healthy
@@ -154,10 +158,10 @@ services:
       <<: *healthcheck
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9187/metrics"]
 
-  # トピックのオフセットと Consumer Group の lag(P06 ④。P07 の Consumer でも使う)
+  # トピックのオフセットと Consumer Group の lag(P06 ④。P07 の Consumer の DLQ・lag のアラートにも使う。ADR-0028 §5)
   kafka-exporter:
     image: ${KAFKA_EXPORTER_IMAGE:?}
-    profiles: [cdc, order]
+    profiles: [cdc, order, saga]
     command: ["--kafka.server=kafka:9092"]
     depends_on:
       kafka:
@@ -207,7 +211,8 @@ services:
   # アプリが書くトピックを、kafka/topics.conf のとおりに作って終わる(compacted の出力・DLQ の保持期間。auto.create.topics.enable=false)
   kafka-topics:
     image: ${KAFKA_IMAGE:?}
-    profiles: [cdc]
+    # cdc: ACL の出力と DLQ。saga: コマンドの DLQ(ADR-0028)
+    profiles: [cdc, saga]
     entrypoint: ["/bin/bash", "/topics/create-topics.sh", "kafka:9092", "/topics/topics.conf"]
     depends_on:
       kafka:
@@ -248,6 +253,56 @@ services:
     volumes:
       - *probe-volume
     mem_limit: 384m
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "/probe/bin/wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/health/ready"]
+
+  # ---------------------------------------------------------------- saga(P07。ADR-0029)
+  # 注文 Saga の参加者。イメージは services/<name>/app/Dockerfile で、中身は make up PROFILE=saga が先に作る(installDist)。
+  # 在庫の引当(inventory-service)。マイグレーション(1 回だけ動いて終わる)は所有者のパスワードを渡す唯一のコンテナ(ADR-0024 §2)
+  inventory-migrate:
+    build: &inventory-build
+      context: ../../services/inventory/app
+      args:
+        JAVA_RUNTIME_IMAGE: ${JAVA_RUNTIME_IMAGE:?}
+    profiles: [saga]
+    command: ["migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      INVENTORY_DB_URL: jdbc:postgresql://postgres:5432/inventory_service
+      INVENTORY_DB_PASSWORD: ${INVENTORY_DB_PASSWORD:?make env を実行してください}
+      OTEL_SERVICE_NAME: inventory-service
+    mem_limit: 256m
+    restart: "no"
+
+  # コマンド(inventory.stock.cmd-*)を読み、返事を Outbox に書く。返事は Debezium(コネクタ inventory-outbox)が発行する。
+  # 返事のスキーマを schema-publish が登録し、DLQ のトピックを kafka-topics が作ってから起動する。アプリのロールのパスワードだけを渡す
+  inventory-service:
+    build: *inventory-build
+    profiles: [saga]
+    command: ["serve"]
+    depends_on:
+      inventory-migrate:
+        condition: service_completed_successfully
+      schema-publish:
+        condition: service_completed_successfully
+      kafka-topics:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_healthy
+    environment:
+      INVENTORY_DB_URL: jdbc:postgresql://postgres:5432/inventory_service
+      INVENTORY_APP_DB_PASSWORD: ${INVENTORY_APP_DB_PASSWORD:?make env を実行してください}
+      INVENTORY_KAFKA_BOOTSTRAP: kafka:9092
+      INVENTORY_SCHEMA_REGISTRY_URL: http://apicurio:8080/apis/registry/v3
+      OTEL_SERVICE_NAME: inventory-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    volumes:
+      - *probe-volume
+    # 開発機で core + order + saga を同時に動かすため、order-service(384m)より小さくする(P07 の計画)
+    mem_limit: 256m
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "/probe/bin/wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/health/ready"]
@@ -439,8 +494,8 @@ services:
       context: ../../tools/schema-publish
       args:
         JAVA_RUNTIME_IMAGE: ${JAVA_RUNTIME_IMAGE:?}
-    # cdc: legacy-order-acl が書くイベントのスキーマ(ADR-0026)。order: order-service のイベント
-    profiles: [order, cdc]
+    # cdc: legacy-order-acl が書くイベントのスキーマ(ADR-0026)。order: order-service のイベント。saga: 参加者の返事(ADR-0029)
+    profiles: [order, cdc, saga]
     command: ["--registry", "http://apicurio:8080/apis/registry/v3", "--root", "/repo"]
     depends_on:
       apicurio:

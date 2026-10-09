@@ -45,7 +45,7 @@ jobs:
         run: make env
       - name: Validate every profile
         run: |
-          for profile in core cdc iot file b2b chaos order; do
+          for profile in core cdc iot file b2b chaos order saga; do
             echo "::group::$profile"
             docker compose -f infra/local/docker-compose.yml --env-file infra/local/images.env --env-file infra/local/.env \
               --profile core --profile "$profile" config --quiet
@@ -84,7 +84,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        profile: [core, cdc, iot, file, b2b, chaos, order]
+        profile: [core, cdc, iot, file, b2b, chaos, order, saga]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Docker versions
@@ -97,13 +97,13 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           docker system prune --all --force >/dev/null
           df -h /
-      # order / cdc profile: イメージの中身(installDist)を Gradle で作る(make up が order-dist / legacy-dist を実行する)
-      - if: ${{ matrix.profile == 'order' || matrix.profile == 'cdc' }}
+      # order / cdc / saga profile: イメージの中身(installDist)を Gradle で作る(make up が order-dist / legacy-dist / saga-dist を実行する)
+      - if: ${{ matrix.profile == 'order' || matrix.profile == 'cdc' || matrix.profile == 'saga' }}
         uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: "21"
-      - if: ${{ matrix.profile == 'order' || matrix.profile == 'cdc' }}
+      - if: ${{ matrix.profile == 'order' || matrix.profile == 'cdc' || matrix.profile == 'saga' }}
         uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
       - name: Up
         run: make up PROFILE=${{ matrix.profile }}
