@@ -36,6 +36,7 @@ import org.apache.kafka.clients.consumer.internals.AutoOffsetResetStrategy
 import org.apache.kafka.clients.producer.MockProducer
 import org.apache.kafka.common.TopicPartition
 import org.apache.kafka.common.errors.AuthorizationException
+import org.apache.kafka.common.errors.TimeoutException
 import org.apache.kafka.common.header.internals.RecordHeaders
 import org.apache.kafka.common.record.TimestampType
 import org.apache.kafka.common.serialization.ByteArraySerializer
@@ -317,6 +318,28 @@ class EventConsumerSpec :
 
             f.loop.pollOnce().shouldBeNull()
             handler.calls.size shouldBe 1
+        }
+
+        test("ブローカーに届かずコミットがタイムアウトしても(Kafka の停止)、読み取りを止めない。Unavailable の位置の戻しも行う") {
+            val timeout =
+                OffsetCommitter {
+                    _,
+                    _,
+                    ->
+                    throw TimeoutException("Timeout of 60000ms expired before successfully committing offsets")
+                }
+            val processed = fixture(ScriptedHandler(PROCESSED), committer = timeout)
+            processed.consumer.addRecord(record(0, payload))
+            processed.loop.pollOnce().shouldBeNull()
+
+            val unavailable =
+                fixture(
+                    ScriptedHandler(PROCESSED, Result.Err(HandlingFailure.Unavailable("inbox_storage_unavailable", "DB に接続できない"))),
+                    committer = timeout,
+                )
+            (0L..2L).forEach { unavailable.consumer.addRecord(record(it, payload)) }
+            unavailable.loop.pollOnce() shouldBe "inbox_storage_unavailable"
+            unavailable.consumer.position(PARTITION) shouldBe 1L
         }
 
         test("購読の誤り(なし・同じトピックを 2 回・Consumer Group の形式)は作るときに拒否する") {
