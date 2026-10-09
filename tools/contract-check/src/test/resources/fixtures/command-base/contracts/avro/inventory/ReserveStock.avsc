@@ -1,9 +1,0 @@
-{
-  "type": "record",
-  "name": "ReserveStock",
-  "namespace": "io.eia.events.inventory",
-  "fields": [
-    { "name": "sagaId", "type": "string" },
-    { "name": "orderId", "type": "string" }
-  ]
-}

@@ -60,8 +60,7 @@ private val cases =
                 .replace(CATALOG_EVENTS, "  - sales.order.created.v1", "  - sales.orderCreated.v1")
         },
         Case("Command Topic の event セグメントが cmd- でない", setOf("CC-NAMING-002", "CC-COMMAND-002")) {
-            overlay("command-base")
-                .replace(COMMAND_CONTRACT, "inventory.stock.cmd-reserve.v1", "inventory.stock.cmdreserve.v1")
+            replace(COMMAND_CONTRACT, "inventory.stock.cmd-reserve.v1", "inventory.stock.cmdreserve.v1")
                 .replace(COMMAND_CATALOG, "inventory.stock.cmd-reserve.v1", "inventory.stock.cmdreserve.v1")
         },
         Case("servers が /{domain} で終わらず、paths が /v{n}/ で始まらない", setOf("CC-NAMING-003", "CC-NAMING-004")) {
@@ -71,7 +70,7 @@ private val cases =
         Case("contracts/files のファイル名が規約外", setOf("CC-NAMING-005")) { overlay("file-naming") },
         Case("カタログのファイル名と連携 ID が一致せず、ID が重複", setOf("CC-NAMING-006", "CC-CATALOG-003")) { overlay("duplicate-id") },
         Case("Consumer Group が {service}.{purpose} でない", setOf("CC-NAMING-007")) {
-            replace(CATALOG_EVENTS, "group: inventory.reservation", "group: inventory_reservation")
+            replace(CATALOG_EVENTS, "group: batch-etl.order-ingest", "group: batch-etl_order-ingest")
         },
         Case("Avro の namespace がディレクトリの domain と異なる", setOf("CC-NAMING-008")) {
             replace(ORDER_CANCELLED, "\"namespace\": \"io.eia.events.sales\"", "\"namespace\": \"io.eia.events.billing\"")
@@ -120,12 +119,12 @@ private val cases =
             replace(CATALOG_EVENTS, "  - sales.order.cancelled.v1\n", "")
         },
         Case("event の consumer に group がない", setOf("CC-CATALOG-005")) {
-            replace(CATALOG_EVENTS, ", group: inventory.reservation", "")
+            replace(CATALOG_EVENTS, ", group: batch-etl.order-ingest", "")
         },
         Case("カタログ未登録の契約", setOf("CC-CATALOG-006")) { overlay("unregistered-contract") },
         // --- Command(ADR-0006) ---
         Case("コマンドトピックを 1 つのカタログで 2 サービスが購読", setOf("CC-COMMAND-001")) {
-            overlay("command-base").replace(
+            replace(
                 COMMAND_CATALOG,
                 "  - { owner: team-inventory, system: inventory-service, group: inventory.command }\n",
                 "  - { owner: team-inventory, system: inventory-service, group: inventory.command }\n" +
@@ -133,20 +132,20 @@ private val cases =
             )
         },
         Case("コマンドトピックを別のカタログからも購読", setOf("CC-COMMAND-001")) {
-            overlay("command-base").overlay("command-second-catalog")
+            overlay("command-second-catalog")
         },
         Case("コマンドトピックの購読者が {service}.command でない", setOf("CC-COMMAND-001")) {
-            overlay("command-base").replace(COMMAND_CATALOG, "group: inventory.command", "group: inventory.reservation")
+            replace(COMMAND_CATALOG, "group: inventory.command", "group: inventory.reservation")
         },
         Case("コマンドトピックの購読者がいない", setOf("CC-COMMAND-001")) {
-            overlay("command-base").replace(
+            replace(
                 COMMAND_CATALOG,
                 "consumers:\n  - { owner: team-inventory, system: inventory-service, group: inventory.command }\n",
                 "consumers: []\n",
             )
         },
         Case("コマンドトピックを pattern: pub-sub で登録", setOf("CC-COMMAND-002")) {
-            overlay("command-base").replace(COMMAND_CATALOG, "pattern: queue", "pattern: pub-sub")
+            replace(COMMAND_CATALOG, "pattern: queue", "pattern: pub-sub")
         },
         // --- File ---
         Case("manifest の必須項目から traceparent を外した", setOf("CC-FILE-001")) {
@@ -224,20 +223,12 @@ class ContractCheckSpec :
             result.baselineUsed shouldBe false
         }
 
+        // コマンドトピック(INT-INVENTORY/PAYMENT/SHIPPING-001。ADR-0006・ADR-0029)もリポジトリの契約に含まれる
         test("リポジトリの契約に違反はない(自分自身を比較元にする)") {
             val result = Workspace.ofRepositoryContracts().check(baseline = Workspace.ofRepositoryContracts())
 
             result.violations.shouldBeEmpty()
             result.baselineUsed shouldBe true
-        }
-
-        test("準拠したコマンドトピック(fixture: command-base)に違反はない") {
-            Workspace
-                .ofRepositoryContracts()
-                .overlay("command-base")
-                .check()
-                .violations
-                .shouldBeEmpty()
         }
 
         test("互換な変更(default 付きのフィールド追加・任意項目の追加)は違反にならない") {

@@ -1,0 +1,9 @@
+{
+  "type": "record",
+  "name": "StockAudited",
+  "namespace": "io.eia.events.inventory",
+  "fields": [
+    { "name": "sku", "type": "string" },
+    { "name": "quantity", "type": "long" }
+  ]
+}

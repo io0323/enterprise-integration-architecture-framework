@@ -1,16 +1,15 @@
-id: INT-INVENTORY-001
-name: Reserve Stock Command
+id: INT-INVENTORY-901
+name: Inventory Stock Commands (shipping も購読する違反例)
 style: event
 pattern: queue
 provider: { owner: team-inventory, system: inventory-service }
-senders:
-  - { owner: team-order, system: order-service }
 consumers:
-  - { owner: team-inventory, system: inventory-service, group: inventory.command }
+  - { owner: team-shipping, system: shipping-service, group: shipping.command }
 contract: contracts/asyncapi/inventory-commands.v1.yaml
 channels:
   - inventory.stock.cmd-reserve.v1
-tier: 1
+  - inventory.stock.cmd-release.v1
+tier: 2
 dataClassification: internal
 slo: { availability: "99.9", latencyP99: "5s" }
 lifecycle: design

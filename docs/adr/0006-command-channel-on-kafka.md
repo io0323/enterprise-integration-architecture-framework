@@ -49,3 +49,4 @@ ADR-0003 のミドルウェア構成には Queue 専用の基盤がない。
     4. `platform/messaging-kafka` の API を変えずに差し替えられる: **未評価**(同上。API は P06・P07 で作る)。
   - 参考: Share Group は 4.2 から production-ready で、4.3.1 には Share Group の経路のデッドロックの修正(KAFKA-20505)が入っている。単一ブローカーで Share Group を使う場合は `share.coordinator.state.topic.replication.factor` と `min.isr` を 1 にする必要があり、ローカル基盤では設定済み(`infra/local/docker-compose.yml`)。
   - 次の再評価: Kafka を 4.4 系の安定版に上げるとき。
+- 2026-10-09: P07 ③ で、注文 Saga のコマンドのトピックを決めた: `inventory.stock.cmd-reserve.v1`・`cmd-release.v1`、`payment.payment.cmd-authorize.v1`・`cmd-void.v1`、`shipping.shipment.cmd-arrange.v1`・`cmd-cancel.v1`(INT-INVENTORY/PAYMENT/SHIPPING-001)。結果は各サービスの Domain Event(-002)で、Orchestrator(order-service の `order.saga`)が購読する。キーは Saga ID。Saga の決定は ADR-0029。
