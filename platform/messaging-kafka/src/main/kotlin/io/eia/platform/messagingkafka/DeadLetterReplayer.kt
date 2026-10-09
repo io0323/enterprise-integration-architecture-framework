@@ -215,7 +215,7 @@ public class DeadLetterReplayer(
                 detail = text(DeadLetterHeaders.DETAIL),
                 sourceTopic = text(DeadLetterHeaders.SOURCE_TOPIC),
                 sourceOffset = text(DeadLetterHeaders.SOURCE_OFFSET)?.toLongOrNull(),
-                failedAt = text(DeadLetterHeaders.FAILED_AT)?.let { runCatching { Instant.parse(it) }.getOrNull() },
+                failedAt = text(DeadLetterHeaders.FAILED_AT)?.let(::parseInstant),
                 replayedBefore = record.headers().lastHeader(ReplayHeaders.REPLAYED_AT) != null,
             )
         }
@@ -224,6 +224,14 @@ public class DeadLetterReplayer(
             key: String,
             value: String,
         ): Header = RecordHeader(key, value.toByteArray(Charsets.UTF_8))
+
+        /** ISO 8601 の時刻。形式が不正なら null(手で入れた DLQ のレコードなど)。 */
+        public fun parseInstant(value: String): Instant? =
+            try {
+                Instant.parse(value)
+            } catch (_: IllegalArgumentException) {
+                null
+            }
     }
 }
 
