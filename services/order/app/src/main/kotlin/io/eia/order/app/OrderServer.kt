@@ -232,7 +232,7 @@ internal class OrderServer private constructor(
                 }
             }
             routing {
-                overPlaintext { healthRoutes(koin.get(), koin.get(), koin.getOrNull()) }
+                overPlaintext { healthRoutes(koin.get(), koin.get()) }
                 overTls { authenticate { orderRoutes(koin.get()) } }
             }
             launchPurgeJob(koin.get(), koin.get(), config)
@@ -255,14 +255,14 @@ internal class OrderServer private constructor(
         private fun Route.healthRoutes(
             dataSource: HikariDataSource,
             schemaIds: SchemaIdBook,
-            sagaReplies: EventConsumer?,
         ) {
             get("/health/live") { call.respondText("""{"status":"UP"}""", ContentType.Application.Json) }
             get("/health/ready") {
-                // 返信を読むなら、読み取りが基盤の障害で止まっていないこと(ADR-0028 §1)
+                // 返信の読み取り(Saga)の止まりは API の ready に含めない。Schema Registry が止まっても注文は受け付ける(ADR-0025 §3)ので、
+                // 返信の読み取りだけが止まっているときに API のトラフィックを外さない。止まりは eia.consumer.unavailable と
+                // EventConsumerUnavailable のアラートで分かる(ADR-0029 §3)
                 val ready =
                     schemaIds.isReady &&
-                        (sagaReplies?.ready ?: true) &&
                         withContext(Dispatchers.IO) {
                             try {
                                 dataSource.connection.use { it.isValid(READY_TIMEOUT_SECONDS) }
