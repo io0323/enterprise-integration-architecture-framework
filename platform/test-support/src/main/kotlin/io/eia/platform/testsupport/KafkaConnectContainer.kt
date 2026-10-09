@@ -3,6 +3,11 @@ package io.eia.platform.testsupport
 import org.testcontainers.containers.GenericContainer
 import org.testcontainers.containers.wait.strategy.Wait
 import org.testcontainers.utility.DockerImageName
+import java.io.IOException
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
@@ -49,6 +54,32 @@ public class KafkaConnectContainer(
     /** ホストから見た REST API のベース URL。 */
     public val restUrl: String get() = "http://$host:${getMappedPort(REST_PORT)}"
 
+    /**
+     * 失敗の調査用: [connector] の状態(REST の status)と、Connect のログの WARN / ERROR の末尾([lines] 行)。
+     * テストの待ちが期限を超えたときのメッセージに入れる(CI のログには、コンテナのログが残らないため)。
+     */
+    public fun diagnostics(
+        connector: String,
+        lines: Int = DIAGNOSTIC_LINES,
+    ): String {
+        val status =
+            try {
+                HttpClient.newHttpClient().use { client ->
+                    val request = HttpRequest.newBuilder(URI.create("$restUrl/connectors/$connector/status")).build()
+                    client.send(request, HttpResponse.BodyHandlers.ofString()).body()
+                }
+            } catch (e: IOException) {
+                "取得できません(${e::class.simpleName})"
+            }
+        val warnings =
+            logs
+                .lineSequence()
+                .filter { line -> LOG_LEVELS.any { it in line } }
+                .toList()
+                .takeLast(lines)
+        return "コネクタ $connector の状態: $status\nConnect のログの WARN / ERROR(末尾 ${warnings.size} 行):\n" + warnings.joinToString("\n")
+    }
+
     public companion object {
         public const val REST_PORT: Int = 8083
         private const val IMAGE_TAG = "eiaf-kafka-connect-it:latest"
@@ -87,5 +118,7 @@ public class KafkaConnectContainer(
         }
 
         private const val OUTPUT_TAIL = 4_000
+        private const val DIAGNOSTIC_LINES = 60
+        private val LOG_LEVELS = listOf(" WARN ", " ERROR ", "Exception")
     }
 }
