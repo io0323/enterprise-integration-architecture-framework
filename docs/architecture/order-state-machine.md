@@ -1,7 +1,7 @@
 # 注文の状態遷移(order-service)
 
 注文(`io.eia.order.domain.Order`)の状態と遷移の規則。domain の `OrderStatus.allowedTransitions` と、この表は一致させる(`OrderStateMachineDocSpec` で照合する)。
-P07 の Saga(在庫の引当・決済・出荷)は、この遷移を呼び出す側になる。Saga の内部の状態は、注文の状態とは別に saga テーブルで持つ。
+P07 の Saga(在庫の引当・決済・出荷)は、この遷移を呼び出す側になる。Saga の内部の状態は、注文の状態とは別に saga テーブル(`order_saga`)で持つ(`docs/architecture/order-saga.md`)。
 
 ## 状態遷移図
 ```mermaid
@@ -44,12 +44,9 @@ stateDiagram-v2
 |---|---|---|
 | 受け付け(`[*] → PLACED`) | `sales.order.created.v1` | `contracts/asyncapi/order-events.v1.yaml`(INT-SALES-002) |
 | `→ CANCELLED` | `sales.order.cancelled.v1` | 同上 |
-| `→ CONFIRMED` / `→ SHIPPED` / `→ DELIVERED` | 未定 | 必要になるフェーズ(P07 以降)で、先に契約に追加する(Contract First) |
+| `→ CONFIRMED` / `→ SHIPPED` / `→ DELIVERED` | 未定 | 購読者がいないため P07 では追加しない(ADR-0029 §8)。必要になるフェーズで、先に契約に追加する(Contract First) |
 
-## Saga の状態との対応(見込み。P07 で確定する)
-| Saga の状態 | 注文の状態 |
-|---|---|
-| 開始・在庫の引当中・決済の承認中 | `PLACED` |
-| 完了(在庫の引当済み・決済の承認済み) | `CONFIRMED` |
-| 補償中 | `PLACED` のまま(補償が終わってから `CANCELLED`) |
-| 補償済み | `CANCELLED` |
+## Saga の状態との対応
+P07 で確定した。Saga の状態遷移と、注文の状態との対応は `docs/architecture/order-saga.md`(ADR-0029)。
+- Saga は注文を `PLACED → CONFIRMED`(決済の承認の後)、`CONFIRMED → SHIPPED`(出荷の後)、`PLACED / CONFIRMED → CANCELLED`(補償の完了の後)に移す。
+- 補償中は、補償に入る前の注文の状態のまま(補償が終わってから `CANCELLED`)。

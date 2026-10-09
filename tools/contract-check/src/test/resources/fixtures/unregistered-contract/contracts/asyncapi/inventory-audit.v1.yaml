@@ -1,23 +1,23 @@
 asyncapi: 3.0.0
 info:
-  title: Inventory Commands
+  title: Inventory Audit
   version: 1.0.0
-  description: 在庫引当のコマンド(ADR-0006 のサンプル)
+  description: 在庫の棚卸しのイベント(カタログに登録していない契約の例)
 channels:
-  reserveStock:
-    address: inventory.stock.cmd-reserve.v1
+  stockAudited:
+    address: inventory.stock.audited.v1
     messages:
-      reserveStock:
-        $ref: "#/components/messages/ReserveStock"
+      stockAudited:
+        $ref: "#/components/messages/StockAudited"
 operations:
-  receiveReserveStock:
-    action: receive
+  publishStockAudited:
+    action: send
     channel:
-      $ref: "#/channels/reserveStock"
+      $ref: "#/channels/stockAudited"
 components:
   messages:
-    ReserveStock:
-      name: ReserveStock
+    StockAudited:
+      name: StockAudited
       contentType: avro/binary
       headers:
         type: object
@@ -33,4 +33,4 @@ components:
       payload:
         schemaFormat: application/vnd.apache.avro+json;version=1.9.0
         schema:
-          $ref: "../avro/inventory/ReserveStock.avsc"
+          $ref: "../avro/inventory/StockAudited.avsc"
