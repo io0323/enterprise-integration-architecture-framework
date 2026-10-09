@@ -23,6 +23,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.clients.consumer.OffsetAndMetadata
 import org.apache.kafka.common.TopicPartition
 import org.apache.kafka.common.errors.RebalanceInProgressException
+import org.apache.kafka.common.errors.RetriableException
 import org.apache.kafka.common.header.Headers
 import org.apache.kafka.common.serialization.ByteArrayDeserializer
 import org.slf4j.LoggerFactory
@@ -137,6 +138,10 @@ public class EventConsumer(
             logger.warn("オフセットをコミットできません(group={}, {})。送り直しは冪等で吸収します", groupId, e::class.simpleName)
         } catch (e: RebalanceInProgressException) {
             logger.warn("オフセットをコミットできません(group={}, {})。送り直しは冪等で吸収します", groupId, e::class.simpleName)
+        } catch (e: RetriableException) {
+            // ブローカーに届かない(停止・再起動。TimeoutException など)。処理は終えているので読み取りを止めない。
+            // 次のコミットが後の位置で上書きし、それまでに再起動すれば最後のコミットから送り直す(重複は冪等で吸収する)
+            logger.warn("オフセットをコミットできません(group={}, {})。次のコミットでやり直します", groupId, e::class.simpleName)
         }
     }
 
