@@ -106,3 +106,4 @@ Framework は複数のシステムにまたがる業務の更新に Saga を求�
 
 ## 改訂履歴
 - 2026-10-09: P07 ④a で inventory-service を入れた。コマンドのトピックは、保持期間(7 日。§5 の印の保持期間の根拠)を固定するため、Debezium に作らせず `infra/local/kafka/topics.conf` で明示して作る(DLQ も同じ)。§5 の確かめること(遅れて届いたコマンドの拒否・同時の注文で在庫が負にならない)は `InventoryPersistenceIT`。
+- 2026-10-09: P07 ④b で payment-service と shipping-service を入れた。データの最小化(Framework 12.2)のため、payment は顧客 ID を、shipping は届け先の国のほかの住所を記録しない(模擬は外部の決済・運送を呼ばないため)。shipping の記録は書き換えない(アプリのロールに UPDATE を付けない)ので、記録の読み取りでは行をロックしない。同じ Saga の初回が同時に来たときは主キーが 1 つに絞り、後の側は Transient のやり直しで返し直しになる(§5 の冪等は保たれる)。出荷の取消の `CANCELLED`(手配したが出荷の前)は、模擬が直ちに出荷するため返さない(契約の値としては残す)。
