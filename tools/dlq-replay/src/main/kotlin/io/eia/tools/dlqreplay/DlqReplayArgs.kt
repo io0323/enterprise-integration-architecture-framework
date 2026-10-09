@@ -1,5 +1,6 @@
 package io.eia.tools.dlqreplay
 
+import io.eia.platform.messagingkafka.DeadLetterReplayer
 import io.eia.platform.messagingkafka.ReplayFilter
 import io.eia.platform.messagingkafka.ReplayRequest
 import io.eia.shared.kernel.Result
@@ -88,7 +89,7 @@ internal data class DlqReplayArgs(
 
             fun instant(name: String): Result<Instant?, String> =
                 values[name]?.let { v ->
-                    runCatching { Instant.parse(v) }.getOrNull()?.let { ok(it) }
+                    DeadLetterReplayer.parseInstant(v)?.let { ok(it) }
                         ?: err("$name は ISO 8601 の時刻にしてください(例 2026-10-09T01:00:00Z)")
                 } ?: ok(null)
             val partition = int("--partition").orReturn { return err(it) }

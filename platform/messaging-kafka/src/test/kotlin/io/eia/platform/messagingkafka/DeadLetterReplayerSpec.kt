@@ -233,5 +233,7 @@ class DeadLetterReplayerSpec :
                 ReplayFilter(failedFrom = Instant.parse("2026-10-09T02:00:00Z"), failedTo = Instant.parse("2026-10-09T01:00:00Z"))
             }
             ReplayRequest(DLQ, ReplayFilter(), 1, execute = false).sourceTopic shouldBe SOURCE
+            DeadLetterReplayer.parseInstant("2026-10-09T01:00:00Z") shouldBe Instant.parse("2026-10-09T01:00:00Z")
+            DeadLetterReplayer.parseInstant("yesterday") shouldBe null
         }
     })
