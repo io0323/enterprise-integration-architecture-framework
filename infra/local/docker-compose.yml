@@ -111,6 +111,12 @@ services:
       inventory-migrate:
         condition: service_completed_successfully
         required: false
+      payment-migrate:
+        condition: service_completed_successfully
+        required: false
+      shipping-migrate:
+        condition: service_completed_successfully
+        required: false
     environment:
       # CONNECT_<NAME> は connect-distributed.properties の <name>(大文字 → 小文字、_ → .)。images/kafka-connect/connect-entrypoint.sh
       CONNECT_BOOTSTRAP_SERVERS: kafka:9092
@@ -298,6 +304,107 @@ services:
       INVENTORY_KAFKA_BOOTSTRAP: kafka:9092
       INVENTORY_SCHEMA_REGISTRY_URL: http://apicurio:8080/apis/registry/v3
       OTEL_SERVICE_NAME: inventory-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    volumes:
+      - *probe-volume
+    # 開発機で core + order + saga を同時に動かすため、order-service(384m)より小さくする(P07 の計画)
+    mem_limit: 256m
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "/probe/bin/wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/health/ready"]
+
+  # 決済の承認(payment-service。模擬。外部の決済の代行は呼ばない)。マイグレーションは所有者のパスワードを渡す唯一のコンテナ
+  payment-migrate:
+    build: &payment-build
+      context: ../../services/payment/app
+      args:
+        JAVA_RUNTIME_IMAGE: ${JAVA_RUNTIME_IMAGE:?}
+    profiles: [saga]
+    command: ["migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PAYMENT_DB_URL: jdbc:postgresql://postgres:5432/payment_service
+      PAYMENT_DB_PASSWORD: ${PAYMENT_DB_PASSWORD:?make env を実行してください}
+      OTEL_SERVICE_NAME: payment-service
+    mem_limit: 256m
+    restart: "no"
+
+  # コマンド(payment.payment.cmd-*)を読み、返事を Outbox に書く。返事は Debezium(コネクタ payment-outbox)が発行する。
+  # 返事のスキーマを schema-publish が登録し、DLQ のトピックを kafka-topics が作ってから起動する。アプリのロールのパスワードだけを渡す
+  payment-service:
+    build: *payment-build
+    profiles: [saga]
+    command: ["serve"]
+    depends_on:
+      payment-migrate:
+        condition: service_completed_successfully
+      schema-publish:
+        condition: service_completed_successfully
+      kafka-topics:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_healthy
+    environment:
+      PAYMENT_DB_URL: jdbc:postgresql://postgres:5432/payment_service
+      PAYMENT_APP_DB_PASSWORD: ${PAYMENT_APP_DB_PASSWORD:?make env を実行してください}
+      PAYMENT_KAFKA_BOOTSTRAP: kafka:9092
+      PAYMENT_SCHEMA_REGISTRY_URL: http://apicurio:8080/apis/registry/v3
+      # 模擬の承認の上限(ADR-0029 §7。既定は 1,000,000 円)。E2E の決済の失敗は、上限を超える金額の注文で作る
+      PAYMENT_AUTHORIZATION_LIMIT: "1000000"
+      PAYMENT_AUTHORIZATION_CURRENCY: JPY
+      OTEL_SERVICE_NAME: payment-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    volumes:
+      - *probe-volume
+    # 開発機で core + order + saga を同時に動かすため、order-service(384m)より小さくする(P07 の計画)
+    mem_limit: 256m
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "/probe/bin/wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/health/ready"]
+
+  # 出荷(shipping-service。模擬。運送は手配しない)。マイグレーションは所有者のパスワードを渡す唯一のコンテナ
+  shipping-migrate:
+    build: &shipping-build
+      context: ../../services/shipping/app
+      args:
+        JAVA_RUNTIME_IMAGE: ${JAVA_RUNTIME_IMAGE:?}
+    profiles: [saga]
+    command: ["migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SHIPPING_DB_URL: jdbc:postgresql://postgres:5432/shipping_service
+      SHIPPING_DB_PASSWORD: ${SHIPPING_DB_PASSWORD:?make env を実行してください}
+      OTEL_SERVICE_NAME: shipping-service
+    mem_limit: 256m
+    restart: "no"
+
+  # コマンド(shipping.shipment.cmd-*)を読み、返事を Outbox に書く。返事は Debezium(コネクタ shipping-outbox)が発行する。
+  # 返事のスキーマを schema-publish が登録し、DLQ のトピックを kafka-topics が作ってから起動する。アプリのロールのパスワードだけを渡す
+  shipping-service:
+    build: *shipping-build
+    profiles: [saga]
+    command: ["serve"]
+    depends_on:
+      shipping-migrate:
+        condition: service_completed_successfully
+      schema-publish:
+        condition: service_completed_successfully
+      kafka-topics:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_healthy
+    environment:
+      SHIPPING_DB_URL: jdbc:postgresql://postgres:5432/shipping_service
+      SHIPPING_APP_DB_PASSWORD: ${SHIPPING_APP_DB_PASSWORD:?make env を実行してください}
+      SHIPPING_KAFKA_BOOTSTRAP: kafka:9092
+      SHIPPING_SCHEMA_REGISTRY_URL: http://apicurio:8080/apis/registry/v3
+      # 模擬の出荷できる国(ADR-0029 §7)。E2E の出荷の拒否は、JP 以外の届け先の注文で作る
+      SHIPPING_SUPPORTED_COUNTRIES: JP
+      OTEL_SERVICE_NAME: shipping-service
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
     volumes:
       - *probe-volume

@@ -56,7 +56,7 @@ client_token() {
 header_value() { awk -v name="$(tr '[:upper:]' '[:lower:]' <<<"$1")" -F': ' 'tolower($1) == name { sub(/\r$/, "", $2); print $2; exit }'; }
 
 # 1 回だけ動いて終わるコンテナ(終了コード 0 で終わっていれば正常)
-oneshot_services=" order-migrate schema-publish legacy-migrate kafka-topics inventory-migrate "
+oneshot_services=" order-migrate schema-publish legacy-migrate kafka-topics inventory-migrate payment-migrate shipping-migrate "
 
 # ------------------------------------------------------------------ 共通: healthy
 verify_health() {
@@ -991,10 +991,19 @@ print("; ".join(sorted(set(bad))) if bad else "ok")
 verify_saga() {
   current="saga"
   local connect=http://localhost:19083
-  check "Kafka Connect: コネクタ inventory-outbox が RUNNING" bash -c \
-    "curl -fsS $connect/connectors/inventory-outbox/status | python3 -c 'import json,sys; d=json.load(sys.stdin); t=d.get(\"tasks\") or []; sys.exit(0 if d[\"connector\"][\"state\"]==\"RUNNING\" and t and all(x[\"state\"]==\"RUNNING\" for x in t) else 1)'"
-  check "PostgreSQL: debezium が inventory_service に CONNECT できる(マイグレーションが付ける)" \
-    equals t psql_super "select has_database_privilege('debezium', 'inventory_service', 'CONNECT')"
+  local svc
+  for svc in inventory payment shipping; do
+    check "Kafka Connect: コネクタ $svc-outbox が RUNNING" bash -c \
+      "curl -fsS $connect/connectors/$svc-outbox/status | python3 -c 'import json,sys; d=json.load(sys.stdin); t=d.get(\"tasks\") or []; sys.exit(0 if d[\"connector\"][\"state\"]==\"RUNNING\" and t and all(x[\"state\"]==\"RUNNING\" for x in t) else 1)'"
+    check "PostgreSQL: debezium が ${svc}_service に CONNECT できる(マイグレーションが付ける)" \
+      equals t psql_super "select has_database_privilege('debezium', '${svc}_service', 'CONNECT')"
+  done
+  check "PostgreSQL: payment_service は顧客 ID を記録しない(データの最小化)" \
+    equals 0 "${compose[@]}" exec -T postgres psql -U postgres -d payment_service -tAc \
+    "select count(*) from information_schema.columns where table_schema = 'public' and column_name like '%customer%'"
+  check "PostgreSQL: shipping_service は届け先の国だけを記録する(住所の残りを持たない。データの最小化)" \
+    equals 0 "${compose[@]}" exec -T postgres psql -U postgres -d shipping_service -tAc \
+    "select count(*) from information_schema.columns where table_schema = 'public' and column_name ~ '(postal|city|line1|line2|region)'"
   check "PostgreSQL: 在庫の初期データ(模擬。ADR-0029 §7)がある" \
     equals 0 "${compose[@]}" exec -T postgres psql -U postgres -d inventory_service -tAc "select on_hand from stock where sku = 'SKU-SOLDOUT'"
   check "PostgreSQL: inventory_service_app は在庫の数を書き換えられない(付けた権限だけ)" \
@@ -1013,6 +1022,20 @@ verify_saga() {
       grep -a "$key" | grep -aq 'eiaf.dlq.reason:INVALID_HEADERS'
   }
   check "inventory-service: ヘッダのないコマンドを DLQ に隔離した(eiaf.dlq.reason=INVALID_HEADERS)" retry 12 5 dlq_has_key
+
+  # payment / shipping も同じく(取消のコマンドのトピックに送る)
+  local topic
+  for topic in payment.payment.cmd-void.v1 shipping.shipment.cmd-cancel.v1; do
+    key="eiaf-verify-$(date +%s)-${topic%%.*}"
+    printf '%s\tnot-avro\n' "$key" | kafka_cli /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server kafka:9092 \
+      --topic "$topic" --property parse.key=true --property 'key.separator=	' >/dev/null 2>&1 || true
+    topic_dlq_has_key() {
+      kafka_cli /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic "$topic.dlq" \
+        --from-beginning --timeout-ms 5000 --property print.key=true --property print.headers=true 2>/dev/null |
+        grep -a "$key" | grep -aq 'eiaf.dlq.reason:INVALID_HEADERS'
+    }
+    check "${topic%%.*}-service: ヘッダのないコマンドを DLQ($topic.dlq)に隔離した" retry 12 5 topic_dlq_has_key
+  done
 }
 
 verify_health

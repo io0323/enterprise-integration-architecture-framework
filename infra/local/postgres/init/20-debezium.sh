@@ -10,4 +10,6 @@ GRANT CONNECT ON DATABASE order_service TO debezium;
 GRANT CONNECT ON DATABASE legacy_sim TO debezium;
 -- 注文 Saga の参加者の Outbox(P07。ADR-0029)。この初期化より前のボリュームでも動くよう、各サービスのマイグレーションも同じ権限を付ける
 GRANT CONNECT ON DATABASE inventory_service TO debezium;
+GRANT CONNECT ON DATABASE payment_service TO debezium;
+GRANT CONNECT ON DATABASE shipping_service TO debezium;
 SQL
