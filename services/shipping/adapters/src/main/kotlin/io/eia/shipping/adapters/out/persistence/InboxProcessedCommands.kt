@@ -1,6 +1,5 @@
 package io.eia.shipping.adapters.out.persistence
 
-import io.eia.shipping.application.port.outbound.ProcessedCommands
 import io.eia.platform.inbox.Inbox
 import io.eia.platform.inbox.InboxError
 import io.eia.platform.inbox.InboxStorageUnavailable
@@ -11,6 +10,7 @@ import io.eia.shared.kernel.ValidationError
 import io.eia.shared.kernel.err
 import io.eia.shared.kernel.map
 import io.eia.shared.kernel.mapError
+import io.eia.shipping.application.port.outbound.ProcessedCommands
 import org.jetbrains.exposed.v1.jdbc.Database
 import java.sql.SQLException
 import kotlin.uuid.Uuid
