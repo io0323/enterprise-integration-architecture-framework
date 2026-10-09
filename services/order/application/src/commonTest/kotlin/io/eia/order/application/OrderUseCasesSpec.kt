@@ -5,12 +5,17 @@ import io.eia.order.application.port.inbound.RequestedBy
 import io.eia.order.application.port.outbound.OrderVersionConflict
 import io.eia.order.application.usecase.GetOrderService
 import io.eia.order.application.usecase.PlaceOrderService
+import io.eia.order.application.usecase.SagaCoordinator
+import io.eia.order.application.usecase.SagaTimeouts
 import io.eia.order.domain.AddressDraft
 import io.eia.order.domain.Order
 import io.eia.order.domain.OrderDraft
 import io.eia.order.domain.OrderId
 import io.eia.order.domain.OrderLineDraft
 import io.eia.order.domain.OrderStatus
+import io.eia.order.domain.Saga
+import io.eia.order.domain.SagaCommand
+import io.eia.order.domain.SagaState
 import io.eia.shared.kernel.ConflictError
 import io.eia.shared.kernel.DomainError
 import io.eia.shared.kernel.FixedClock
@@ -59,7 +64,10 @@ private class Fixture {
     val ids = SequentialIds()
     val audit = FakeOrderAuditTrail(transaction)
     val events = FakeOrderEventOutbox(transaction)
-    val place = PlaceOrderService(repository, transaction, ids, FixedClock(NOW), audit, events)
+    val sagas = FakeSagaStore(transaction)
+    val commands = FakeSagaCommands(transaction)
+    val coordinator = SagaCoordinator(sagas, repository, commands, events, SequentialSagaIds())
+    val place = PlaceOrderService(repository, transaction, ids, FixedClock(NOW), audit, events, coordinator)
     val get = GetOrderService(repository)
 }
 
@@ -114,6 +122,27 @@ class OrderUseCasesSpec :
                 f.transaction.rollbacks shouldBe 1
                 f.repository.orders shouldBe emptyMap()
                 f.audit.entries shouldBe emptyList()
+                f.events.placed shouldBe emptyList()
+            }
+
+            test("注文の受付と同じトランザクションで Saga を始め(RESERVING_STOCK)、在庫の引当のコマンドを書く(ADR-0029 §1)") {
+                val f = Fixture()
+                val order = f.place(command()).ok()
+
+                f.sagas.sagas.values
+                    .single() shouldBe Saga("saga-1", order.id, SagaState.RESERVING_STOCK)
+                f.sagas.timeouts["saga-1"] shouldBe SagaTimeouts().step
+                f.commands.sent shouldBe listOf("saga-1" to SagaCommand.RESERVE_STOCK)
+                f.transaction.commits shouldBe 1
+            }
+
+            test("Saga の記録・コマンドを書けなければ、注文の受付も取り消す") {
+                val f = Fixture()
+                f.commands.failWith = UnavailableError("Outbox に書けません")
+
+                f.place(command()).error()
+                f.repository.orders shouldBe emptyMap()
+                f.sagas.sagas shouldBe emptyMap()
                 f.events.placed shouldBe emptyList()
             }
 

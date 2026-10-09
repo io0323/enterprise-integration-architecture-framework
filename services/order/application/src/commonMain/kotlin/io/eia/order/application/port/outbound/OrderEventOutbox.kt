@@ -1,6 +1,7 @@
 package io.eia.order.application.port.outbound
 
 import io.eia.order.domain.Order
+import io.eia.order.domain.SagaFailure
 import io.eia.shared.kernel.DomainError
 import io.eia.shared.kernel.Result
 
@@ -14,4 +15,10 @@ import io.eia.shared.kernel.Result
 public interface OrderEventOutbox {
     /** 注文を受け付けたこと(`sales.order.created.v1`)を書く。 */
     public suspend fun orderPlaced(order: Order): Result<Unit, DomainError>
+
+    /** 注文を取り消したこと(`sales.order.cancelled.v1`)を書く。[reason] は補償の理由(ADR-0029 §8)。 */
+    public suspend fun orderCancelled(
+        order: Order,
+        reason: SagaFailure?,
+    ): Result<Unit, DomainError>
 }

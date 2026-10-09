@@ -193,3 +193,23 @@ public object OrderSagaRules {
         return if (signal == SagaSignal.STEP_TIMED_OUT && state.isCompensating) SagaDecision.Resend(state) else SagaDecision.Ignore
     }
 }
+
+/**
+ * 注文 Saga の記録(order の DB の `order_saga`。ADR-0029 §1)。段の期限は DB の時計で持つので、ここには持たない(§6)。
+ *
+ * @property id Saga ID(注文 ID と別の UUIDv7。コマンドと返信のキー)
+ * @property failure 補償に入った理由(補償に入っていなければ null)
+ * @property resends 今の補償の段で、コマンドを送り直した回数(段が変わると 0 に戻る)
+ */
+public data class Saga(
+    public val id: String,
+    public val orderId: OrderId,
+    public val state: SagaState,
+    public val failure: SagaFailure? = null,
+    public val resends: Int = 0,
+) {
+    init {
+        require(id.isNotBlank() && id.length <= MAX_IDENTIFIER_LENGTH) { "Saga ID は 1〜$MAX_IDENTIFIER_LENGTH 文字です" }
+        require(resends >= 0) { "resends は 0 以上です" }
+    }
+}
