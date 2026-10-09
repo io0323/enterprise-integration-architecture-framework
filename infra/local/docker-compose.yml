@@ -217,8 +217,8 @@ services:
   # アプリが書くトピックを、kafka/topics.conf のとおりに作って終わる(compacted の出力・DLQ の保持期間。auto.create.topics.enable=false)
   kafka-topics:
     image: ${KAFKA_IMAGE:?}
-    # cdc: ACL の出力と DLQ。saga: コマンドの DLQ(ADR-0028)
-    profiles: [cdc, saga]
+    # cdc: ACL の出力と DLQ。order: 注文 Saga のコマンド・返信と DLQ。saga: 参加者のコマンドの DLQ(ADR-0028・ADR-0029)
+    profiles: [cdc, order, saga]
     entrypoint: ["/bin/bash", "/topics/create-topics.sh", "kafka:9092", "/topics/topics.conf"]
     depends_on:
       kafka:
@@ -627,6 +627,9 @@ services:
         condition: service_completed_successfully
       schema-publish:
         condition: service_completed_successfully
+      # 注文 Saga の返信のトピックと DLQ ができてから、返信を読み始める(ADR-0029)
+      kafka-topics:
+        condition: service_completed_successfully
       otel-collector:
         condition: service_healthy
       # 監査のアンカーのバケット(eiaf-audit)とポリシーができてから起動する
@@ -637,6 +640,13 @@ services:
       ORDER_APP_DB_PASSWORD: ${ORDER_APP_DB_PASSWORD:?make env を実行してください}
       # 書き込むイベント(Outbox)のスキーマ ID を起動時に解決する Schema Registry(ADR-0025 §3)
       ORDER_SCHEMA_REGISTRY_URL: http://apicurio:8080/apis/registry/v3
+      # 注文 Saga(ADR-0029)。参加者の返信を読む(Consumer Group order.saga)。参加者は saga の profile で起動する
+      # (order だけなら返信が来ないので、期限の後に補償を送り直し続け、OrderSagaCompensationStalled になる)。
+      # 期限はローカルで確かめやすいよう既定どおり 30 秒、補償の送り直しの間隔 30 秒、期限切れの確認の間隔 5 秒
+      ORDER_KAFKA_BOOTSTRAP: kafka:9092
+      ORDER_SAGA_STEP_TIMEOUT: 30s
+      ORDER_SAGA_COMPENSATION_INTERVAL: 30s
+      ORDER_SAGA_TIMEOUT_SCAN_INTERVAL: 5s
       # 監査のアンカーの保存(ADR-0017 §5)。order の書込み用の identity(eiaf-audit-order)で、anchors/order/ の下にだけ書ける。
       # 間隔は、ローカルで確かめやすいよう 1 分(既定は 1 時間)。保持期間は make audit-verify の既定の最小値(P1D)と同じ
       ORDER_AUDIT_S3_ENDPOINT: http://seaweedfs:8333

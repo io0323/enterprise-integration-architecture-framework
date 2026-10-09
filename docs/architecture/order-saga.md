@@ -70,6 +70,16 @@ stateDiagram-v2
 - 各段に入るときに、その段の期限を **DB の時計**(`clock_timestamp()`)で `order_saga` に記録する。期限切れの判定も DB の時計で行う(アプリのインスタンスの時計のずれで判定がずれないようにする。P05 の冪等のリースと同じ理由。ADR-0029 §6)。
 - 期限切れの検出は、order-service の定期のジョブが `FOR UPDATE SKIP LOCKED` で行う(複数のインスタンスで同じ Saga を二重に処理しない)。
 
+## 監視
+| メトリクス(Prometheus の名前) | 意味 |
+|---|---|
+| `eia_saga_transitions_total{from,to,failure}` | 状態の遷移の件数(`failure` は補償の理由。なければ `none`) |
+| `eia_saga_resends_total{state}` | 補償のコマンドを送り直した回数 |
+| `eia_saga_stalled_total{state}` | 送り直しの回数が上限(`ORDER_SAGA_STALL_AFTER_RESENDS`。既定 5)を超えた後の送り直し。アラート `OrderSagaCompensationStalled` |
+| `eia_saga_ignored_total{state,signal}` | 今の段に関係しない結果を無視した件数(重複・期限切れの後に遅れて届いた結果) |
+
+返信の受信は Consumer Group `order.saga`(`eia_consumer_*`。ADR-0028)。対応は `docs/runbooks/order-saga.md`。
+
 ## 注文の状態との対応
 | Saga の状態 | 注文の状態 |
 |---|---|

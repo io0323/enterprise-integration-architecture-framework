@@ -107,3 +107,12 @@ Framework は複数のシステムにまたがる業務の更新に Saga を求�
 ## 改訂履歴
 - 2026-10-09: P07 ④a で inventory-service を入れた。コマンドのトピックは、保持期間(7 日。§5 の印の保持期間の根拠)を固定するため、Debezium に作らせず `infra/local/kafka/topics.conf` で明示して作る(DLQ も同じ)。§5 の確かめること(遅れて届いたコマンドの拒否・同時の注文で在庫が負にならない)は `InventoryPersistenceIT`。
 - 2026-10-09: P07 ④b で payment-service と shipping-service を入れた。データの最小化(Framework 12.2)のため、payment は顧客 ID を、shipping は届け先の国のほかの住所を記録しない(模擬は外部の決済・運送を呼ばないため)。shipping の記録は書き換えない(アプリのロールに UPDATE を付けない)ので、記録の読み取りでは行をロックしない。同じ Saga の初回が同時に来たときは主キーが 1 つに絞り、後の側は Transient のやり直しで返し直しになる(§5 の冪等は保たれる)。出荷の取消の `CANCELLED`(手配したが出荷の前)は、模擬が直ちに出荷するため返さない(契約の値としては残す)。
+- 2026-10-09: P07 ⑤ で order-service に Orchestrator を入れた。
+  - `order_saga` に版の列は持たない(§1 の「版」は持たない)。返信の処理と期限切れの処理は、どちらも行を `FOR UPDATE` でロックしてから判定するので、版による楽観的ロックは要らない(§3 の最後の項)。期限は `deadline_at = clock_timestamp() + make_interval(secs => 段の期限)`(マイクロ秒の精度)。終端の Saga は期限を持たない(DB の CHECK でも担保する)。アプリのロールは DELETE と、Saga ID・注文 ID の UPDATE ができない。
+  - 期限切れのジョブは、50 件ずつ 1 つのトランザクションで処理し、50 件に満たなくなるまで繰り返す。確認の間隔は `ORDER_SAGA_TIMEOUT_SCAN_INTERVAL`(既定 5 秒)、段の期限は `ORDER_SAGA_STEP_TIMEOUT`、補償の送り直しの間隔は `ORDER_SAGA_COMPENSATION_INTERVAL`(いずれも既定 30 秒。ローカル基盤も 30 秒。E2E は ⑥ で短くする)、知らせるまでの送り直しの回数は `ORDER_SAGA_STALL_AFTER_RESENDS`(既定 5)。
+  - 返信の冪等消費は `platform/inbox` の `processed_message`(Consumer Group `order.saga`。保持 14 日)。返信の重複は、これと Saga の状態(表にない組み合わせは無視)の二重で捨てる。知らない Saga ID の返信は NonRetryable で DLQ に送る。
+  - 返信のトピック(9 つ)とその DLQ を `infra/local/kafka/topics.conf` に加え、order の profile でも作る(参加者のコネクタより先に order-service が読み始めるため)。
+  - **返信の読み取りの状態は order-service の `/health/ready` に含めない**(ADR-0028 §1 の例外)。order-service の主な責務は API で、Schema Registry が止まっても注文を受け付ける(ADR-0025 §3)。返信の読み取りだけが Unavailable のときに API のトラフィックを外すと、その性質を壊す。止まりは `eia.consumer.unavailable` と `EventConsumerUnavailable`・`EventConsumerStalled` のアラートで分かる。
+  - メトリクス `eia.saga.transitions{from,to,failure}`・`eia.saga.resends{state}`・`eia.saga.stalled{state}`・`eia.saga.ignored{state,signal}`。アラート `OrderSagaCompensationStalled`(`prometheus/rules/saga.rules.yml`。critical。対応は `docs/runbooks/order-saga.md`)。
+  - `sales.order.cancelled.v1` の `reason` は補償の理由(`STOCK_UNAVAILABLE`・`PAYMENT_DECLINED`・`SHIPMENT_REJECTED`・`TIMED_OUT`)。
+  - 確かめること: 期限が DB の時計で書かれ判定されること・SKIP LOCKED(`ExposedSagaStoreIT`)、Outbox → Debezium のコマンドと返信による正常・決済の失敗・タイムアウトの補償(`OrderSagaIT`)。

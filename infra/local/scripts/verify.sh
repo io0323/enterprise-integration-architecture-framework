@@ -626,10 +626,37 @@ verify_order() {
 
   verify_order_cdc "$(sed '$d' <<<"$first" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))' 2>/dev/null || true)" "${gw[@]}"
   verify_cdc_monitoring
+  # ここまでに Kafka の停止と再開を待つため、アクセストークン(有効期限 5 分。keycloak/realm-eiaf.json)を取り直す(gw の最後の要素が Authorization)
+  token="$(client_token)"
+  gw[${#gw[@]}-1]="Authorization: Bearer $token"
   verify_order_cdc_alerts "${gw[@]}"
   verify_audit_anchor "$posted_at"
+  verify_order_saga
   verify_gateway
   verify_dashboard
+}
+
+# 注文 Saga の Orchestrator の配線(P07 ⑤。ADR-0029)。返信から状態の遷移までの流れは、統合テスト(OrderSagaIT)と E2E(P07 ⑥)で確かめる
+verify_order_saga() {
+  check "PostgreSQL: order_service_app は Saga の記録を消せない(付けた権限だけ)" \
+    equals f "${compose[@]}" exec -T postgres psql -U postgres -d order_service -tAc \
+    "select has_table_privilege('order_service_app', 'public.order_saga', 'DELETE')"
+  check "PostgreSQL: 終わっていない Saga には、すべて期限がある(DB の時計。ADR-0029 §6)" \
+    equals 0 "${compose[@]}" exec -T postgres psql -U postgres -d order_service -tAc \
+    "select count(*) from order_saga where state not in ('COMPLETED', 'COMPENSATED') and deadline_at is null"
+  check "Kafka: 返信の DLQ(inventory.stock.reserved.v1.dlq)がある(topics.conf)" \
+    kafka_cli /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --describe --topic inventory.stock.reserved.v1.dlq
+
+  # Poison Message(CloudEvents のヘッダのない値)を返信のトピックに送ると、order-service(order.saga)が DLQ に隔離する
+  local key="eiaf-verify-$(date +%s)-saga"
+  printf '%s\tnot-avro\n' "$key" | kafka_cli /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server kafka:9092 \
+    --topic inventory.stock.reserved.v1 --property parse.key=true --property 'key.separator=	' >/dev/null 2>&1 || true
+  reply_dlq_has_key() {
+    kafka_cli /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic inventory.stock.reserved.v1.dlq \
+      --from-beginning --timeout-ms 5000 --property print.key=true --property print.headers=true 2>/dev/null |
+      grep -a "$key" | grep -aq 'eiaf.dlq.reason:INVALID_HEADERS'
+  }
+  check "order-service: ヘッダのない返信を DLQ に隔離した(eiaf.dlq.reason=INVALID_HEADERS)" retry 12 5 reply_dlq_has_key
 }
 
 # 注文のイベントの発行(Outbox → Debezium → Kafka。ADR-0007・P06 ③b)

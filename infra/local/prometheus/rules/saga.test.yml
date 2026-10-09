@@ -1,0 +1,50 @@
+# saga.rules.yml の単体テスト(promtool test rules。make alerts-test)。
+rule_files:
+  - saga.rules.yml
+
+evaluation_interval: 15s
+
+tests:
+  # ---------------------------------------------------------------- OrderSagaCompensationStalled
+  - name: 上限を超えた送り直しが数えられたら、すぐに警告し、送り直しが止まって 15 分たてば解消する。上限の内側の送り直しでは出さない
+    interval: 1m
+    input_series:
+      # 上限の内側の送り直し(eia_saga_resends_total)は増えても対象にしない
+      - series: 'eia_saga_resends_total{job="order-service",state="RELEASING_STOCK"}'
+        values: "0+1x40"
+      # 5 分後から 10 分後まで、上限を超えて送り直す(30 秒ごとなら 1 分に 2 回)
+      - series: 'eia_saga_stalled_total{job="order-service",state="RELEASING_STOCK"}'
+        values: "0 0 0 0 0 0+2x5 10x30"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: OrderSagaCompensationStalled
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: OrderSagaCompensationStalled
+        exp_alerts:
+          - exp_labels: { severity: critical, job: order-service, state: RELEASING_STOCK }
+            exp_annotations:
+              summary: "注文 Saga の補償(RELEASING_STOCK)が終わらない(上限の回数を超えて送り直している)"
+              runbook: docs/runbooks/order-saga.md#補償が終わらないとき
+      - eval_time: 20m
+        alertname: OrderSagaCompensationStalled
+        exp_alerts:
+          - exp_labels: { severity: critical, job: order-service, state: RELEASING_STOCK }
+            exp_annotations:
+              summary: "注文 Saga の補償(RELEASING_STOCK)が終わらない(上限の回数を超えて送り直している)"
+              runbook: docs/runbooks/order-saga.md#補償が終わらないとき
+      - eval_time: 30m
+        alertname: OrderSagaCompensationStalled
+        exp_alerts: []
+
+  - name: 送り直しが上限の内側で終われば(stalled が数えられなければ)出さない
+    interval: 1m
+    input_series:
+      - series: 'eia_saga_resends_total{job="order-service",state="VOIDING_PAYMENT"}'
+        values: "0+1x4 4x20"
+      - series: 'eia_saga_stalled_total{job="order-service",state="VOIDING_PAYMENT"}'
+        values: "0x25"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: OrderSagaCompensationStalled
+        exp_alerts: []
