@@ -670,6 +670,10 @@ services:
   postgres:
     image: ${POSTGRES_IMAGE:?}
     profiles: [core]
+    # PID 1 を init(tini)にする。負荷でヘルスチェックがタイムアウトすると、Docker はシェルだけを止め、残った psql は PID 1 の子になる。
+    # PID 1 が postmaster だと、その psql が SIGPIPE で終わったのを「バックエンドの異常終了」とみなし、DB 全体をクラッシュリカバリする
+    # (P07 ⑤ の make verify PROFILE="order saga" で発生)。init が孤児を引き取るので、postmaster は自分の子だけを見る
+    init: true
     command:
       - postgres
       # Debezium(cdc profile)の論理レプリケーション(Framework 8)
