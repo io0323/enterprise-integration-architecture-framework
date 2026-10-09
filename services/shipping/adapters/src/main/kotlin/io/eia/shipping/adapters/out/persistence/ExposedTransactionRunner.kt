@@ -1,8 +1,8 @@
 package io.eia.shipping.adapters.out.persistence
 
-import io.eia.shipping.application.port.outbound.TransactionRunner
 import io.eia.shared.kernel.DomainError
 import io.eia.shared.kernel.Result
+import io.eia.shipping.application.port.outbound.TransactionRunner
 import org.jetbrains.exposed.v1.jdbc.Database
 
 /**

@@ -30,7 +30,7 @@ public interface ProcessedCommands {
 
 /** 出荷の記録(Saga ID ごとに 1 行。ADR-0029 §5)。 */
 public interface ShipmentStore {
-    /** [sagaId] の記録をロックして読む(同じ Saga の処理を直列にする)。なければ null。 */
+    /** [sagaId] の記録を読む。なければ null。記録は書き換えないので、同時の初回は挿入の一意性で 1 つに絞る。 */
     public suspend fun findForUpdate(sagaId: String): Result<Shipment?, DomainError>
 
     /** 新しい記録を書く。終わった状態(拒否・印)なら、終わった時刻を DB の時計で記録する。 */
