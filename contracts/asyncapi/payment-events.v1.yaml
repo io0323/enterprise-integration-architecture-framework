@@ -1,0 +1,112 @@
+asyncapi: 3.0.0
+info:
+  title: Payment Events
+  version: 1.0.0
+  description: |
+    payment-service(模擬)が発行する、決済のコマンドの結果(INT-PAYMENT-002)。
+    - 送信は Outbox + Debezium(ADR-0007)。キーは Saga ID。購読者は Saga の Orchestrator(order-service の `order.saga`)。
+    - 配信は At-Least-Once。同じ結果が 2 回以上届くことがある(コマンドの再送に答え直すため)。Orchestrator は Saga の状態で判定し、
+      今の段に関係しない結果は無視する(ADR-0029 §3)。
+    - 処理できないメッセージは `{topic}.dlq` に隔離する(ADR-0028 §2)。
+  contact:
+    name: team-payment
+defaultContentType: avro/binary
+servers:
+  local:
+    host: localhost:19092
+    protocol: kafka
+    description: ローカル(P03 の docker compose。ホスト用の EXTERNAL リスナー。コンテナ内からは kafka:9092)
+channels:
+  paymentAuthorized:
+    address: payment.payment.authorized.v1
+    messages:
+      paymentAuthorized:
+        $ref: "#/components/messages/PaymentAuthorized"
+  paymentDeclined:
+    address: payment.payment.declined.v1
+    messages:
+      paymentDeclined:
+        $ref: "#/components/messages/PaymentDeclined"
+  paymentVoided:
+    address: payment.payment.voided.v1
+    messages:
+      paymentVoided:
+        $ref: "#/components/messages/PaymentVoided"
+operations:
+  publishPaymentAuthorized:
+    action: send
+    channel:
+      $ref: "#/channels/paymentAuthorized"
+    messages:
+      - $ref: "#/channels/paymentAuthorized/messages/paymentAuthorized"
+  publishPaymentDeclined:
+    action: send
+    channel:
+      $ref: "#/channels/paymentDeclined"
+    messages:
+      - $ref: "#/channels/paymentDeclined/messages/paymentDeclined"
+  publishPaymentVoided:
+    action: send
+    channel:
+      $ref: "#/channels/paymentVoided"
+    messages:
+      - $ref: "#/channels/paymentVoided/messages/paymentVoided"
+components:
+  messages:
+    PaymentAuthorized:
+      name: PaymentAuthorized
+      title: 決済の承認の完了
+      contentType: avro/binary
+      headers:
+        $ref: "#/components/schemas/StandardHeaders"
+      payload:
+        schemaFormat: application/vnd.apache.avro+json;version=1.9.0
+        schema:
+          $ref: "../avro/payment/PaymentAuthorized.avsc"
+    PaymentDeclined:
+      name: PaymentDeclined
+      title: 決済の承認の拒否
+      contentType: avro/binary
+      headers:
+        $ref: "#/components/schemas/StandardHeaders"
+      payload:
+        schemaFormat: application/vnd.apache.avro+json;version=1.9.0
+        schema:
+          $ref: "../avro/payment/PaymentDeclined.avsc"
+    PaymentVoided:
+      name: PaymentVoided
+      title: 決済の承認の取消の完了
+      contentType: avro/binary
+      headers:
+        $ref: "#/components/schemas/StandardHeaders"
+      payload:
+        schemaFormat: application/vnd.apache.avro+json;version=1.9.0
+        schema:
+          $ref: "../avro/payment/PaymentVoided.avsc"
+  schemas:
+    StandardHeaders:
+      type: object
+      description: 全イベント・コマンド共通のヘッダ(INTEGRATION_STANDARDS §2)
+      required: [ce_id, ce_source, ce_type, ce_time, ce_specversion, traceparent, correlationid]
+      properties:
+        ce_id:
+          type: string
+          description: イベント ID(冪等消費のキー)
+        ce_source:
+          type: string
+          description: 発行元(例 /sales/order-service)
+        ce_type:
+          type: string
+          description: 種別。トピック名から `.v{n}` を除いた値(例 inventory.stock.cmd-reserve)
+        ce_time:
+          type: string
+          format: date-time
+        ce_specversion:
+          type: string
+          const: "1.0"
+        traceparent:
+          type: string
+          description: W3C Trace Context(Saga の注文の受付から 1 つのトレースでつながる)
+        correlationid:
+          type: string
+          description: 業務トランザクション ID(注文の受付で採番したもの)

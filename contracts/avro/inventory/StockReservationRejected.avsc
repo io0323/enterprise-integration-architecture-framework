@@ -1,0 +1,33 @@
+{
+  "type": "record",
+  "name": "StockReservationRejected",
+  "namespace": "io.eia.events.inventory",
+  "doc": "在庫を引き当てなかった(何も引き当てていない)。(inventory.stock.reservation-rejected.v1)",
+  "fields": [
+    {
+      "name": "sagaId",
+      "type": "string",
+      "doc": "Saga ID(UUIDv7。Kafka のキー = パーティションキー。受信側の業務キーの冪等の単位。ADR-0029)"
+    },
+    {
+      "name": "orderId",
+      "type": "string",
+      "doc": "注文 ID"
+    },
+    {
+      "name": "reason",
+      "type": {
+        "type": "enum",
+        "name": "StockRejectionReason",
+        "doc": "UNKNOWN は読み手が知らない値(新しい版で増えた値)を読んだときの既定値(Avro の enum の default。FULL 互換で値を増やせるようにする。ADR-0029 §4)。送り手は使わない。",
+        "symbols": [
+          "INSUFFICIENT_STOCK",
+          "UNKNOWN_SKU",
+          "ALREADY_RELEASED",
+          "UNKNOWN"
+        ],
+        "default": "UNKNOWN"
+      }
+    }
+  ]
+}

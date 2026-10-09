@@ -1,0 +1,18 @@
+id: INT-SHIPPING-001
+name: Shipping Commands
+description: 注文 Saga の出荷の手配・取消のコマンド(ADR-0006・ADR-0029)。受信は shipping.command だけ。
+style: event
+pattern: queue
+provider: { owner: team-logistics, system: shipping-service }
+consumers:
+  - { owner: team-logistics, system: shipping-service, group: shipping.command }
+senders:
+  - { owner: team-order, system: order-service }
+contract: contracts/asyncapi/shipping-commands.v1.yaml
+channels:
+  - shipping.shipment.cmd-arrange.v1
+  - shipping.shipment.cmd-cancel.v1
+tier: 1
+dataClassification: confidential
+slo: { availability: "99.9", latencyP99: "5s" }
+lifecycle: design

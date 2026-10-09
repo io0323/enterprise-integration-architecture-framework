@@ -1,0 +1,18 @@
+{
+  "type": "record",
+  "name": "VoidPayment",
+  "namespace": "io.eia.events.payment",
+  "doc": "決済の承認の取消の指示(補償)。承認がなければ「取消済み」の印を残し、後から届いた承認の指示を拒否する(ADR-0029 §5)。(payment.payment.cmd-void.v1)",
+  "fields": [
+    {
+      "name": "sagaId",
+      "type": "string",
+      "doc": "Saga ID(UUIDv7。Kafka のキー = パーティションキー。受信側の業務キーの冪等の単位。ADR-0029)"
+    },
+    {
+      "name": "orderId",
+      "type": "string",
+      "doc": "注文 ID"
+    }
+  ]
+}

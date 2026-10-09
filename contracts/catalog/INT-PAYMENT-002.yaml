@@ -1,0 +1,17 @@
+id: INT-PAYMENT-002
+name: Payment Events
+description: 決済のコマンドの結果(承認・拒否・取消)。Saga の Orchestrator が購読する(ADR-0029)。
+style: event
+pattern: pub-sub
+provider: { owner: team-payment, system: payment-service }
+consumers:
+  - { owner: team-order, system: order-service, group: order.saga }
+contract: contracts/asyncapi/payment-events.v1.yaml
+channels:
+  - payment.payment.authorized.v1
+  - payment.payment.declined.v1
+  - payment.payment.voided.v1
+tier: 1
+dataClassification: internal
+slo: { availability: "99.9", latencyP99: "5s" }
+lifecycle: design

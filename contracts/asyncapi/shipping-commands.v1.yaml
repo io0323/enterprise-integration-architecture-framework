@@ -1,0 +1,93 @@
+asyncapi: 3.0.0
+info:
+  title: Shipping Commands
+  version: 1.0.0
+  description: |
+    shipping-service が受ける出荷のコマンド(INT-SHIPPING-001)。
+    - **コマンド**(ADR-0006): 受信サービスの 1 つの Consumer Group(`{service}.command`)だけが読む。送信は Saga の Orchestrator(order-service)が
+      Outbox + Debezium で行う(ADR-0007)。キーは Saga ID で、同じ Saga のコマンドは同じパーティションに順に届く(別のトピックの間の順序は保証しない)。
+    - 配信は At-Least-Once。受信側は `ce_id`(processed_message)と Saga ID(業務キー)の両方で冪等にする(ADR-0028 §3・ADR-0029 §5)。
+      同じ Saga ID の 2 回目以降のコマンドには、最初の結果を返し直す(Orchestrator の再送に答えるため)。
+    - 補償のコマンドが先に届いたときは「取消済み」の印を残し、後から届いた元のコマンドを拒否する(印の保持は 30 日。ADR-0029 §5)。
+    - 処理できないコマンドは `{topic}.dlq` に隔離する(ADR-0028 §2)。
+  contact:
+    name: team-logistics
+defaultContentType: avro/binary
+servers:
+  local:
+    host: localhost:19092
+    protocol: kafka
+    description: ローカル(P03 の docker compose。ホスト用の EXTERNAL リスナー。コンテナ内からは kafka:9092)
+channels:
+  arrangeShipment:
+    address: shipping.shipment.cmd-arrange.v1
+    messages:
+      arrangeShipment:
+        $ref: "#/components/messages/ArrangeShipment"
+  cancelShipment:
+    address: shipping.shipment.cmd-cancel.v1
+    messages:
+      cancelShipment:
+        $ref: "#/components/messages/CancelShipment"
+operations:
+  receiveArrangeShipment:
+    action: receive
+    channel:
+      $ref: "#/channels/arrangeShipment"
+    messages:
+      - $ref: "#/channels/arrangeShipment/messages/arrangeShipment"
+  receiveCancelShipment:
+    action: receive
+    channel:
+      $ref: "#/channels/cancelShipment"
+    messages:
+      - $ref: "#/channels/cancelShipment/messages/cancelShipment"
+components:
+  messages:
+    ArrangeShipment:
+      name: ArrangeShipment
+      title: 出荷の手配
+      contentType: avro/binary
+      headers:
+        $ref: "#/components/schemas/StandardHeaders"
+      payload:
+        schemaFormat: application/vnd.apache.avro+json;version=1.9.0
+        schema:
+          $ref: "../avro/shipping/ArrangeShipment.avsc"
+    CancelShipment:
+      name: CancelShipment
+      title: 出荷の取消(補償)
+      contentType: avro/binary
+      headers:
+        $ref: "#/components/schemas/StandardHeaders"
+      payload:
+        schemaFormat: application/vnd.apache.avro+json;version=1.9.0
+        schema:
+          $ref: "../avro/shipping/CancelShipment.avsc"
+  schemas:
+    StandardHeaders:
+      type: object
+      description: 全イベント・コマンド共通のヘッダ(INTEGRATION_STANDARDS §2)
+      required: [ce_id, ce_source, ce_type, ce_time, ce_specversion, traceparent, correlationid]
+      properties:
+        ce_id:
+          type: string
+          description: イベント ID(冪等消費のキー)
+        ce_source:
+          type: string
+          description: 発行元(例 /sales/order-service)
+        ce_type:
+          type: string
+          description: 種別。トピック名から `.v{n}` を除いた値(例 inventory.stock.cmd-reserve)
+        ce_time:
+          type: string
+          format: date-time
+        ce_specversion:
+          type: string
+          const: "1.0"
+        traceparent:
+          type: string
+          description: W3C Trace Context(Saga の注文の受付から 1 つのトレースでつながる)
+        correlationid:
+          type: string
+          description: 業務トランザクション ID(注文の受付で採番したもの)

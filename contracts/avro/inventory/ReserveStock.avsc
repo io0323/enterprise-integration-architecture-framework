@@ -1,0 +1,43 @@
+{
+  "type": "record",
+  "name": "ReserveStock",
+  "namespace": "io.eia.events.inventory",
+  "doc": "在庫の引当の指示(Saga の Orchestrator → inventory)。同じ sagaId の 2 回目以降は、最初の結果を返し直す。(inventory.stock.cmd-reserve.v1)",
+  "fields": [
+    {
+      "name": "sagaId",
+      "type": "string",
+      "doc": "Saga ID(UUIDv7。Kafka のキー = パーティションキー。受信側の業務キーの冪等の単位。ADR-0029)"
+    },
+    {
+      "name": "orderId",
+      "type": "string",
+      "doc": "注文 ID"
+    },
+    {
+      "name": "lines",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "StockLine",
+          "fields": [
+            {
+              "name": "lineNumber",
+              "type": "int"
+            },
+            {
+              "name": "sku",
+              "type": "string"
+            },
+            {
+              "name": "quantity",
+              "type": "long",
+              "doc": "1 以上"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

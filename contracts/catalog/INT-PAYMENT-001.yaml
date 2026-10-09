@@ -1,0 +1,18 @@
+id: INT-PAYMENT-001
+name: Payment Commands
+description: 注文 Saga の決済の承認・承認の取消のコマンド(ADR-0006・ADR-0029)。payment-service は決済の模擬。受信は payment.command だけ。
+style: event
+pattern: queue
+provider: { owner: team-payment, system: payment-service }
+consumers:
+  - { owner: team-payment, system: payment-service, group: payment.command }
+senders:
+  - { owner: team-order, system: order-service }
+contract: contracts/asyncapi/payment-commands.v1.yaml
+channels:
+  - payment.payment.cmd-authorize.v1
+  - payment.payment.cmd-void.v1
+tier: 1
+dataClassification: confidential
+slo: { availability: "99.9", latencyP99: "5s" }
+lifecycle: design

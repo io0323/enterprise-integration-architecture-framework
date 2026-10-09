@@ -1,0 +1,18 @@
+{
+  "type": "record",
+  "name": "ReleaseStock",
+  "namespace": "io.eia.events.inventory",
+  "doc": "在庫の解放の指示(補償)。引当がなければ「取消済み」の印を残し、後から届いた引当の指示を拒否する(ADR-0029 §5)。(inventory.stock.cmd-release.v1)",
+  "fields": [
+    {
+      "name": "sagaId",
+      "type": "string",
+      "doc": "Saga ID(UUIDv7。Kafka のキー = パーティションキー。受信側の業務キーの冪等の単位。ADR-0029)"
+    },
+    {
+      "name": "orderId",
+      "type": "string",
+      "doc": "注文 ID"
+    }
+  ]
+}
