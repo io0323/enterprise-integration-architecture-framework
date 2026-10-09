@@ -174,7 +174,9 @@ class LegacyCdcIT :
                 consumer.subscribe(listOf(TOPIC))
                 val deadline = TimeSource.Monotonic.markNow() + timeout
                 while (!done(received)) {
-                    check(deadline.hasNotPassedNow()) { "期待した変更が届きません: ${received.map { it.op to it.orderNumber }}" }
+                    check(deadline.hasNotPassedNow()) {
+                        "期待した変更が届きません: ${received.map { it.op to it.orderNumber }}\n${connect.diagnostics(CONNECTOR)}"
+                    }
                     consumer.poll(Duration.ofMillis(500)).forEach { record ->
                         // tombstones.on.delete=false のため、値のないレコードは届かない
                         val value = checkNotNull(record.value()) { "値のないレコード(tombstone)が届きました: offset ${record.offset()}" }
@@ -210,7 +212,7 @@ class LegacyCdcIT :
                             tasks.isNotEmpty() && tasks.all { (it as JsonObject)["state"]?.jsonPrimitive?.content == "RUNNING" }
                         } == true
                 if (running) return
-                check(deadline.hasNotPassedNow()) { "コネクタが RUNNING になりません: $status" }
+                check(deadline.hasNotPassedNow()) { "コネクタが RUNNING になりません: $status\n${connect.diagnostics(CONNECTOR)}" }
                 Thread.sleep(1_000)
             }
         }
@@ -415,7 +417,7 @@ class LegacyCdcIT :
             fun awaitTask(state: String) {
                 val deadline = TimeSource.Monotonic.markNow() + 90.seconds
                 while (taskState() != state) {
-                    check(deadline.hasNotPassedNow()) { "タスクが $state になりません(${taskState()})" }
+                    check(deadline.hasNotPassedNow()) { "タスクが $state になりません(${taskState()})\n${connect.diagnostics(CONNECTOR)}" }
                     Thread.sleep(1_000)
                 }
             }
