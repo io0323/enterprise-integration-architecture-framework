@@ -71,18 +71,24 @@ services/order/
     Order.kt, OrderLine.kt, OrderStatus.kt, Identifiers.kt, ShippingAddress.kt   # 状態遷移は docs/architecture/order-state-machine.md
     OrderSaga.kt(Saga の状態・受け取るもの・遷移表 OrderSagaRules。純粋な関数。docs/architecture/order-saga.md・ADR-0029)
   application/src/commonMain/kotlin/io/eia/order/application/ # package io.eia.order.application
-    port/inbound/PlaceOrderUseCase.kt          # `in` は Kotlin の予約語のため inbound / outbound とする
+    port/inbound/PlaceOrderUseCase.kt, HandleSagaReplyUseCase.kt, TimeoutSagasUseCase.kt   # `in` は Kotlin の予約語のため inbound / outbound とする
     port/outbound/OrderRepository.kt(楽観的ロック), TransactionRunner.kt, OrderIdGenerator.kt, OrderAuditTrail.kt, OrderEventOutbox.kt(P06。Outbox でイベントを書く)   # IdempotencyStore は platform/api(ADR-0022 §1)
+    port/outbound/SagaPorts.kt(P07。SagaStore(期限は DB の時計)・SagaCommandOutbox・ProcessedReplies・SagaIdGenerator・SagaObserver)
     usecase/PlaceOrderService.kt, GetOrderService.kt
+    usecase/SagaCoordinator.kt(遷移表の判定を、注文・Saga・コマンド・イベントの書き込みにする。SagaTimeouts), HandleSagaReplyService.kt, TimeoutSagasService.kt   # ADR-0029
   adapters/src/main/kotlin/io/eia/order/adapters/             # package io.eia.order.adapters
     inbound/rest/OrderRoutes.kt, OrderDtos.kt, OrderDtoMapper.kt, OrderProblems.kt   # `in` は予約語(ktlint はバッククォートのパッケージ名を許さない)
     out/persistence/ExposedOrderRepository.kt, ExposedTransactionRunner.kt, OrderSchema.kt(order と監査のマイグレーション),
                     UuidV7OrderIdGenerator.kt, PostgresIdempotencyStore.kt, ExposedTransactionBoundary.kt(冪等。ADR-0022 §3),
     out/outbox/OutboxOrderEvents.kt(OrderEventOutbox の実装)、OrderEventMapper.kt(domain → Canonical Model → イベントの型)、
                     OrderCreatedV1.kt(契約の record 名の @SerialName。ADR-0025 §1)、OrderEventSchemas.kt(トピックと、contracts からコピーした契約のスキーマ)
+    inbound/kafka/SagaReplyHandlers.kt(返信の購読。Consumer Group order.saga), SagaRepliesV1.kt(返信の型。UNKNOWN は DLQ)   # P07。ADR-0028・ADR-0029
+    out/saga/ExposedSagaStore.kt(order_saga。期限は clock_timestamp()、期限切れは FOR UPDATE SKIP LOCKED), OutboxSagaCommands.kt, SagaCommandsV1.kt,
+                    SagaSchemas.kt, SagaMetrics.kt(eia.saga.*), SagaSupport.kt(InboxProcessedReplies・UuidV7SagaIds)
   adapters/src/main/resources/db/order/                       # Flyway(所有者のロールで適用。アプリのロールには必要な権限だけを付ける)
   app/src/main/kotlin/io/eia/order/app/                       # package io.eia.order.app
     Main.kt(migrate / serve), OrderCommands.kt, OrderServer.kt(Netty), OrderModule.kt(Koin), OrderConfig.kt   # ADR-0024
+                    # P07: OrderServer が返信の読み取り(1 スレッド)と期限切れの定期のジョブを動かす。ORDER_KAFKA_BOOTSTRAP がなければ返信を読まない
     ServerTls.kt(PEM の鍵と証明書・有効期限), ClientCertificateAllowList.kt(SAN の許可の一覧), TlsRoutes.kt(ポートの分け方)   # ADR-0024 §6
   app/Dockerfile                                              # distroless の nonroot。ADR-0024 §7
 ```

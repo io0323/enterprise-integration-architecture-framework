@@ -1,0 +1,18 @@
+# 注文 Saga(order-service の Orchestrator)のアラート(P07 ⑤。ADR-0029 §3)。対応は docs/runbooks/order-saga.md。
+# 単体テストは saga.test.yml(make alerts-test)。
+#
+# メトリクスは order-service の SagaMetrics(OTLP → Collector → Prometheus。job = order-service)。
+groups:
+  - name: order-saga
+    rules:
+      # 補償が終わらない: 補償のコマンドを、上限の回数(ORDER_SAGA_STALL_AFTER_RESENDS。既定 5 回)を超えて送り直している。
+      # 参加者が止まっている・コマンドを DLQ に送った・返信を order.saga が DLQ に送った、のどれか。在庫・決済の枠を押さえたままなので critical。
+      # 送り直しは続く(参加者が回復すれば、冪等のため同じ結果で完了する)。送り直しが止まって 15 分たてば解消する
+      - alert: OrderSagaCompensationStalled
+        expr: |
+          sum by (job, state) (increase(eia_saga_stalled_total[15m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "注文 Saga の補償({{ $labels.state }})が終わらない(上限の回数を超えて送り直している)"
+          runbook: docs/runbooks/order-saga.md#補償が終わらないとき
