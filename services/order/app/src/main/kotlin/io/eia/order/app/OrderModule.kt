@@ -2,6 +2,7 @@ package io.eia.order.app
 
 import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
+import io.eia.order.adapters.inbound.kafka.SagaReplyHandlers
 import io.eia.order.adapters.inbound.rest.OrderApi
 import io.eia.order.adapters.out.audit.ExposedOrderAuditTrail
 import io.eia.order.adapters.out.outbox.OrderEventSchemas
@@ -11,15 +12,29 @@ import io.eia.order.adapters.out.persistence.ExposedTransactionBoundary
 import io.eia.order.adapters.out.persistence.ExposedTransactionRunner
 import io.eia.order.adapters.out.persistence.PostgresIdempotencyStore
 import io.eia.order.adapters.out.persistence.UuidV7OrderIdGenerator
+import io.eia.order.adapters.out.saga.ExposedSagaStore
+import io.eia.order.adapters.out.saga.InboxProcessedReplies
+import io.eia.order.adapters.out.saga.OutboxSagaCommands
+import io.eia.order.adapters.out.saga.SagaMetrics
+import io.eia.order.adapters.out.saga.SagaSchemas
+import io.eia.order.adapters.out.saga.UuidV7SagaIds
 import io.eia.order.application.port.inbound.GetOrderUseCase
+import io.eia.order.application.port.inbound.HandleSagaReplyUseCase
 import io.eia.order.application.port.inbound.PlaceOrderUseCase
+import io.eia.order.application.port.inbound.TimeoutSagasUseCase
 import io.eia.order.application.port.outbound.OrderAuditTrail
 import io.eia.order.application.port.outbound.OrderEventOutbox
 import io.eia.order.application.port.outbound.OrderIdGenerator
 import io.eia.order.application.port.outbound.OrderRepository
+import io.eia.order.application.port.outbound.ProcessedReplies
+import io.eia.order.application.port.outbound.SagaCommandOutbox
+import io.eia.order.application.port.outbound.SagaStore
 import io.eia.order.application.port.outbound.TransactionRunner
 import io.eia.order.application.usecase.GetOrderService
+import io.eia.order.application.usecase.HandleSagaReplyService
 import io.eia.order.application.usecase.PlaceOrderService
+import io.eia.order.application.usecase.SagaCoordinator
+import io.eia.order.application.usecase.TimeoutSagasService
 import io.eia.platform.api.idempotency.IdempotencyConfig
 import io.eia.platform.api.idempotency.IdempotencyHandler
 import io.eia.platform.api.idempotency.IdempotencyStore
@@ -32,6 +47,9 @@ import io.eia.platform.audit.anchor.S3AnchorStore
 import io.eia.platform.audit.anchor.S3AnchorStoreConfig
 import io.eia.platform.audit.anchor.ServiceName
 import io.eia.platform.audit.jdbc.AuditLog
+import io.eia.platform.messagingkafka.DeadLetterPublisher
+import io.eia.platform.messagingkafka.EventConsumer
+import io.eia.platform.messagingkafka.KafkaProducerSettings
 import io.eia.platform.observability.ObservabilityRuntime
 import io.eia.platform.outbox.Outbox
 import io.eia.platform.outbox.OutboxEvents
@@ -40,6 +58,7 @@ import io.eia.platform.reliability.ResilienceMetrics
 import io.eia.platform.schemaregistry.ApicurioRegistryClient
 import io.eia.platform.schemaregistry.SchemaIdBook
 import io.eia.platform.schemaregistry.SchemaRegistryConfig
+import io.eia.platform.schemaregistry.WriterSchemas
 import io.eia.platform.security.jwt.JwtVerifier
 import io.eia.platform.security.jwt.JwtVerifierConfig
 import io.eia.platform.security.secret.Secret
@@ -47,6 +66,9 @@ import io.eia.platform.security.secret.SecretProvider
 import io.eia.shared.kernel.getOrNull
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
+import org.apache.kafka.clients.consumer.KafkaConsumer
+import org.apache.kafka.clients.producer.KafkaProducer
+import org.apache.kafka.clients.producer.Producer
 import org.jetbrains.exposed.v1.jdbc.Database
 import org.koin.core.module.Module
 import org.koin.core.qualifier.named
@@ -88,7 +110,8 @@ internal fun orderModule(
         single<OrderAuditTrail> { ExposedOrderAuditTrail(get(), get()) }
         if (config.anchor.enabled) anchorBeans(config.anchor, runtime, secrets)
         eventBeans(config, runtime)
-        single<PlaceOrderUseCase> { PlaceOrderService(get(), get(), get(), Clock.System, get(), get()) }
+        sagaBeans(config, runtime)
+        single<PlaceOrderUseCase> { PlaceOrderService(get(), get(), get(), Clock.System, get(), get(), get()) }
         single<GetOrderUseCase> { GetOrderService(get()) }
         single<IdempotencyStore> { PostgresIdempotencyStore(get()) }
         single { IdempotencyHandler(get(), IdempotencyConfig(lease = config.idempotencyLease)) }
@@ -121,13 +144,54 @@ private fun Module.eventBeans(
 ) {
     single(SCHEMA_REGISTRY_HTTP) { HttpClient(CIO) }
     single {
-        val registry = requireNotNull(config.schemaRegistryUrl) { "${OrderConfig.SCHEMA_REGISTRY_URL} が必要です" }
-        SchemaIdBook(OrderEventSchemas.subjects, ApicurioRegistryClient(SchemaRegistryConfig(registry), get(SCHEMA_REGISTRY_HTTP)))
+        requireNotNull(config.schemaRegistryUrl) { "${OrderConfig.SCHEMA_REGISTRY_URL} が必要です" }
+        SchemaIdBook(OrderEventSchemas.subjects + SagaSchemas.subjects, get())
     }
-    single { OrderEventSchemas.orderCreatedSerializer(get()) }
+    single { ApicurioRegistryClient(SchemaRegistryConfig(requireNotNull(config.schemaRegistryUrl)), get(SCHEMA_REGISTRY_HTTP)) }
     single { Outbox(OutboxMetrics(runtime.meter)) }
     single { OutboxEvents(runtime, EVENT_SOURCE) }
-    single<OrderEventOutbox> { OutboxOrderEvents(get(), get(), get(), get()) }
+    single<OrderEventOutbox> {
+        OutboxOrderEvents(
+            get(),
+            get(),
+            get(),
+            OrderEventSchemas.orderCreatedSerializer(get()),
+            OrderEventSchemas.orderCancelledSerializer(get()),
+        )
+    }
+}
+
+/**
+ * 注文 Saga(Orchestration。ADR-0029)。Saga の記録・コマンドの Outbox・返信の冪等消費と、返信の受信(`order.saga`)。
+ * 返信の受信は [OrderConfig.kafkaBootstrap] があるときだけ作る(ないときは、期限切れの補償だけで進む)。
+ */
+private fun Module.sagaBeans(
+    config: OrderConfig,
+    runtime: ObservabilityRuntime,
+) {
+    single<SagaStore> { ExposedSagaStore(get()) }
+    single<SagaCommandOutbox> { OutboxSagaCommands(get(), get(), get(), SagaSchemas.Serializers(get())) }
+    single<ProcessedReplies> { InboxProcessedReplies(get(), SagaReplyHandlers.GROUP_ID) }
+    single {
+        SagaCoordinator(get(), get(), get(), get(), UuidV7SagaIds(), config.saga, SagaMetrics(runtime.meter, config.saga.stallAfterResends))
+    }
+    single<HandleSagaReplyUseCase> { HandleSagaReplyService(get(), get(), get(), get()) }
+    single<TimeoutSagasUseCase> { TimeoutSagasService(get(), get(), get()) }
+    val bootstrap = config.kafkaBootstrap ?: return
+    single { WriterSchemas(get()) }
+    // DLQ だけに使う(コマンドとイベントは Outbox で発行する)
+    single<Producer<ByteArray, ByteArray>> { KafkaProducer(KafkaProducerSettings(bootstrap, clientId = "order-service").toProperties()) }
+    single {
+        val consumer =
+            KafkaConsumer<ByteArray?, ByteArray?>(EventConsumer.consumerProperties(bootstrap, SagaReplyHandlers.GROUP_ID, "order-service"))
+        EventConsumer(
+            consumer,
+            SagaReplyHandlers.GROUP_ID,
+            SagaReplyHandlers(get()).subscriptions(get()),
+            DeadLetterPublisher(get()),
+            runtime,
+        )
+    }
 }
 
 /** CloudEvents の `ce_source`(AsyncAPI の StandardHeaders の例と同じ)。 */

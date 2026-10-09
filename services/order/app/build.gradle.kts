@@ -17,6 +17,8 @@ dependencies {
     // 注文のイベントの発行(Outbox)と、起動時のスキーマ ID の解決(ADR-0007・ADR-0025 §3)
     implementation(project(":platform:outbox"))
     implementation(project(":platform:schema-registry"))
+    // 注文 Saga の返信の冪等消費の記録の掃除(ADR-0028 §3)
+    implementation(project(":platform:inbox"))
     implementation(libs.ktor.client.cio)
     implementation(libs.ktor.server.netty)
     implementation(libs.koin.core)
@@ -34,6 +36,7 @@ dependencies {
     integrationTestImplementation(libs.ktor.client.cio)
     // 発行(Outbox → Debezium → Kafka)の統合テスト(P06 ③b)
     integrationTestImplementation(libs.testcontainers.kafka)
+    integrationTestImplementation(libs.kotlinx.serialization.json)
 }
 
 // 発行の統合テストは、ローカル基盤と同じコネクタの設定と Kafka Connect のイメージを使う。変更でテストをやり直すよう、入力に宣言する

@@ -3,6 +3,7 @@
 package io.eia.order.app
 
 import io.eia.order.adapters.out.outbox.OrderEventSchemas
+import io.eia.order.adapters.out.saga.SagaSchemas
 import io.eia.platform.schemaregistry.ApicurioRegistryClient
 import io.eia.platform.schemaregistry.SchemaRegistryConfig
 import io.eia.shared.kernel.Result
@@ -15,12 +16,12 @@ import kotlin.time.TimeSource
 
 // Schema Registry に関わる app の統合テストの部品(ADR-0025 §3)。
 
-/** order-service が書くイベントの契約のスキーマを登録する(`make schemas` と同じ)。 */
+/** order-service が書くイベントと Saga のコマンドの契約のスキーマを登録する(`make schemas` と同じ)。 */
 internal fun AppEnvironment.registerSchemas() {
     HttpClient(CIO).use { http ->
         val client = ApicurioRegistryClient(SchemaRegistryConfig(registry.baseUrl, requestTimeout = 30.seconds), http)
         runBlocking {
-            OrderEventSchemas.subjects.forEach { subject ->
+            (OrderEventSchemas.subjects + SagaSchemas.subjects).forEach { subject ->
                 check(client.register(subject) is Result.Ok) { "${subject.topic} のスキーマを登録できません" }
             }
         }

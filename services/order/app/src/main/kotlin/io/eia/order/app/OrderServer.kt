@@ -3,6 +3,7 @@ package io.eia.order.app
 import com.zaxxer.hikari.HikariDataSource
 import io.eia.order.adapters.inbound.rest.OrderProblems
 import io.eia.order.adapters.inbound.rest.orderRoutes
+import io.eia.order.application.port.inbound.TimeoutSagasUseCase
 import io.eia.platform.api.deadline.installRequestDeadline
 import io.eia.platform.api.idempotency.IdempotencyStore
 import io.eia.platform.api.problem.Problem
@@ -13,6 +14,8 @@ import io.eia.platform.audit.AuditError
 import io.eia.platform.audit.anchor.AnchorCycle
 import io.eia.platform.audit.anchor.AnchorOutcome
 import io.eia.platform.audit.anchor.S3AnchorStore
+import io.eia.platform.inbox.Inbox
+import io.eia.platform.messagingkafka.EventConsumer
 import io.eia.platform.observability.Observability
 import io.eia.platform.observability.ObservabilityConfig
 import io.eia.platform.observability.ObservabilityRuntime
@@ -47,17 +50,26 @@ import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import org.apache.kafka.clients.producer.Producer
 import org.koin.core.Koin
 import org.koin.dsl.koinApplication
 import org.slf4j.LoggerFactory
+import java.sql.Connection
 import java.sql.SQLException
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import kotlin.time.Duration
 
 /**
@@ -75,6 +87,8 @@ internal class OrderServer private constructor(
     private val server: EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration>,
     private val koin: Koin,
     private val runtime: ObservabilityRuntime,
+    private val sagaReplies: Job? = null,
+    private val sagaThread: ExecutorService? = null,
 ) {
     private val stopped = CountDownLatch(1)
 
@@ -99,6 +113,10 @@ internal class OrderServer private constructor(
 
     fun stop() {
         if (stopped.count == 0L) return
+        // 返信の読み取りを止める(Consumer は読み取りのスレッドで閉じる)。コミットしていない返信は、次の起動で読み直す
+        runBlocking { sagaReplies?.cancelAndJoin() }
+        sagaThread?.shutdown()
+        koin.getOrNull<Producer<ByteArray, ByteArray>>()?.close()
         server.stop(GRACE_MILLIS, TIMEOUT_MILLIS)
         koin.get<JwtVerifier>().close()
         koin.get<HttpClient>(SCHEMA_REGISTRY_HTTP).close()
@@ -133,8 +151,9 @@ internal class OrderServer private constructor(
                         val server =
                             embeddedServer(Netty, configure = { connectors(config, tls) }) { orderApplication(koin, config) }
                                 .start(wait = false)
+                        val (replies, thread) = startSagaReplies(koin)
                         logger.info("order-service を起動しました")
-                        OrderServer(server, koin, runtime)
+                        OrderServer(server, koin, runtime, replies, thread)
                     }
                 }
             }
@@ -213,10 +232,11 @@ internal class OrderServer private constructor(
                 }
             }
             routing {
-                overPlaintext { healthRoutes(koin.get(), koin.get()) }
+                overPlaintext { healthRoutes(koin.get(), koin.get(), koin.getOrNull()) }
                 overTls { authenticate { orderRoutes(koin.get()) } }
             }
-            launchPurgeJob(koin.get(), config)
+            launchPurgeJob(koin.get(), koin.get(), config)
+            launchSagaTimeoutJob(koin.get(), config)
             // 書き込むイベントのスキーマ ID を解決する。解決するまで /health/ready は 503(ADR-0025 §3)
             val schemaIds = koin.get<SchemaIdBook>()
             launch { schemaIds.resolveUntilReady() }
@@ -235,11 +255,14 @@ internal class OrderServer private constructor(
         private fun Route.healthRoutes(
             dataSource: HikariDataSource,
             schemaIds: SchemaIdBook,
+            sagaReplies: EventConsumer?,
         ) {
             get("/health/live") { call.respondText("""{"status":"UP"}""", ContentType.Application.Json) }
             get("/health/ready") {
+                // 返信を読むなら、読み取りが基盤の障害で止まっていないこと(ADR-0028 §1)
                 val ready =
                     schemaIds.isReady &&
+                        (sagaReplies?.ready ?: true) &&
                         withContext(Dispatchers.IO) {
                             try {
                                 dataSource.connection.use { it.isValid(READY_TIMEOUT_SECONDS) }
@@ -282,40 +305,29 @@ internal class OrderServer private constructor(
             }
         }
 
-        private fun logAnchorResult(result: Result<AnchorOutcome, AuditError>) {
-            when (result) {
-                is Result.Err -> {
-                    logger.warn("監査のアンカーの検査を終えられませんでした。次の回でやり直します(error.code={}): {}", result.error.code, result.error.message)
-                }
-
-                is Result.Ok -> {
-                    when (val outcome = result.value) {
-                        is AnchorOutcome.Published -> {
-                            logger.info(
-                                "監査のアンカーを保存しました(key={}, seq={}, 検証した記録 {} 件)",
-                                outcome.anchor.key,
-                                outcome.anchor.anchor.seq,
-                                outcome.verifiedRecords,
-                            )
-                        }
-
-                        is AnchorOutcome.Rejected -> {
-                            // seq とアンカーのキーだけを出す(記録の中身は出さない)
-                            outcome.findings.forEach { logger.error("監査記録に改竄の疑いがあります({}): {}", it.code, it.describe()) }
-                            logger.error("改竄の疑いがあるため、監査のアンカーを保存しません(対応: docs/runbooks/audit-verify.md)")
-                        }
-
-                        AnchorOutcome.Empty, is AnchorOutcome.Unchanged -> {
-                            logger.debug("監査の記録は前回のアンカーから増えていません({})", outcome.label)
-                        }
+        /**
+         * 期限切れの Saga を、[OrderConfig.sagaScanInterval] ごとに進める(ADR-0029 §6。期限の判定は DB の時計)。サーバの停止で止まる。
+         * 複数のインスタンスでも、`FOR UPDATE SKIP LOCKED` で同じ Saga を二重に処理しない。
+         */
+        private fun Application.launchSagaTimeoutJob(
+            timeouts: TimeoutSagasUseCase,
+            config: OrderConfig,
+        ) {
+            launch {
+                while (isActive) {
+                    delay(config.sagaScanInterval)
+                    when (val handled = timeouts()) {
+                        is Result.Ok -> if (handled.value > 0) logger.info("期限切れの Saga を {} 件進めました", handled.value)
+                        is Result.Err -> logger.warn("期限切れの Saga を進められません({})。次の間隔でやり直します", handled.error.code)
                     }
                 }
             }
         }
 
-        /** 期限切れの冪等の記録を、[OrderConfig.purgeInterval] ごとに消す(ADR-0022 §3)。サーバの停止で止まる。 */
+        /** 期限切れの冪等の記録(API の冪等・返信の冪等消費)を、[OrderConfig.purgeInterval] ごとに消す(ADR-0022 §3・ADR-0028 §3)。サーバの停止で止まる。 */
         private fun Application.launchPurgeJob(
             store: IdempotencyStore,
+            dataSource: HikariDataSource,
             config: OrderConfig,
         ) {
             launch {
@@ -324,6 +336,8 @@ internal class OrderServer private constructor(
                     try {
                         val purged = store.purgeExpired(inProgressGrace = config.idempotencyLease)
                         if (purged > 0) logger.info("期限切れの冪等の記録を {} 件消しました", purged)
+                        val replies = withContext(Dispatchers.IO) { purgeProcessedReplies(dataSource) }
+                        if (replies > 0) logger.info("保持期間を過ぎた返信の冪等消費の記録を {} 件消しました", replies)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (
@@ -337,3 +351,75 @@ internal class OrderServer private constructor(
         }
     }
 }
+
+/** 返信の冪等消費の記録(保持期間 14 日。ADR-0028 §3)を、なくなるまで少しずつ消す。消した件数を返す。 */
+private fun purgeProcessedReplies(dataSource: HikariDataSource): Int = dataSource.connection.use { purgeProcessedReplies(Inbox(), it) }
+
+private fun purgeProcessedReplies(
+    inbox: Inbox,
+    connection: Connection,
+): Int {
+    var total = 0
+    do {
+        // 失敗すれば 0 件として止める(次の周期でやり直す)
+        val deleted = (inbox.purgeExpired(connection) as? Result.Ok)?.value ?: 0
+        total += deleted
+    } while (deleted >= Inbox.DEFAULT_BATCH_SIZE)
+    return total
+}
+
+/**
+ * 注文 Saga の返信の読み取り(`order.saga`。ADR-0029)を、1 つのスレッドで始める(Kafka の Consumer はスレッドセーフでない)。
+ * スキーマ ID を解決してから読み始める。`ORDER_KAFKA_BOOTSTRAP` がなければ読まない(Saga は期限切れの補償だけで進む)。
+ */
+private fun startSagaReplies(koin: Koin): Pair<Job?, ExecutorService?> {
+    val consumer =
+        koin.getOrNull<EventConsumer>()
+            ?: return (null to null).also {
+                LoggerFactory
+                    .getLogger(
+                        OrderServer::class.java,
+                    ).warn("注文 Saga の返信を読みません(ORDER_KAFKA_BOOTSTRAP がない)")
+            }
+    val schemaIds = koin.get<SchemaIdBook>()
+    val thread = Executors.newSingleThreadExecutor { Thread(it, "order-saga-replies") }
+    val job =
+        CoroutineScope(SupervisorJob() + thread.asCoroutineDispatcher()).launch {
+            schemaIds.resolveUntilReady()
+            consumer.run()
+        }
+    return job to thread
+}
+
+private fun logAnchorResult(result: Result<AnchorOutcome, AuditError>) {
+    when (result) {
+        is Result.Err -> {
+            serverLogger.warn("監査のアンカーの検査を終えられませんでした。次の回でやり直します(error.code={}): {}", result.error.code, result.error.message)
+        }
+
+        is Result.Ok -> {
+            when (val outcome = result.value) {
+                is AnchorOutcome.Published -> {
+                    serverLogger.info(
+                        "監査のアンカーを保存しました(key={}, seq={}, 検証した記録 {} 件)",
+                        outcome.anchor.key,
+                        outcome.anchor.anchor.seq,
+                        outcome.verifiedRecords,
+                    )
+                }
+
+                is AnchorOutcome.Rejected -> {
+                    // seq とアンカーのキーだけを出す(記録の中身は出さない)
+                    outcome.findings.forEach { serverLogger.error("監査記録に改竄の疑いがあります({}): {}", it.code, it.describe()) }
+                    serverLogger.error("改竄の疑いがあるため、監査のアンカーを保存しません(対応: docs/runbooks/audit-verify.md)")
+                }
+
+                AnchorOutcome.Empty, is AnchorOutcome.Unchanged -> {
+                    serverLogger.debug("監査の記録は前回のアンカーから増えていません({})", outcome.label)
+                }
+            }
+        }
+    }
+}
+
+private val serverLogger = LoggerFactory.getLogger(OrderServer::class.java)

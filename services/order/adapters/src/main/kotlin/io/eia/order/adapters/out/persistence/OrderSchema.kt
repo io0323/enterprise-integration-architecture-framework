@@ -1,6 +1,7 @@
 package io.eia.order.adapters.out.persistence
 
 import io.eia.platform.audit.jdbc.AuditSchema
+import io.eia.platform.inbox.InboxSchema
 import io.eia.platform.outbox.OutboxSchema
 import io.eia.shared.kernel.DomainError
 import io.eia.shared.kernel.Result
@@ -19,6 +20,7 @@ import javax.sql.DataSource
  *   マイグレーションが必要な権限だけを付ける(所有者の権限は持たない。DDL・TRUNCATE はできない)。
  * - order の表(`db/order`。Flyway の履歴は `flyway_schema_history`)の後に、監査の表(`AuditSchema`。スキーマ `audit`。
  *   履歴は別の表)を同じ DB に適用する(ADR-0017)。
+ * - 注文 Saga の表(V3。`order_saga`)と、返信の冪等消費の記録(`InboxSchema`。スキーマ `inbox`)を適用する(ADR-0029)。
  * - 最後に Outbox の表と publication(`OutboxSchema`。スキーマ `outbox`。履歴は別の表)を適用する(ADR-0007)。
  *   [cdcRole](Debezium)には Outbox の表の SELECT だけを付ける。
  */
@@ -47,6 +49,9 @@ public object OrderSchema {
             Unit
         }.flatMap {
             AuditSchema.migrate(owner, appRole).mapError { error -> UnexpectedError("監査のマイグレーションに失敗しました(${error.code})") }
+        }.flatMap {
+            // 注文 Saga の返信の冪等消費の記録(ADR-0028 §3。P07)
+            InboxSchema.migrate(owner, appRole).mapError { error -> UnexpectedError("冪等消費の記録のマイグレーションに失敗しました(${error.code})") }
         }.flatMap {
             OutboxSchema.migrate(owner, appRole, cdcRole).mapError { error -> UnexpectedError("Outbox のマイグレーションに失敗しました(${error.code})") }
         }

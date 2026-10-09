@@ -17,11 +17,18 @@ public object OrderEventSchemas {
 
     public val orderCreated: SchemaSubject by lazy { SchemaSubject(ORDER_CREATED.name, resource(ORDER_CREATED_SCHEMA)) }
 
-    /** order-service が書くすべてのスキーマ(起動時に ID を解決する対象)。 */
-    public val subjects: List<SchemaSubject> get() = listOf(orderCreated)
+    public val ORDER_CANCELLED: EventTopic = EventTopic.of("sales.order.cancelled.v1")
+    private const val ORDER_CANCELLED_SCHEMA = "/contracts/avro/sales/OrderCancelled.avsc"
+    public val orderCancelled: SchemaSubject by lazy { SchemaSubject(ORDER_CANCELLED.name, resource(ORDER_CANCELLED_SCHEMA)) }
+
+    /** order-service が書く注文のイベントのスキーマ(起動時に ID を解決する対象。Saga のコマンドは `SagaSchemas`)。 */
+    public val subjects: List<SchemaSubject> get() = listOf(orderCreated, orderCancelled)
 
     public fun orderCreatedSerializer(ids: SchemaIdBook): AvroEventSerializer<OrderCreatedV1> =
         AvroEventSerializer(ORDER_CREATED, orderCreated, OrderCreatedV1.serializer(), ids)
+
+    public fun orderCancelledSerializer(ids: SchemaIdBook): AvroEventSerializer<OrderCancelledV1> =
+        AvroEventSerializer(ORDER_CANCELLED, orderCancelled, OrderCancelledV1.serializer(), ids)
 
     private fun resource(path: String): String =
         requireNotNull(OrderEventSchemas::class.java.getResource(path)) { "$path がリソースにありません(contracts からのコピー)" }.readText()
