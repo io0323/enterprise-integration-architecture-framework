@@ -13,8 +13,13 @@ import io.eia.order.adapters.out.persistence.OrderDatabase
 import io.eia.order.adapters.out.persistence.OrderDatabaseEnvironment
 import io.eia.order.adapters.out.persistence.PostgresIdempotencyStore
 import io.eia.order.adapters.out.persistence.UuidV7OrderIdGenerator
+import io.eia.order.adapters.out.saga.ExposedSagaStore
+import io.eia.order.adapters.out.saga.OutboxSagaCommands
+import io.eia.order.adapters.out.saga.SagaSchemas
+import io.eia.order.adapters.out.saga.UuidV7SagaIds
 import io.eia.order.application.usecase.GetOrderService
 import io.eia.order.application.usecase.PlaceOrderService
+import io.eia.order.application.usecase.SagaCoordinator
 import io.eia.platform.api.idempotency.CanonicalBody
 import io.eia.platform.api.idempotency.IDEMPOTENCY_KEY_HEADER
 import io.eia.platform.api.idempotency.IDEMPOTENT_REPLAYED_HEADER
@@ -106,7 +111,7 @@ private val EVENT_RUNTIME =
     )
 
 /** 解決済みの OrderCreated の serializer(Schema Registry の代わりに MockEngine で contentId 1 を返す)。 */
-private fun resolvedOrderCreated(): AvroEventSerializer<OrderCreatedV1> {
+private fun resolvedSchemaIds(): SchemaIdBook {
     val registry =
         HttpClient(
             MockEngine {
@@ -119,11 +124,11 @@ private fun resolvedOrderCreated(): AvroEventSerializer<OrderCreatedV1> {
         )
     val book =
         SchemaIdBook(
-            OrderEventSchemas.subjects,
+            OrderEventSchemas.subjects + SagaSchemas.subjects,
             ApicurioRegistryClient(SchemaRegistryConfig("http://registry.test/apis/registry/v3"), registry),
         )
     runBlocking { check(book.resolve() is Result.Ok) }
-    return OrderEventSchemas.orderCreatedSerializer(book)
+    return book
 }
 
 /** order-service の REST を、実際の PostgreSQL・JWT の検証・Problem Details・冪等の処理で組み立てる(app の配線と同じ順序)。 */
@@ -132,6 +137,16 @@ private fun ApplicationTestBuilder.orderService(
     idp: TestIdp,
 ) {
     val repository = ExposedOrderRepository(db.database)
+    val book = resolvedSchemaIds()
+    val outboxEvents = OutboxEvents(EVENT_RUNTIME, "/sales/order-service")
+    val events =
+        OutboxOrderEvents(
+            db.database,
+            Outbox(),
+            outboxEvents,
+            OrderEventSchemas.orderCreatedSerializer(book),
+            OrderEventSchemas.orderCancelledSerializer(book),
+        )
     val api =
         OrderApi(
             placeOrder =
@@ -141,7 +156,14 @@ private fun ApplicationTestBuilder.orderService(
                     UuidV7OrderIdGenerator(),
                     NANOSECOND_CLOCK,
                     ExposedOrderAuditTrail(db.database, AuditLog()),
-                    OutboxOrderEvents(db.database, Outbox(), OutboxEvents(EVENT_RUNTIME, "/sales/order-service"), resolvedOrderCreated()),
+                    events,
+                    SagaCoordinator(
+                        ExposedSagaStore(db.database),
+                        repository,
+                        OutboxSagaCommands(db.database, Outbox(), outboxEvents, SagaSchemas.Serializers(book)),
+                        events,
+                        UuidV7SagaIds(),
+                    ),
                 ),
             getOrder = GetOrderService(repository),
             idempotency = IdempotencyHandler(PostgresIdempotencyStore(db.database)),

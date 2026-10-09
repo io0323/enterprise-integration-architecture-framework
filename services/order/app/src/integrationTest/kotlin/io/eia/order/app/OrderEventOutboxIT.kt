@@ -103,7 +103,7 @@ class OrderEventOutboxIT :
             environment.awaitReady(server, 30.seconds)
         }
 
-        test("解決した後は、Apicurio を止めても注文を作れる。Outbox に行は残らず、WAL に OrderCreated の INSERT が同じトランザクションで残る") {
+        test("解決した後は、Apicurio を止めても注文を作れる。Outbox に行は残らず、WAL に OrderCreated と在庫の引当のコマンドの INSERT が同じトランザクションで残る") {
             createSlot()
             val registry = environment.registry
             registry.dockerClient.pauseContainerCmd(registry.containerId).exec()
@@ -117,9 +117,11 @@ class OrderEventOutboxIT :
 
             environment.count(db, "SELECT count(*) FROM outbox.outbox") shouldBe 0
             val changes = changes()
+            // 注文の作成と同じトランザクションで、Saga の最初のコマンド(在庫の引当。ADR-0029)も書く
             val inserts = changes.filter { it.startsWith("table outbox.outbox: INSERT") }
-            inserts.size shouldBe 1
-            val insert = inserts.single()
+            inserts.size shouldBe 2
+            val insert = inserts.single { it.contains("topic[text]:'sales.order.created.v1'") }
+            inserts.single { it != insert } shouldContain "topic[text]:'inventory.stock.cmd-reserve.v1'"
             insert shouldContain "topic[text]:'sales.order.created.v1'"
             insert shouldContain "aggregate_type[text]:'order'"
             insert shouldContain "aggregate_id[text]:'$orderId'"
@@ -130,6 +132,8 @@ class OrderEventOutboxIT :
             val transaction = transactions(changes).single { tx -> tx.any { it.startsWith("table outbox.outbox: INSERT") } }
             transaction.count { it.startsWith("table public.orders: INSERT") } shouldBe 1
             transaction.count { it.startsWith("table audit.audit_log: INSERT") } shouldBe 1
+            transaction.count { it.startsWith("table public.order_saga: INSERT") } shouldBe 1
+            transaction.count { it.startsWith("table outbox.outbox: INSERT") } shouldBe 2
 
             // ペイロードは契約のスキーマで読める(スキーマ ID 付きの Avro。ADR-0025 §1)
             val payload = HexFormat.of().parseHex(PAYLOAD.find(insert)?.groupValues?.get(1) ?: error("payload がありません"))
@@ -155,7 +159,8 @@ class OrderEventOutboxIT :
             place("key-replay").statusCode() shouldBe 201
             place("key-replay").header("Idempotent-Replayed") shouldBe "true"
 
-            changes().count { it.startsWith("table outbox.outbox: INSERT") } shouldBe 1
+            // 最初の 1 回の OrderCreated と在庫の引当のコマンドだけ
+            changes().count { it.startsWith("table outbox.outbox: INSERT") } shouldBe 2
         }
 
         afterTest {

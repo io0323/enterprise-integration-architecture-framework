@@ -68,3 +68,16 @@ public data class AddressV1(
     // 住所は個人情報なので、ログに出さない
     override fun toString(): String = "AddressV1(countryCode=$countryCode, ***)"
 }
+
+/**
+ * `sales.order.cancelled.v1`(注文 Saga の補償の完了。ADR-0029 §8)。
+ *
+ * @property reason 取消の理由の要約(Saga の補償の理由。個人情報を含めない)
+ */
+@Serializable
+@SerialName("io.eia.events.sales.OrderCancelled")
+public data class OrderCancelledV1(
+    val orderId: String,
+    val cancelledAt: kotlin.time.Instant,
+    val reason: String,
+)

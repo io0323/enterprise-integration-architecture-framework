@@ -1,5 +1,6 @@
 package io.eia.order.app
 
+import io.eia.order.application.usecase.SagaTimeouts
 import io.eia.platform.security.secret.SecretName
 import io.eia.platform.security.secret.SecretProvider
 import io.eia.shared.kernel.FieldViolation
@@ -38,6 +39,12 @@ import kotlin.time.Duration.Companion.seconds
  * | `ORDER_AUDIT_S3_ENDPOINT` / `ORDER_AUDIT_S3_BUCKET` | なし(有効なら serve で必須)/ `eiaf-audit` | serve |
  * | `ORDER_AUDIT_S3_ACCESS_KEY` / `ORDER_AUDIT_S3_SECRET_KEY`(または `_FILE`) | なし(有効なら serve で必須) | serve(`eiaf-audit-order`。ADR-0017 §7) |
  *
+ * | `ORDER_KAFKA_BOOTSTRAP` | なし | serve(注文 Saga の返信の受信。例 `kafka:9092`。なければ返信を読まない(Saga は期限切れの補償だけで進む)。ADR-0029) |
+ * | `ORDER_SAGA_STEP_TIMEOUT` | 30s | serve(前進の段の期限。DB の時計で判定する。ADR-0029 §6) |
+ * | `ORDER_SAGA_COMPENSATION_INTERVAL` | 30s | serve(補償のコマンドの送り直しの間隔) |
+ * | `ORDER_SAGA_STALL_AFTER_RESENDS` | 5 | serve(補償の送り直しがこの回数を超えたらアラート) |
+ * | `ORDER_SAGA_TIMEOUT_SCAN_INTERVAL` | 5s | serve(期限切れの Saga を探す間隔) |
+ *
  * 期間は ISO 8601(`PT10S`)か Kotlin の表記(`10s`)で書く。
  */
 internal data class OrderConfig(
@@ -57,6 +64,9 @@ internal data class OrderConfig(
     val idempotencyLease: Duration,
     val purgeInterval: Duration,
     val anchor: AuditAnchorConfig,
+    val kafkaBootstrap: String? = null,
+    val saga: SagaTimeouts = SagaTimeouts(),
+    val sagaScanInterval: Duration = 5.seconds,
 ) {
     companion object {
         val OWNER_PASSWORD = SecretName("ORDER_DB_PASSWORD")
@@ -64,6 +74,7 @@ internal data class OrderConfig(
         const val SCHEMA_REGISTRY_URL = "ORDER_SCHEMA_REGISTRY_URL"
         private const val DEFAULT_HTTPS_PORT = 8443
         private const val DEFAULT_HEALTH_PORT = 8081
+        private const val DEFAULT_STALL_AFTER_RESENDS = 5
 
         fun fromEnvironment(env: Map<String, String>): Result<OrderConfig, ValidationError> {
             val reader = EnvReader(env)
@@ -102,6 +113,14 @@ internal data class OrderConfig(
                             endpoint = reader.optional(AuditAnchorConfig.ENDPOINT)?.let(URI::create),
                             bucket = reader.optional("ORDER_AUDIT_S3_BUCKET") ?: "eiaf-audit",
                         ),
+                    kafkaBootstrap = reader.optional("ORDER_KAFKA_BOOTSTRAP"),
+                    saga =
+                        SagaTimeouts(
+                            step = reader.duration("ORDER_SAGA_STEP_TIMEOUT", 30.seconds),
+                            compensation = reader.duration("ORDER_SAGA_COMPENSATION_INTERVAL", 30.seconds),
+                            stallAfterResends = reader.positiveInt("ORDER_SAGA_STALL_AFTER_RESENDS", DEFAULT_STALL_AFTER_RESENDS),
+                        ),
+                    sagaScanInterval = reader.duration("ORDER_SAGA_TIMEOUT_SCAN_INTERVAL", 5.seconds),
                 )
             if (config.allowedClients.isEmpty()) reader.violation("ORDER_TLS_ALLOWED_CLIENTS", "1 つ以上の名前が必要です")
             if (config.httpsPort != 0 && config.httpsPort == config.healthPort) {
@@ -180,6 +199,14 @@ private class EnvReader(
         name: String,
         default: Duration,
     ): Duration = optionalDuration(name) ?: default
+
+    fun positiveInt(
+        name: String,
+        default: Int,
+    ): Int =
+        optional(name)?.let { value ->
+            value.toIntOrNull()?.takeIf { it >= 1 } ?: default.also { violation(name, "1 以上の整数にしてください") }
+        } ?: default
 
     fun optionalDuration(name: String): Duration? {
         val raw = optional(name) ?: return null

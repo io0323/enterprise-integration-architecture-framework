@@ -12,6 +12,9 @@ dependencies {
     implementation(project(":platform:observability"))
     // 注文のイベントを Outbox で発行する(ADR-0007)。イベントは Canonical Model を経由して作る(ADR-0010 Decision 7)
     implementation(project(":platform:outbox"))
+    // 注文 Saga の返信の受信(EventConsumer)と冪等消費の記録(processed_message。ADR-0028・ADR-0029)
+    api(project(":platform:messaging-kafka"))
+    implementation(project(":platform:inbox"))
     implementation(project(":shared:canonical-model"))
     // 冪等の保存先の Port(IdempotencyStore)を PostgreSQL で実装する(ADR-0022 §3)
     api(project(":platform:api"))
@@ -29,6 +32,7 @@ dependencies {
 
     testImplementation(libs.mockk)
     testImplementation(libs.ktor.client.mock)
+    testImplementation(libs.opentelemetry.sdk.testing)
 
     integrationTestImplementation(project(":platform:test-support"))
     integrationTestImplementation(libs.testcontainers.postgresql)
@@ -43,8 +47,21 @@ dependencies {
 
 // 書き込むイベントの契約のスキーマ(contracts/avro)をリソースに含める。契約が唯一の真実で、コードに複製しない(ADR-0025 §2)
 tasks.named<ProcessResources>("processResources") {
-    from(rootProject.layout.projectDirectory.file("contracts/avro/sales/OrderCreated.avsc")) {
+    from(rootProject.layout.projectDirectory.dir("contracts/avro/sales")) {
+        include("OrderCreated.avsc", "OrderCancelled.avsc")
         into("contracts/avro/sales")
+    }
+    // 注文 Saga のコマンド(Orchestrator が書く。ADR-0029 §2)
+    from(rootProject.layout.projectDirectory.dir("contracts/avro")) {
+        include(
+            "inventory/ReserveStock.avsc",
+            "inventory/ReleaseStock.avsc",
+            "payment/AuthorizePayment.avsc",
+            "payment/VoidPayment.avsc",
+            "shipping/ArrangeShipment.avsc",
+            "shipping/CancelShipment.avsc",
+        )
+        into("contracts/avro")
     }
 }
 
