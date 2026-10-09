@@ -56,7 +56,7 @@ client_token() {
 header_value() { awk -v name="$(tr '[:upper:]' '[:lower:]' <<<"$1")" -F': ' 'tolower($1) == name { sub(/\r$/, "", $2); print $2; exit }'; }
 
 # 1 回だけ動いて終わるコンテナ(終了コード 0 で終わっていれば正常)
-oneshot_services=" order-migrate schema-publish legacy-migrate kafka-topics "
+oneshot_services=" order-migrate schema-publish legacy-migrate kafka-topics inventory-migrate "
 
 # ------------------------------------------------------------------ 共通: healthy
 verify_health() {
@@ -984,6 +984,35 @@ print("; ".join(sorted(set(bad))) if bad else "ok")
     sleep 10
   done
   printf '%s' "$result"
+}
+
+# ------------------------------------------------------------------ saga(P07。ADR-0028・ADR-0029)
+# 参加者の起動と配線を確かめる。Avro のコマンドから返事までの流れは、統合テスト(InventoryAppIT)と E2E(P07 ⑥)で確かめる
+verify_saga() {
+  current="saga"
+  local connect=http://localhost:19083
+  check "Kafka Connect: コネクタ inventory-outbox が RUNNING" bash -c \
+    "curl -fsS $connect/connectors/inventory-outbox/status | python3 -c 'import json,sys; d=json.load(sys.stdin); t=d.get(\"tasks\") or []; sys.exit(0 if d[\"connector\"][\"state\"]==\"RUNNING\" and t and all(x[\"state\"]==\"RUNNING\" for x in t) else 1)'"
+  check "PostgreSQL: debezium が inventory_service に CONNECT できる(マイグレーションが付ける)" \
+    equals t psql_super "select has_database_privilege('debezium', 'inventory_service', 'CONNECT')"
+  check "PostgreSQL: 在庫の初期データ(模擬。ADR-0029 §7)がある" \
+    equals 0 "${compose[@]}" exec -T postgres psql -U postgres -d inventory_service -tAc "select on_hand from stock where sku = 'SKU-SOLDOUT'"
+  check "PostgreSQL: inventory_service_app は在庫の数を書き換えられない(付けた権限だけ)" \
+    equals f "${compose[@]}" exec -T postgres psql -U postgres -d inventory_service -tAc \
+    "select has_column_privilege('inventory_service_app', 'public.stock', 'on_hand', 'UPDATE')"
+  check "Kafka: コマンドの DLQ(inventory.stock.cmd-reserve.v1.dlq)がある" \
+    kafka_cli /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --describe --topic inventory.stock.cmd-reserve.v1.dlq
+
+  # Poison Message(CloudEvents のヘッダのない値)をコマンドのトピックに送ると、inventory-service が DLQ に隔離する(読み取りと DLQ の疎通)
+  local key="eiaf-verify-$(date +%s)"
+  printf '%s\tnot-avro\n' "$key" | kafka_cli /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server kafka:9092 \
+    --topic inventory.stock.cmd-release.v1 --property parse.key=true --property 'key.separator=	' >/dev/null 2>&1 || true
+  dlq_has_key() {
+    kafka_cli /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic inventory.stock.cmd-release.v1.dlq \
+      --from-beginning --timeout-ms 5000 --property print.key=true --property print.headers=true 2>/dev/null |
+      grep -a "$key" | grep -aq 'eiaf.dlq.reason:INVALID_HEADERS'
+  }
+  check "inventory-service: ヘッダのないコマンドを DLQ に隔離した(eiaf.dlq.reason=INVALID_HEADERS)" retry 12 5 dlq_has_key
 }
 
 verify_health

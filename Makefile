@@ -1,10 +1,10 @@
 # EIAF ローカル開発用コマンド(CLAUDE.md §7)
 GRADLE := ./gradlew
 
-.PHONY: help setup build check arch-test contract-check schemas alerts-test integration-test format env not-root certs order-dist legacy-dist up down logs ps verify stats clean e2e audit-verify legacy-simulate dlq-replay
+.PHONY: help setup build check arch-test contract-check schemas alerts-test integration-test format env not-root certs order-dist legacy-dist saga-dist up down logs ps verify stats clean e2e audit-verify legacy-simulate dlq-replay
 
 # ローカル基盤(infra/local。ADR-0016)
-# PROFILE: core / cdc / iot / file / b2b / chaos / order。core は常に含まれる(積み上げ方式)。空白区切りで複数指定できる。
+# PROFILE: core / cdc / iot / file / b2b / chaos / order / saga。core は常に含まれる(積み上げ方式)。空白区切りで複数指定できる。
 PROFILE ?= core
 INFRA := infra/local
 COMPOSE := docker compose -f $(INFRA)/docker-compose.yml --env-file $(INFRA)/images.env --env-file $(INFRA)/.env
@@ -73,7 +73,10 @@ legacy-dist: ## legacy-sim(レガシー基幹の模擬)・legacy-order-acl・sch
 
 # --build: 自前で組み立てるイメージ(kafka-connect・order-service・schema-publish。ADR-0016 §9)の変更を反映する(変更がなければキャッシュを使う)
 # 証明書の有効期限は毎回確かめる(期限切れの証明書で起動に失敗しないように)
-up: not-root env certs $(if $(filter order,$(PROFILE)),order-dist) $(if $(filter cdc,$(PROFILE)),legacy-dist) ## ローカル基盤を起動し、全コンテナが healthy になるまで待つ(例: make up PROFILE=cdc)
+saga-dist: ## 注文 Saga の参加者(inventory-service)と schema-publish のイメージの中身(installDist)を作る(ADR-0029)
+	$(GRADLE) :services:inventory:app:installDist :tools:schema-publish:installDist
+
+up: not-root env certs $(if $(filter order,$(PROFILE)),order-dist) $(if $(filter cdc,$(PROFILE)),legacy-dist) $(if $(filter saga,$(PROFILE)),saga-dist) ## ローカル基盤を起動し、全コンテナが healthy になるまで待つ(例: make up PROFILE=cdc)
 	@if [ -f $(INFRA)/certs/.renewed ]; then \
 		$(COMPOSE) --profile '*' rm --stop --force $(CERT_CONSUMERS) >/dev/null 2>&1 || true; \
 		rm -f $(INFRA)/certs/.renewed; \
@@ -83,6 +86,8 @@ up: not-root env certs $(if $(filter order,$(PROFILE)),order-dist) $(if $(filter
 	@if [ -n "$(filter order,$(PROFILE))" ]; then $(INFRA)/scripts/connectors.sh order-outbox; fi
 	@# レガシーの受注表の CDC(ADR-0026)。kafka-connect は legacy-migrate(publication・権限・signal 表)の成功を待って起動している
 	@if [ -n "$(filter cdc,$(PROFILE))" ]; then $(INFRA)/scripts/connectors.sh legacy-juchu; fi
+	@# 注文 Saga の参加者の返事の発行(Outbox → Debezium。ADR-0029)。inventory-migrate が Outbox の表・publication・CONNECT を作った後に登録する
+	@if [ -n "$(filter saga,$(PROFILE))" ]; then $(INFRA)/scripts/connectors.sh inventory-outbox; fi
 
 down: env ## ローカル基盤を停止する(全 profile。データは残す)
 	$(COMPOSE) --profile '*' down --remove-orphans

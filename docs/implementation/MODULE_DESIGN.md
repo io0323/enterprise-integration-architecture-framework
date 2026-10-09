@@ -112,7 +112,7 @@ services/legacy-sim/app/
 | サービス | 役割 | 主な連携方式 |
 |---|---|---|
 | order | 受注 API・Saga Orchestrator | REST, Outbox/CDC, Kafka |
-| inventory | 在庫引当 | Kafka Consumer, gRPC |
+| inventory | 在庫引当(注文 Saga の参加者。P07 ④a。ADR-0029)。domain に引当の規則(`InventoryRules`。全部の明細を引き当てられるときだけ引き当てる・Saga ID の記録から返事を返し直す・解放が先に届いたら「取消済み」の印)と保持期間(`SettledRetention`。30 日、14 日未満は拒否)、application に引当・解放・保持期間の削除のユースケースと Port、adapters にコマンドの受信(`InventoryCommandHandlers`。`EventConsumer`・`inventory.command`)・JDBC の在庫(SKU の順にロック。`0 <= reserved <= on_hand` の制約)と引当の記録・冪等消費(`platform/inbox`)・返事の Outbox、app に起動・削除のジョブ・ヘルスチェック | Kafka(コマンド INT-INVENTORY-001 → 返事 INT-INVENTORY-002。Outbox + Debezium)。gRPC は P13 |
 | payment | 決済(モック) | Kafka |
 | shipping | 出荷 | Kafka |
 | legacy-sim | レガシー基幹 DB 模擬(改修できないレガシー。表と `simulate` だけ。1 モジュール。ADR-0026) | CDC(生の CDC のトピック `_cdc.legacy.*`) |

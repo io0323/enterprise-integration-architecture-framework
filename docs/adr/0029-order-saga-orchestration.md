@@ -105,3 +105,4 @@ Framework は複数のシステムにまたがる業務の更新に Saga を求�
 - order-service は Kafka の受信(`order.saga`)・期限のジョブ・Outbox を持ち、責務が増える。Saga の判定は domain の純粋な関数(`OrderSagaRules`)に閉じ込める。
 
 ## 改訂履歴
+- 2026-10-09: P07 ④a で inventory-service を入れた。コマンドのトピックは、保持期間(7 日。§5 の印の保持期間の根拠)を固定するため、Debezium に作らせず `infra/local/kafka/topics.conf` で明示して作る(DLQ も同じ)。§5 の確かめること(遅れて届いたコマンドの拒否・同時の注文で在庫が負にならない)は `InventoryPersistenceIT`。
