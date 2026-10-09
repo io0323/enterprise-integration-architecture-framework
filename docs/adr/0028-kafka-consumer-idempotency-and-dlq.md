@@ -59,7 +59,29 @@ P06 ⑤b の legacy-order-acl は、同じ役割の読み取りのループ(`Leg
 - span の属性は OTel のメッセージングの意味規約(`messaging.system`・`messaging.destination.name`・`messaging.consumer.group.name`・`messaging.operation.type=process`・`messaging.message.id`・パーティション・オフセット)。値は入れない。
 
 ### 5. メトリクス
-`ConsumerMetrics`(OTLP → Prometheus): `eia.consumer.messages{outcome=processed|duplicate|dead_lettered}`・`eia.consumer.dead_letters{reason}`・`eia.consumer.retries{error.code}`・`eia.consumer.unavailable{error.code}`・`eia.consumer.process.duration`。どれもトピックと Consumer Group の属性を持つ。lag と DLQ の滞留は Kafka 側(kafka-exporter)で見る(アラートは P07 ②)。
+`ConsumerMetrics`(OTLP → Prometheus): `eia.consumer.messages{outcome=processed|duplicate|dead_lettered}`・`eia.consumer.dead_letters{reason}`・`eia.consumer.retries{error.code}`・`eia.consumer.unavailable{error.code}`・`eia.consumer.process.duration`。どれもトピックと Consumer Group の属性を持つ。lag と DLQ の滞留は Kafka 側(kafka-exporter)で見る。
+
+アラート(`infra/local/prometheus/rules/consumer.rules.yml`。promtool のテストは `consumer.test.yml`。対応は `docs/runbooks/event-dlq-replay.md`):
+
+| アラート | 条件 | 主に拾うもの |
+|---|---|---|
+| `EventDeadLetters` | DLQ のトピック(`_cdc.*` を除く)のオフセットが 10 分の間に増えた | Rejected・リトライの尽き |
+| `EventConsumerStalled` | lag があるのに、コミットしたオフセットが 10 分変わらない(2 分続く) | Unavailable で読み直し続けている間・Consumer の停止 |
+| `EventConsumerUnavailable` | アプリの `eia_consumer_unavailable_total` が 5 分の間に増えた状態が 5 分続く | Unavailable(まだ一度もコミットしていないグループも含む) |
+| `EventConsumerLagHigh` | lag が 1,000 件を超えた状態が 10 分続く(legacy-order-acl は `acl.rules.yml`) | 処理が追いつかない |
+
+- Unavailable の間は、§2 のとおりオフセットをコミットしない。その間に届いたメッセージで lag が増え、オフセットは変わらないので `EventConsumerStalled` が拾う。promtool のテストで、処理が止まってから警告し、回復すれば解消することを確かめる。lag の件数の閾値だけでは、量の少ない連携(Saga のコマンドなど)で止まっても閾値に届かないため、オフセットが進まないことで判定する。
+- kafka-exporter は、オフセットをコミットしたことのないグループのオフセットを出さない。新しいグループが最初から Unavailable の場合は、アプリのメトリクスの `EventConsumerUnavailable` で拾う。
+
+### 6. Replay(`DeadLetterReplayer`・`make dlq-replay`)
+- DLQ のメッセージを、原因を除いた後に元のトピックへ戻す(Framework 13.1)。部品は `platform/messaging-kafka` の `DeadLetterReplayer`、CLI は `tools/dlq-replay`(`make dlq-replay ARGS="..."`)。手順は `docs/runbooks/event-dlq-replay.md`。
+- **既定は dry-run**(対象の一覧だけ)。送るのは `--execute` を付けたときだけ。**件数の上限 `--limit`(1〜1000)は必須**。条件は原因(`eiaf.dlq.reason`)・`ce_type`・キー・DLQ のパーティションとオフセットの範囲・DLQ に入った時刻・一度戻したことがあるか。
+- 読む範囲は、始めた時点の DLQ の末尾まで(実行中に DLQ に入ったものは含めない)。Consumer Group を使わずに読み、オフセットをコミットしない(DLQ は消さない。保持期間で消える)。
+- 戻すメッセージは、キー・値・`ce_id` を含むヘッダを DLQ のまま使い、`eiaf.dlq.*` を外して `eiaf.replay.*`(DLQ の位置・原因・戻した時刻。INTEGRATION_STANDARDS §2)を付ける。**`ce_id` を変えないので、同じものを 2 回戻しても受信側は 1 回だけ処理する**(§3。保持期間 14 日の根拠の 1 つ)。パーティションはキーで決まり、元のメッセージと同じパーティションに入る。
+- 戻したメッセージが再び失敗すれば、`eiaf.replay.*` が付いたまま DLQ に入る(`DeadLetterPublisher` は `eiaf.dlq.*` だけを置き換える)。一覧の `replayed_before` で分かる。
+- **生の CDC の DLQ(`_cdc.*`)は拒否する**。後から届いた変更より古い状態で上書きするため、signal 表の部分の再同期で回復する(ADR-0026 §7)。DLQ の記録の元のトピックが DLQ の名前と合わないものも戻さない。
+- 順序: 戻したメッセージは、隔離の後に届いた同じキーのメッセージより後に処理される。受信側は業務キーで冪等で、状態の遷移を検査するので、古い指示は拒否されるか何もしない。業務として正しいかは、Runbook の手順でキーごとに確かめる。
+- CLI の終了コード: 0 = 終えた、1 = 戻せなかったものがある(もう一度実行してよい)、2 = 実行できない。出力に値は出さない。Kafka のクライアントは `platform/messaging-kafka` の中だけで使う(Konsist。CLI は `DeadLetterReplayer.connect` を呼ぶだけ)。
 
 ## Alternatives Considered
 - **Spring Kafka / Kafka Streams などのフレームワーク**: リトライ・DLQ の仕組みを持つが、本リポジトリの技術スタック(Ktor・Koin・kotlinx.coroutines。CLAUDE.md §2)と合わず、Spring の依存を持ち込む。Kafka Streams の Exactly-Once は Kafka の中だけで、業務の DB の更新と一体にならない。不採用。
@@ -76,3 +98,4 @@ P06 ⑤b の legacy-order-acl は、同じ役割の読み取りのループ(`Leg
 - legacy-order-acl の読み取りのループは、当面は個別の実装のまま(#88 で移す)。
 
 ## 改訂履歴
+- 2026-10-09: P07 ② で、§5 にアラートを、§6 に Replay を加えた。

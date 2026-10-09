@@ -1,0 +1,59 @@
+# Kafka の Consumer(platform/messaging-kafka の EventConsumer)と DLQ のアラート(P07 ②。ADR-0028 §2・§6)。対応は docs/runbooks/event-dlq-replay.md。
+# 単体テストは consumer.test.yml(make alerts-test)。
+#
+# - 生の CDC の DLQ(_cdc.*)と legacy-order-acl の lag は acl.rules.yml が見る(回復の手順が違う。ADR-0026 §7)。
+# - kafka-exporter のメトリクスで判定するアラートは、その exporter が今 UP のとき(and on(instance) (up == 1))だけ判定する(cdc.rules.yml と同じ理由)。
+groups:
+  - name: event-consumer
+    rules:
+      # 処理できないメッセージが DLQ に入った(1 件でも調べる)。DLQ のトピックの末尾のオフセットで見るので、Consumer が止まっていても判定できる。
+      # 原因の種類ごとの件数はアプリのメトリクス eia_consumer_dead_letters_total{reason}
+      - alert: EventDeadLetters
+        expr: |
+          sum by (instance, topic) (increase(kafka_topic_partition_current_offset{topic=~".+\\.dlq", topic!~"_cdc\\..+"}[10m])) > 0
+          and on(instance) (up == 1)
+        labels:
+          severity: warning
+        annotations:
+          summary: "処理できないメッセージが DLQ({{ $labels.topic }})に入った"
+          runbook: docs/runbooks/event-dlq-replay.md#dlq-に入ったとき
+
+      # Consumer が進んでいない: 読み残し(lag)があるのに、コミットしたオフセットが 10 分変わらない。
+      # Unavailable(自分の DB・Schema Registry が使えない)で読み直し続けている間(ADR-0028 §2)と、Consumer が落ちている間がこれに当たる。
+      # 処理が進んでいれば(オフセットが増えていれば)lag があっても出さない。lag が 0 なら(届いていないだけ)出さない。
+      - alert: EventConsumerStalled
+        expr: |
+          (sum by (instance, consumergroup, topic) (kafka_consumergroup_lag_sum) > 0)
+          and on(instance, consumergroup, topic)
+          (sum by (instance, consumergroup, topic) (changes(kafka_consumergroup_current_offset_sum[10m])) == 0)
+          and on(instance) (up == 1)
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.consumergroup }} が {{ $labels.topic }} を処理できていない(lag があるのにオフセットが 10 分進まない)"
+          runbook: docs/runbooks/event-dlq-replay.md#consumer-が進まないとき
+
+      # 基盤が使えないため読み直している(アプリのメトリクス)。まだ一度もコミットしていないグループ(kafka-exporter にオフセットがない)でも分かる
+      - alert: EventConsumerUnavailable
+        expr: |
+          sum by (job, messaging_consumer_group_name, error_code) (increase(eia_consumer_unavailable_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }} の {{ $labels.messaging_consumer_group_name }} が {{ $labels.error_code }} のため処理を止めて読み直している"
+          runbook: docs/runbooks/event-dlq-replay.md#consumer-が進まないとき
+
+      # 処理が遅れている: lag が 1,000 件を超えた状態が 10 分続く(処理は進んでいるが追いつかない)。
+      # 1,000 件はローカルの量に対して十分に大きい値(本番は連携の SLO の latencyP99 とトピックの量で決める)
+      - alert: EventConsumerLagHigh
+        expr: |
+          sum by (instance, consumergroup) (kafka_consumergroup_lag_sum{consumergroup!="legacy-order-acl.translate"}) > 1000
+          and on(instance) (up == 1)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.consumergroup }} の処理が遅れている(lag が 1,000 件を超えた状態が続く)"
+          runbook: docs/runbooks/event-dlq-replay.md#consumer-が進まないとき

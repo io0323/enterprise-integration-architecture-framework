@@ -1,0 +1,159 @@
+# consumer.rules.yml の単体テスト(promtool test rules。make alerts-test)。
+rule_files:
+  - consumer.rules.yml
+
+evaluation_interval: 15s
+
+tests:
+  # ---------------------------------------------------------------- EventDeadLetters
+  - name: DLQ のオフセットが増えたら警告し、増えなくなって 10 分たてば解消する。生の CDC の DLQ と本流のトピックは対象にしない
+    interval: 1m
+    input_series:
+      - series: 'up{instance="ke:9308",job="kafka-exporter"}'
+        values: "1x30"
+      - series: 'kafka_topic_partition_current_offset{instance="ke:9308",job="kafka-exporter",topic="inventory.stock.cmd-reserve.v1.dlq",partition="1"}'
+        values: "0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1"
+      - series: 'kafka_topic_partition_current_offset{instance="ke:9308",job="kafka-exporter",topic="_cdc.legacy.public.t_juchu.dlq",partition="0"}'
+        values: "0+1x20"
+      - series: 'kafka_topic_partition_current_offset{instance="ke:9308",job="kafka-exporter",topic="inventory.stock.cmd-reserve.v1",partition="0"}'
+        values: "0+5x20"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: EventDeadLetters
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: EventDeadLetters
+        exp_alerts:
+          - exp_labels: { severity: warning, instance: "ke:9308", topic: "inventory.stock.cmd-reserve.v1.dlq" }
+            exp_annotations:
+              summary: "処理できないメッセージが DLQ(inventory.stock.cmd-reserve.v1.dlq)に入った"
+              runbook: docs/runbooks/event-dlq-replay.md#dlq-に入ったとき
+      - eval_time: 15m
+        alertname: EventDeadLetters
+        exp_alerts: []
+
+  - name: kafka-exporter が止まっている間は、DLQ を古いサンプルで判定しない
+    interval: 1m
+    input_series:
+      - series: 'up{instance="ke:9308",job="kafka-exporter"}'
+        values: "0x10"
+      - series: 'kafka_topic_partition_current_offset{instance="ke:9308",job="kafka-exporter",topic="inventory.stock.cmd-reserve.v1.dlq",partition="0"}'
+        values: "0 1 2 3 4 5"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: EventDeadLetters
+        exp_alerts: []
+
+  # ---------------------------------------------------------------- EventConsumerStalled
+  # ご指示(P07 ①の承認時): Unavailable で読み直し続けている間(処理が止まり、lag が増える)をアラートが拾うことを確かめる。
+  # EventConsumer は Unavailable の間、オフセットをコミットしない(ADR-0028 §2)。その間に届いたメッセージで lag が増える。
+  - name: Unavailable で処理が止まった Consumer(lag が増え、コミットしたオフセットが変わらない)は 12 分で警告し、回復すれば解消する
+    interval: 1m
+    input_series:
+      - series: 'up{instance="ke:9308",job="kafka-exporter"}'
+        values: "1x40"
+      # 0〜4 分は正常に処理(オフセットが進み、lag は 0)。5 分から DB が止まり、オフセットが 40 で止まる。25 分に回復して追いつく
+      - series: 'kafka_consumergroup_current_offset_sum{instance="ke:9308",job="kafka-exporter",consumergroup="inventory.command",topic="inventory.stock.cmd-reserve.v1"}'
+        values: "0 10 20 30 40 40x19 60 80 80x10"
+      - series: 'kafka_consumergroup_lag_sum{instance="ke:9308",job="kafka-exporter",consumergroup="inventory.command",topic="inventory.stock.cmd-reserve.v1"}'
+        values: "0 0 0 0 0 1+1x19 20 0 0x10"
+    alert_rule_test:
+      # 止まってから 10 分たつまでは、10 分の窓の中にオフセットの変化が残っている
+      - eval_time: 14m
+        alertname: EventConsumerStalled
+        exp_alerts: []
+      # 15 分で窓の中の変化がなくなり、for: 2m の後の 17 分で警告する
+      - eval_time: 17m
+        alertname: EventConsumerStalled
+        exp_alerts:
+          - exp_labels: { severity: warning, instance: "ke:9308", consumergroup: "inventory.command", topic: "inventory.stock.cmd-reserve.v1" }
+            exp_annotations:
+              summary: "inventory.command が inventory.stock.cmd-reserve.v1 を処理できていない(lag があるのにオフセットが 10 分進まない)"
+              runbook: docs/runbooks/event-dlq-replay.md#consumer-が進まないとき
+      - eval_time: 24m
+        alertname: EventConsumerStalled
+        exp_alerts:
+          - exp_labels: { severity: warning, instance: "ke:9308", consumergroup: "inventory.command", topic: "inventory.stock.cmd-reserve.v1" }
+            exp_annotations:
+              summary: "inventory.command が inventory.stock.cmd-reserve.v1 を処理できていない(lag があるのにオフセットが 10 分進まない)"
+              runbook: docs/runbooks/event-dlq-replay.md#consumer-が進まないとき
+      - eval_time: 26m
+        alertname: EventConsumerStalled
+        exp_alerts: []
+
+  - name: lag があっても処理が進んでいる・lag が 0(届いていないだけ)・kafka-exporter が止まっているなら出さない
+    interval: 1m
+    input_series:
+      - series: 'up{instance="ke:9308",job="kafka-exporter"}'
+        values: "1x30"
+      # 処理は進んでいるが lag が残る(混んでいる)
+      - series: 'kafka_consumergroup_current_offset_sum{instance="ke:9308",job="kafka-exporter",consumergroup="payment.command",topic="payment.payment.cmd-authorize.v1"}'
+        values: "0+10x30"
+      - series: 'kafka_consumergroup_lag_sum{instance="ke:9308",job="kafka-exporter",consumergroup="payment.command",topic="payment.payment.cmd-authorize.v1"}'
+        values: "5x30"
+      # 何も届かない(オフセットは変わらず、lag は 0)
+      - series: 'kafka_consumergroup_current_offset_sum{instance="ke:9308",job="kafka-exporter",consumergroup="shipping.command",topic="shipping.shipment.cmd-arrange.v1"}'
+        values: "7x30"
+      - series: 'kafka_consumergroup_lag_sum{instance="ke:9308",job="kafka-exporter",consumergroup="shipping.command",topic="shipping.shipment.cmd-arrange.v1"}'
+        values: "0x30"
+      # 別の exporter は止まっている(古いサンプルで判定しない)
+      - series: 'up{instance="ke2:9308",job="kafka-exporter"}'
+        values: "0x30"
+      - series: 'kafka_consumergroup_current_offset_sum{instance="ke2:9308",job="kafka-exporter",consumergroup="order.saga",topic="inventory.stock.reserved.v1"}'
+        values: "3x30"
+      - series: 'kafka_consumergroup_lag_sum{instance="ke2:9308",job="kafka-exporter",consumergroup="order.saga",topic="inventory.stock.reserved.v1"}'
+        values: "9x30"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: EventConsumerStalled
+        exp_alerts: []
+
+  # ---------------------------------------------------------------- EventConsumerUnavailable
+  - name: アプリが Unavailable で読み直し続けていれば警告する(コミットしたことのないグループでも分かる)
+    interval: 1m
+    input_series:
+      - series: 'eia_consumer_unavailable_total{job="inventory-service",messaging_consumer_group_name="inventory.command",error_code="inbox_storage_unavailable"}'
+        values: "0 0 1+2x15 31x10"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: EventConsumerUnavailable
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: EventConsumerUnavailable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: inventory-service
+              messaging_consumer_group_name: inventory.command
+              error_code: inbox_storage_unavailable
+            exp_annotations:
+              summary: "inventory-service の inventory.command が inbox_storage_unavailable のため処理を止めて読み直している"
+              runbook: docs/runbooks/event-dlq-replay.md#consumer-が進まないとき
+      # 読み直しが止まって(回復して)5 分たてば解消する
+      - eval_time: 24m
+        alertname: EventConsumerUnavailable
+        exp_alerts: []
+
+  # ---------------------------------------------------------------- EventConsumerLagHigh
+  - name: lag が 1,000 件を超えた状態が 10 分続けば警告(legacy-order-acl は acl.rules.yml が見る)
+    interval: 1m
+    input_series:
+      - series: 'up{instance="ke:9308",job="kafka-exporter"}'
+        values: "1x30"
+      - series: 'kafka_consumergroup_lag_sum{instance="ke:9308",job="kafka-exporter",consumergroup="order.saga",topic="inventory.stock.reserved.v1"}'
+        values: "600x30"
+      - series: 'kafka_consumergroup_lag_sum{instance="ke:9308",job="kafka-exporter",consumergroup="order.saga",topic="payment.payment.authorized.v1"}'
+        values: "500x30"
+      - series: 'kafka_consumergroup_lag_sum{instance="ke:9308",job="kafka-exporter",consumergroup="legacy-order-acl.translate",topic="_cdc.legacy.public.t_juchu"}'
+        values: "99999x30"
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: EventConsumerLagHigh
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: EventConsumerLagHigh
+        exp_alerts:
+          - exp_labels: { severity: warning, instance: "ke:9308", consumergroup: "order.saga" }
+            exp_annotations:
+              summary: "order.saga の処理が遅れている(lag が 1,000 件を超えた状態が続く)"
+              runbook: docs/runbooks/event-dlq-replay.md#consumer-が進まないとき
