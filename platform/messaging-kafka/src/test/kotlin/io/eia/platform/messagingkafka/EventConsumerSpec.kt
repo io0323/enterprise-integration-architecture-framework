@@ -36,6 +36,7 @@ import org.apache.kafka.clients.consumer.internals.AutoOffsetResetStrategy
 import org.apache.kafka.clients.producer.MockProducer
 import org.apache.kafka.common.TopicPartition
 import org.apache.kafka.common.errors.AuthorizationException
+import org.apache.kafka.common.errors.RebalanceInProgressException
 import org.apache.kafka.common.errors.TimeoutException
 import org.apache.kafka.common.header.internals.RecordHeaders
 import org.apache.kafka.common.record.TimestampType
@@ -340,6 +341,136 @@ class EventConsumerSpec :
             (0L..2L).forEach { unavailable.consumer.addRecord(record(it, payload)) }
             unavailable.loop.pollOnce() shouldBe "inbox_storage_unavailable"
             unavailable.consumer.position(PARTITION) shouldBe 1L
+        }
+
+        test("コミットの失敗(リバランスの途中)も握りつぶす") {
+            val handler = ScriptedHandler(PROCESSED)
+            val f = fixture(handler, committer = { _, _ -> throw RebalanceInProgressException("rebalancing") })
+            f.consumer.addRecord(record(0, payload))
+
+            f.loop.pollOnce().shouldBeNull()
+            handler.calls.size shouldBe 1
+        }
+
+        // ---------------------------------------------------------------- 外部のトピック(CloudEvents のヘッダなし。ADR-0028 改訂履歴)
+        val external = TopicPartition("_cdc.test.public.parcel", 0)
+
+        fun externalRecord(
+            offset: Long,
+            value: ByteArray?,
+        ): ConsumerRecord<ByteArray?, ByteArray?> =
+            ConsumerRecord(
+                external.topic(),
+                0,
+                offset,
+                0L,
+                TimestampType.CREATE_TIME,
+                0,
+                0,
+                byteArrayOf(1, 2, offset.toByte()),
+                value,
+                RecordHeaders(),
+                Optional.empty(),
+            )
+
+        class ExternalFixture(
+            val consumer: MockConsumer<ByteArray?, ByteArray?>,
+            val dlq: MockProducer<ByteArray, ByteArray>,
+            val loop: EventConsumer,
+            val calls: MutableList<ConsumedRecord<ParcelShipped>>,
+            val traces: MutableList<CurrentTrace>,
+        )
+
+        fun externalFixture(vararg results: Result<Handled, HandlingFailure>): ExternalFixture {
+            val consumer = MockConsumer<ByteArray?, ByteArray?>(AutoOffsetResetStrategy.EARLIEST.name())
+            consumer.assign(listOf(external))
+            consumer.updateBeginningOffsets(mapOf(external to 0L))
+            val dlq = MockProducer(true, null, ByteArraySerializer(), ByteArraySerializer())
+            val calls = mutableListOf<ConsumedRecord<ParcelShipped>>()
+            val traces = mutableListOf<CurrentTrace>()
+            val subscription =
+                ExternalSubscription(
+                    external.topic(),
+                    AvroEventDeserializer(ParcelShipped.serializer(), registry.writerSchemas()),
+                    "INT-TEST-003",
+                ) {
+                    calls += it
+                    traces += CurrentTrace.get()
+                    results[minOf(calls.size, results.size) - 1]
+                }
+            val loop = EventConsumer(consumer, GROUP, listOf(subscription), DeadLetterPublisher(dlq), runtime, handlerRetry = FAST_RETRY)
+            return ExternalFixture(consumer, dlq, loop, calls, traces)
+        }
+
+        test("外部のトピック: ヘッダがなくても処理し、レコードごとに新しいトレースと Correlation ID を始める。キーは受け取ったバイト列のまま") {
+            val f = externalFixture(PROCESSED)
+            (0L..1L).forEach { f.consumer.addRecord(externalRecord(it, payload)) }
+
+            f.loop.pollOnce().shouldBeNull()
+
+            f.calls.map { it.offset } shouldBe listOf(0L, 1L)
+            f.calls.first().value shouldBe SAMPLE
+            f.calls
+                .first()
+                .key!!
+                .toList() shouldBe listOf<Byte>(1, 2, 0)
+            f.consumer.committed(setOf(external))[external] shouldBe OffsetAndMetadata(2)
+            f.dlq.history().size shouldBe 0
+            // トレースもコリレーション ID も、レコードごとに別
+            f.traces
+                .map { it.traceParent!!.traceId }
+                .toSet()
+                .size shouldBe 2
+            f.traces
+                .map { it.correlationId!! }
+                .toSet()
+                .size shouldBe 2
+            val consumerSpans = spans.finishedSpanItems.filter { it.kind == SpanKind.CONSUMER }
+            consumerSpans.map { it.name }.toSet() shouldBe setOf("${external.topic()} process")
+            consumerSpans.forEach { it.parentSpanContext.isValid shouldBe false }
+        }
+
+        test("外部のトピック: 処理の Rejected・値がない・読めない値は DLQ(attempts=1)、Unavailable は DLQ に送らずに読み直す") {
+            val f =
+                externalFixture(
+                    Result.Err(HandlingFailure.Rejected("UNKNOWN_STATUS_CODE", "col_05: 知らないコード")),
+                    PROCESSED,
+                    Result.Err(HandlingFailure.Unavailable("publish_failed", "Kafka に送れない")),
+                )
+            f.consumer.addRecord(externalRecord(0, payload))
+            f.consumer.addRecord(externalRecord(1, null))
+            f.consumer.addRecord(externalRecord(2, byteArrayOf(9, 9, 9)))
+            f.consumer.addRecord(externalRecord(3, payload))
+            f.consumer.addRecord(externalRecord(4, payload))
+
+            f.loop.pollOnce() shouldBe "publish_failed"
+
+            f.dlq
+                .history()
+                .map { it.topic() }
+                .toSet() shouldBe setOf("${external.topic()}.dlq")
+            f.dlq.history().map { String(it.headers().lastHeader("eiaf.dlq.reason").value()) } shouldBe
+                listOf("UNKNOWN_STATUS_CODE", "UNEXPECTED_TOMBSTONE", "UNDECODABLE")
+            f.dlq
+                .history()
+                .map { String(it.headers().lastHeader("eiaf.dlq.attempts").value()) }
+                .toSet() shouldBe setOf("1")
+            // 4 件目までを終え、5 件目(Unavailable)から読み直す
+            f.consumer.committed(setOf(external))[external] shouldBe OffsetAndMetadata(4)
+            f.consumer.position(external) shouldBe 4L
+            f.loop.ready shouldBe false
+        }
+
+        test("外部のトピックの購読: DLQ は購読しない") {
+            shouldThrow<IllegalArgumentException> {
+                ExternalSubscription(
+                    "${external.topic()}.dlq",
+                    AvroEventDeserializer(ParcelShipped.serializer(), registry.writerSchemas()),
+                    "INT-TEST-003",
+                ) {
+                    PROCESSED
+                }
+            }
         }
 
         test("購読の誤り(なし・同じトピックを 2 回・Consumer Group の形式)は作るときに拒否する") {
