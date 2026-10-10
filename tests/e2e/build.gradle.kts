@@ -2,7 +2,7 @@ plugins {
     id("eia.jvm-library")
 }
 
-// E2E(ROADMAP P05。MODULE_DESIGN)。起動したローカル基盤(`make up PROFILE="order cdc"`)に、公開されたエンドポイント
+// E2E(ROADMAP P05。MODULE_DESIGN)。起動したローカル基盤(`make up PROFILE="order cdc saga"`)に、公開されたエンドポイント
 // (Gateway・Keycloak・Tempo・Prometheus・Grafana・Kafka・Schema Registry)だけで接続して確かめる。サービスのコードには依存しない。
 // `make e2e`(`./gradlew :tests:e2e:e2eTest`)で実行し、`build` / `check` には含めない。CI は ci.yml の `e2e` ジョブ。
 val e2eTest: SourceSet = sourceSets.create("e2eTest")
@@ -41,6 +41,14 @@ tasks.register<Test>("e2eTest") {
     outputs.upToDateWhen { false }
     // 開発用の証明書(mTLS の確認)はリポジトリのルートからの相対パスで読む
     systemProperty("eiaf.repo.root", rootProject.layout.projectDirectory.asFile.absolutePath)
+    // DLQ の Replay の CLI(SagaE2E。make dlq-replay と同じ tools/dlq-replay)。サービスのコードではなく運用のツールとして呼ぶ
+    dependsOn(":tools:dlq-replay:installDist")
+    systemProperty(
+        "eiaf.dlqReplay",
+        rootProject.layout.projectDirectory
+            .file("tools/dlq-replay/build/install/dlq-replay/bin/dlq-replay")
+            .asFile.absolutePath,
+    )
     // 秘密情報(EIAF_E2E_CLIENT_SECRET など)は make e2e が環境変数で渡し、テストのプロセスはそれを引き継ぐ。
     // ここで System.getenv を読んで environment(...) に渡すと、値が configuration cache のファイルに書き込まれるので、しない
     testLogging { events("passed", "failed", "skipped") }
