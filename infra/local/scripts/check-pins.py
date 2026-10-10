@@ -16,6 +16,9 @@
     --issues          異常ごとに Issue を作る(同じ固定の Issue が開いていれば、新しい値のときだけコメントを足す)。gh を使う
     --simulate        固定した値を、取得できない値に書き換えて確かめる(Issue の作成の確認用。タイトルに [simulated] を付ける)
     --fail-on-broken  取得できない・SHA-256 が合わないものがあれば終了コード 1(PR の確認用。付け直しだけなら 0)
+
+取得の一時的な失敗は、待ってやり直してから判断する(RETRY_DELAYS)。イメージの半分以上でタグを取得できなければ、
+確認の環境(docker・ネットワーク)の問題として終了コード 2 で終わり、Issue は作らない。
 """
 from __future__ import annotations
 
@@ -25,6 +28,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -89,15 +93,50 @@ def parse_artifacts(text: str) -> list[tuple[str, str, str]]:
 # ------------------------------------------------------------------ 確かめる
 
 
+# 取得の一時的な失敗(Maven Central・レジストリの 4xx/5xx・誤った応答)で Issue を作らないよう、失敗したら待ってやり直す。
+# 全部の試行が同じく失敗したときだけ異常にする(#99 のマージの後の確認で、GitHub のランナーからの取得が一時的に失敗した)
+RETRY_DELAYS = [15, 45]
+
+
+def retrying(attempt):
+    """[attempt] を、成功(None 以外)するまで RETRY_DELAYS の間隔でやり直す。最後の結果を返す。"""
+    result = attempt()
+    for delay in RETRY_DELAYS:
+        if result is not None:
+            break
+        time.sleep(delay)
+        result = attempt()
+    return result
+
+
 def imagetools(ref: str) -> dict | None:
-    """`docker buildx imagetools inspect` の Manifest(取得できなければ None)。"""
-    result = subprocess.run(
-        ["docker", "buildx", "imagetools", "inspect", ref, "--format", "{{json .Manifest}}"],
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    return json.loads(result.stdout) if result.returncode == 0 else None
+    """`docker buildx imagetools inspect` の Manifest(取得できなければ None。やり直してもだめなら None)。"""
+
+    def attempt():
+        result = subprocess.run(
+            ["docker", "buildx", "imagetools", "inspect", ref, "--format", "{{json .Manifest}}"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        return json.loads(result.stdout) if result.returncode == 0 else None
+
+    return retrying(attempt)
+
+
+def fetch_sha256(url: str) -> tuple[str | None, str | None]:
+    """[url] のファイルの SHA-256 と、取得できなかったときの理由(どちらかが None)。"""
+    digest = hashlib.sha256()
+    try:
+        request = urllib.request.Request(url, headers={"User-Agent": "eiaf-pin-check"})
+        with urllib.request.urlopen(request, timeout=300) as response:
+            for chunk in iter(lambda: response.read(1 << 20), b""):
+                digest.update(chunk)
+    except urllib.error.HTTPError as e:
+        return None, f"HTTP {e.code}"
+    except (urllib.error.URLError, TimeoutError) as e:
+        return None, type(e).__name__
+    return digest.hexdigest(), None
 
 
 def platforms(manifest: dict) -> set[str]:
@@ -130,20 +169,25 @@ def check_image(name: str, repo: str, tag: str, digest: str) -> Finding:
 
 def check_artifact(name: str, url: str, sha256: str) -> Finding:
     finding = Finding(name, "artifact", f"{url} (sha256:{sha256})")
-    digest = hashlib.sha256()
-    try:
-        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "eiaf-pin-check"}), timeout=300) as response:
-            for chunk in iter(lambda: response.read(1 << 20), b""):
-                digest.update(chunk)
-    except (urllib.error.URLError, TimeoutError) as e:
-        finding.problems.append(f"取得できない({type(e).__name__})")
-        finding.broken = True
+    last: tuple[str | None, str | None] = (None, None)
+
+    def attempt():
+        nonlocal last
+        last = fetch_sha256(url)
+        # 取得できて SHA-256 が合えば終わり。合わない応答(誤った応答)も、やり直してから判断する
+        return True if last[0] == sha256 else None
+
+    if retrying(attempt):
+        finding.current = sha256
         return finding
-    finding.current = digest.hexdigest()
-    if finding.current != sha256:
-        finding.problems.append("取得したファイルの SHA-256 が固定した値と合わない(差し替え、または取得の誤り)")
-        finding.broken = True
-        finding.candidate = f"ARG {name}={finding.current}(差し替えの理由を上流で確かめてから使う)"
+    current, error = last
+    finding.broken = True
+    if current is None:
+        finding.problems.append(f"取得できない({error}。{len(RETRY_DELAYS) + 1} 回試した)")
+        return finding
+    finding.current = current
+    finding.problems.append(f"取得したファイルの SHA-256 が固定した値と合わない(差し替え、または取得の誤り。{len(RETRY_DELAYS) + 1} 回試した)")
+    finding.candidate = f"ARG {name}={current}(差し替えの理由を上流で確かめてから使う)"
     return finding
 
 
@@ -203,6 +247,13 @@ def report_issue(f: Finding, simulate: bool) -> str:
     return f"#{url.rsplit('/', 1)[-1]}(作成)"
 
 
+def environment_broken(findings: list[Finding]) -> bool:
+    """イメージの半分以上でタグを取得できないなら、確認の環境の問題とみなす(別々のレジストリのイメージが一度に消えることはまずない)。"""
+    images = [f for f in findings if f.kind == "image"]
+    unreachable = [f for f in images if f.current is None]
+    return bool(images) and len(unreachable) * 2 >= len(images)
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--summary")
@@ -228,6 +279,12 @@ def main(argv: list[str]) -> int:
             out.write(report)
 
     problems = [f for f in findings if not f.ok]
+    if environment_broken(findings):
+        print(
+            "イメージの半分以上でタグを取得できない。上流ではなく確認の環境(docker・ネットワーク)の問題として扱い、Issue は作らない",
+            file=sys.stderr,
+        )
+        return 2
     for f in problems:
         print(f"{f.name}: {' / '.join(f.problems)}", file=sys.stderr)
         if args.issues:
