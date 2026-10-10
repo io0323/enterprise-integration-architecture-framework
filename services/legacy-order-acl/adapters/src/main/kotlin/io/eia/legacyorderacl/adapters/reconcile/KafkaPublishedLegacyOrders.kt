@@ -1,6 +1,6 @@
 package io.eia.legacyorderacl.adapters.reconcile
 
-import io.eia.legacyorderacl.adapters.inbound.LegacyChangeConsumer
+import io.eia.legacyorderacl.adapters.inbound.LegacyChangeHandler
 import io.eia.legacyorderacl.adapters.outbound.LegacyOrderChangedV1
 import io.eia.legacyorderacl.adapters.outbound.LegacyOrderEventSchemas
 import io.eia.legacyorderacl.adapters.outbound.toDomain
@@ -41,10 +41,10 @@ public class KafkaPublishedLegacyOrders(
     private val admin: Admin,
     private val consumers: () -> Consumer<ByteArray?, ByteArray?>,
     writerSchemas: WriterSchemas,
-    private val group: String = LegacyChangeConsumer.GROUP_ID,
+    private val group: String = LegacyChangeHandler.GROUP_ID,
     private val waits: ReconcileWaits = ReconcileWaits(),
 ) : PublishedLegacyOrders {
-    private val rawTopic: String = LegacyChangeConsumer.TOPIC
+    private val rawTopic: String = LegacyChangeHandler.TOPIC
     private val outputTopic: String = LegacyOrderEventSchemas.LEGACY_ORDER_CHANGED.name
     private val deserializer = AvroEventDeserializer(LegacyOrderChangedV1.serializer(), writerSchemas)
 

@@ -1,9 +1,7 @@
 package io.eia.legacyorderacl.app
 
 import io.eia.legacyorderacl.adapters.inbound.AclMetrics
-import io.eia.legacyorderacl.adapters.inbound.LegacyChangeConsumer
-import io.eia.legacyorderacl.adapters.inbound.LegacyChangeProcessor
-import io.eia.legacyorderacl.adapters.inbound.OffsetCommitter
+import io.eia.legacyorderacl.adapters.inbound.LegacyChangeHandler
 import io.eia.legacyorderacl.adapters.outbound.KafkaLegacyOrderStatePublisher
 import io.eia.legacyorderacl.adapters.outbound.LegacyOrderEventSchemas
 import io.eia.legacyorderacl.adapters.reconcile.JdbcLegacySource
@@ -22,8 +20,10 @@ import io.eia.legacyorderacl.application.usecase.ReconcileLegacyOrdersService
 import io.eia.legacyorderacl.application.usecase.ResyncLegacyOrdersService
 import io.eia.legacyorderacl.application.usecase.TranslateLegacyOrderChangeService
 import io.eia.platform.messagingkafka.DeadLetterPublisher
+import io.eia.platform.messagingkafka.EventConsumer
 import io.eia.platform.messagingkafka.EventProducer
 import io.eia.platform.messagingkafka.KafkaProducerSettings
+import io.eia.platform.messagingkafka.OffsetCommitter
 import io.eia.platform.observability.ObservabilityRuntime
 import io.eia.platform.schemaregistry.ApicurioRegistryClient
 import io.eia.platform.schemaregistry.SchemaIdBook
@@ -68,11 +68,19 @@ internal fun aclModule(
     single<LegacyOrderStatePublisher> { KafkaLegacyOrderStatePublisher(get(), get()) }
     single<TranslateLegacyOrderChangeUseCase> { TranslateLegacyOrderChangeService(get()) }
     single { AclMetrics(runtime.meter) }
-    single { LegacyChangeProcessor(get(), get(), get(), runtime, get()) }
+    single { LegacyChangeHandler(get(), get()) }
+    // 生の CDC の読み取りは共通の Consumer(外部のトピックの購読。ADR-0028 改訂履歴・#88)
     single {
         val consumer =
-            KafkaConsumer<ByteArray?, ByteArray?>(LegacyChangeConsumer.consumerProperties(config.bootstrapServers, config.groupId))
-        if (committer == null) LegacyChangeConsumer(consumer, get()) else LegacyChangeConsumer(consumer, get(), committer = committer)
+            KafkaConsumer<ByteArray?, ByteArray?>(
+                EventConsumer.consumerProperties(config.bootstrapServers, config.groupId, LegacyChangeHandler.CLIENT_ID),
+            )
+        val subscriptions = listOf(get<LegacyChangeHandler>().subscription(get()))
+        if (committer == null) {
+            EventConsumer(consumer, config.groupId, subscriptions, get(), runtime)
+        } else {
+            EventConsumer(consumer, config.groupId, subscriptions, get(), runtime, committer = committer)
+        }
     }
     config.reconcile?.let { reconcile -> includes(reconcileModule(config, reconcile, runtime, reconcileSecrets)) }
 }

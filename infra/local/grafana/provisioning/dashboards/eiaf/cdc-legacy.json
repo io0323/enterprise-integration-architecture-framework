@@ -324,7 +324,7 @@
       "id": 7,
       "type": "timeseries",
       "title": "処理した変更(件 / 秒。結果ごと)",
-      "description": "upserted(最新の状態を発行)・deleted(tombstone)・dead_lettered(DLQ)。ACL のメトリクス eia.acl.records。",
+      "description": "upserted(最新の状態を発行)・deleted(tombstone)。ACL のメトリクス eia.acl.records。DLQ に送った件数は右のパネル。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -387,7 +387,7 @@
       "id": 8,
       "type": "timeseries",
       "title": "DLQ に入った変更(原因ごと。1 時間の件数)",
-      "description": "eiaf.dlq.reason ごとの件数(eia.acl.dead_letters)。1 件でも入ると LegacyAclDeadLetters。対応は docs/runbooks/legacy-order-acl.md。",
+      "description": "eiaf.dlq.reason ごとの件数(読み取りの共通部品のメトリクス eia.consumer.dead_letters。Consumer Group legacy-order-acl.translate。ADR-0028)。1 件でも入ると LegacyAclDeadLetters。対応は docs/runbooks/legacy-order-acl.md。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -441,7 +441,7 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "sum by (reason) (increase(eia_acl_dead_letters_total{job=\"legacy-order-acl\"}[1h]))",
+          "expr": "sum by (reason) (increase(eia_consumer_dead_letters_total{job=\"legacy-order-acl\",messaging_consumer_group_name=\"legacy-order-acl.translate\"}[1h]))",
           "legendFormat": "{{reason}}"
         }
       ]
@@ -513,7 +513,7 @@
       "id": 10,
       "type": "timeseries",
       "title": "読み直し(一時的な失敗。1 時間の回数)",
-      "description": "Kafka・Apicurio の一時的な失敗で、最後のコミットの位置から読み直した回数(eia.acl.retries)。続く間は /health/ready が 503。",
+      "description": "Kafka・Apicurio の一時的な失敗で、最後のコミットの位置から読み直した回数(eia.consumer.unavailable。ADR-0028)。続く間は /health/ready が 503。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -567,7 +567,7 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "sum by (error_code) (increase(eia_acl_retries_total{job=\"legacy-order-acl\"}[1h]))",
+          "expr": "sum by (error_code) (increase(eia_consumer_unavailable_total{job=\"legacy-order-acl\",messaging_consumer_group_name=\"legacy-order-acl.translate\"}[1h]))",
           "legendFormat": "{{error_code}}"
         }
       ]

@@ -6,7 +6,7 @@ groups:
   - name: legacy-order-acl
     rules:
       # 変換できない変更が DLQ に入った(1 件でも調べる)。DLQ のトピックの末尾のオフセットで見るので、ACL が止まっていても判定できる。
-      # 原因の種類ごとの件数は ACL のメトリクス eia_acl_dead_letters_total{reason}(ダッシュボード)
+      # 原因の種類ごとの件数は読み取りの共通部品のメトリクス eia_consumer_dead_letters_total{reason}(ダッシュボード。ADR-0028)
       - alert: LegacyAclDeadLetters
         expr: |
           sum by (instance, topic) (increase(kafka_topic_partition_current_offset{topic="_cdc.legacy.public.t_juchu.dlq"}[10m])) > 0
