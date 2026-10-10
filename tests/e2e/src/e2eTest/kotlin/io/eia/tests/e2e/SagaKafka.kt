@@ -87,6 +87,8 @@ internal object SagaKafka {
                 ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG to KAFKA,
                 ConsumerConfig.GROUP_ID_CONFIG to "e2e.saga-${UUID.randomUUID()}",
                 ConsumerConfig.AUTO_OFFSET_RESET_CONFIG to "earliest",
+                // 読むだけなのでオフセットをコミットしない(コミットすると、lag が残ったままのグループが EventConsumerStalled になる)
+                ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG to false,
             )
         val found = mutableListOf<ConsumerRecord<ByteArray?, ByteArray?>>()
         KafkaConsumer(properties, ByteArrayDeserializer(), ByteArrayDeserializer()).use { consumer ->
