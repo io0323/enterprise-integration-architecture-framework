@@ -78,7 +78,9 @@ stateDiagram-v2
 | `eia_saga_stalled_total{state}` | 送り直しの回数が上限(`ORDER_SAGA_STALL_AFTER_RESENDS`。既定 5)を超えた後の送り直し。アラート `OrderSagaCompensationStalled` |
 | `eia_saga_ignored_total{state,signal}` | 今の段に関係しない結果を無視した件数(重複・期限切れの後に遅れて届いた結果) |
 
-返信の受信は Consumer Group `order.saga`(`eia_consumer_*`。ADR-0028)。対応は `docs/runbooks/order-saga.md`。
+返信の受信は Consumer Group `order.saga`(`eia_consumer_*`。ADR-0028)。ダッシュボードは Grafana の **Order — Saga**(`infra/local/grafana/provisioning/dashboards/eiaf/order-saga.json`)。対応は `docs/runbooks/order-saga.md`。
+
+補償の流れ(在庫不足・決済の失敗・出荷の拒否・タイムアウト)は E2E の `tests/e2e/.../SagaE2E.kt` で確かめる。
 
 ## 注文の状態との対応
 | Saga の状態 | 注文の状態 |

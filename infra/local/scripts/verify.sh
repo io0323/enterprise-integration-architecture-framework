@@ -657,6 +657,21 @@ verify_order_saga() {
       grep -a "$key" | grep -aq 'eiaf.dlq.reason:INVALID_HEADERS'
   }
   check "order-service: ヘッダのない返信を DLQ に隔離した(eiaf.dlq.reason=INVALID_HEADERS)" retry 12 5 reply_dlq_has_key
+
+  # ダッシュボード Order — Saga(P07 ⑥)。補償・送り直し・無視は、平常時には空でよい。参加者(saga の profile)がいなければ、
+  # Saga は終わらず、参加者のコマンドの処理もない
+  local dash result empty=("補償に入った理由(分あたり)" "補償のコマンドの送り直し(状態別)" "上限を超えた送り直し(OrderSagaCompensationStalled)" "無視した結果")
+  if [[ " ${profiles[*]} " != *" saga "* ]]; then
+    empty+=("終端に達した Saga(分あたり)" "状態の遷移(分あたり)" "返信の処理(order.saga。分あたり)" "参加者のコマンドの処理(分あたり)")
+  fi
+  dash="$(curl -fsS -u "admin:$GRAFANA_ADMIN_PASSWORD" http://localhost:19300/api/dashboards/uid/eiaf-order-saga || true)"
+  if [[ "$(json 'd["meta"]["folderTitle"] + "/" + d["dashboard"]["title"]' <<<"$dash" 2>/dev/null)" == "EIAF/Order — Saga" ]]; then
+    pass "Grafana: ダッシュボード Order — Saga を読み込んでいる"
+    result="$(dashboard_panels_return_data "$dash" "${empty[@]}")"
+    if [[ "$result" == ok ]]; then pass "Grafana: Order — Saga の全パネルの式がデータを返す"; else fail "Grafana: Order — Saga のパネル: $result"; fi
+  else
+    fail "Grafana: ダッシュボード eiaf-order-saga を読み込めない"
+  fi
 }
 
 # 注文のイベントの発行(Outbox → Debezium → Kafka。ADR-0007・P06 ③b)
