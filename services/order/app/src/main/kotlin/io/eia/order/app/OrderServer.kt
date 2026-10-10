@@ -22,6 +22,7 @@ import io.eia.platform.observability.ObservabilityRuntime
 import io.eia.platform.observability.ktor.server.ServerObservability
 import io.eia.platform.schemaregistry.SchemaIdBook
 import io.eia.platform.security.jwt.JwtVerifier
+import io.eia.platform.security.jwt.prefetchUntilLoaded
 import io.eia.platform.security.ktor.eiaJwt
 import io.eia.platform.security.secret.EnvSecretProvider
 import io.eia.platform.security.secret.Secret
@@ -232,7 +233,7 @@ internal class OrderServer private constructor(
                 }
             }
             routing {
-                overPlaintext { healthRoutes(koin.get(), koin.get()) }
+                overPlaintext { healthRoutes(koin.get(), koin.get(), koin.get()) }
                 overTls { authenticate { orderRoutes(koin.get()) } }
             }
             launchPurgeJob(koin.get(), koin.get(), config)
@@ -240,6 +241,8 @@ internal class OrderServer private constructor(
             // 書き込むイベントのスキーマ ID を解決する。解決するまで /health/ready は 503(ADR-0025 §3)
             val schemaIds = koin.get<SchemaIdBook>()
             launch { schemaIds.resolveUntilReady() }
+            // アクセストークンの検証に使う JWKS を先に取得する。取得するまで /health/ready は 503(#74。ADR-0019 改訂履歴)
+            launch { koin.get<JwtVerifier>().prefetchUntilLoaded() }
             val anchorCycle = koin.getOrNull<AnchorCycle>()
             if (anchorCycle != null) {
                 launchAnchorJob(anchorCycle, koin.get(), config.anchor.interval)
@@ -249,12 +252,13 @@ internal class OrderServer private constructor(
         }
 
         /**
-         * `/health/ready` は、DB に接続できて、書き込むイベントのスキーマ ID をすべて解決し終えたときだけ UP
+         * `/health/ready` は、DB に接続できて、書き込むイベントのスキーマ ID をすべて解決し終え、JWKS を取得できたときだけ UP
          * (ADR-0025 §3。リクエストの処理中はレジストリに問い合わせないので、解決する前はトラフィックを受けない)。
          */
         private fun Route.healthRoutes(
             dataSource: HikariDataSource,
             schemaIds: SchemaIdBook,
+            verifier: JwtVerifier,
         ) {
             get("/health/live") { call.respondText("""{"status":"UP"}""", ContentType.Application.Json) }
             get("/health/ready") {
@@ -263,6 +267,7 @@ internal class OrderServer private constructor(
                 // EventConsumerUnavailable のアラートで分かる(ADR-0029 §3)
                 val ready =
                     schemaIds.isReady &&
+                        verifier.isReady &&
                         withContext(Dispatchers.IO) {
                             try {
                                 dataSource.connection.use { it.isValid(READY_TIMEOUT_SECONDS) }
