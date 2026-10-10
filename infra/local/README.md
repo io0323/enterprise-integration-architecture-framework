@@ -156,6 +156,18 @@ curl -s -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token
 3. `images.env` の行を `<repository>:<tag>@<digest>` に書き換える。
 4. `make clean && make up PROFILE=<該当する profile> && make verify PROFILE=<同じ>` を実行し、PR にその結果を載せる。CI(`.github/workflows/infra.yml`)も全 profile で同じ検査を行う。
 
+### 固定の定期確認(#35)
+`.github/workflows/pin-check.yml` が毎日(と手動の実行で)、固定したイメージと Kafka Connect の成果物を確かめる(ADR-0016 §2・§9)。手元では `python3 -I infra/local/scripts/check-pins.py`(Docker の buildx を使う。Issue は作らない)。
+
+| 検知 | 意味 | 対応 |
+|---|---|---|
+| 固定したダイジェストを取得できない | 上流で削除された。`make up` と CI のイメージの取得が失敗する | **早く直す**。Issue の本文の候補(タグの今のダイジェスト)に上の手順で更新する |
+| タグが別のダイジェストに付け直された | 上流が同じタグで新しいイメージを出した(distroless の `nonroot` など)。固定したダイジェストは取得できるので、今は壊れていない | 次の更新のときに候補へ更新する。候補がない(amd64 / arm64 の片方がない)ときは更新しない |
+| 成果物を取得できない・SHA-256 が合わない | 上流で削除・差し替えられた、または取得の誤り | **SHA-256 を取得した値に書き換えない**。Maven Central(または GitHub のリリース)の `.sha1` / `.sha256` と、手元で取得したファイルの値を確かめる。上流で差し替えられていたら、理由を確かめてから版を上げる |
+
+- Issue はタイトル `[pin-check] <変数名>:` で、固定ごとに 1 つ。開いている間は、新しい値のときだけコメントが足される。更新の PR で閉じる(`Closes #<番号>`)。
+- Issue の作成を確かめるときは、手動の実行で `simulate` を有効にする(1 つ目のイメージと成果物を取得できない値に書き換える。タイトルに `[simulated]` が付くので、確かめた後に閉じる)。
+
 ### Kafka Connect(Debezium)のイメージ
 
 Kafka Connect は公開イメージを使わず、`images/kafka-connect/Dockerfile` で組み立てる(ADR-0016 §9)。Debezium の公式イメージは最新のパッチ版のタグが毎日付け直され、古いダイジェストが取得できなくなるため。

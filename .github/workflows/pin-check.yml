@@ -1,0 +1,63 @@
+name: pin-check
+on:
+  # 毎日確かめる(distroless の nonroot のように、上流が頻繁にタグを付け直すイメージがあるため。#35)
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      simulate:
+        description: 固定した値を取得できない値に書き換えて確かめる(Issue の作成の確認用。タイトルに [simulated] が付く)
+        type: boolean
+        default: false
+  # 固定を変える PR では、取得できない・SHA-256 が合わない値を入れていないかを確かめる(Issue は作らない)
+  pull_request:
+    paths:
+      - "infra/local/images.env"
+      - "infra/local/images/kafka-connect/Dockerfile"
+      - "infra/local/scripts/check-pins.py"
+      - "infra/local/scripts/check_pins_test.py"
+      - ".github/workflows/pin-check.yml"
+permissions:
+  contents: read
+concurrency:
+  group: pin-check-${{ github.ref }}
+  cancel-in-progress: true
+
+# 固定したイメージのダイジェストと、Kafka Connect の成果物の SHA-256 の定期確認(ADR-0016 §2・§9。#35)。
+# - 取得できない(上流で削除された)・タグが付け直された・成果物の SHA-256 が合わない、を検知する。
+# - 定期・手動の実行では、異常ごとに Issue を作る(同じ固定の Issue が開いていれば、新しい値のときだけコメントを足す)。
+# 対応の手順は infra/local/README.md の「イメージの更新」。アクションは ci.yml と同じくコミット SHA で固定する。
+jobs:
+  pr:
+    name: pin-check (pull request)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Unit tests
+        run: python3 -I infra/local/scripts/check_pins_test.py
+      # 付け直しだけなら成功(上流の変化は PR のせいではない)。取得できない・SHA-256 が合わないときは失敗
+      - name: Check pins
+        run: python3 -I infra/local/scripts/check-pins.py --summary "$GITHUB_STEP_SUMMARY" --fail-on-broken
+
+  scheduled:
+    name: pin-check
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Unit tests
+        run: python3 -I infra/local/scripts/check_pins_test.py
+      - name: Check pins and open issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SIMULATE: ${{ inputs.simulate }}
+        run: |
+          args=(--summary "$GITHUB_STEP_SUMMARY" --issues)
+          if [ "$SIMULATE" = "true" ]; then args+=(--simulate); fi
+          python3 -I infra/local/scripts/check-pins.py "${args[@]}"
