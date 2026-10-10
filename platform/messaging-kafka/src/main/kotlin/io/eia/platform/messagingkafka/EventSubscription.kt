@@ -3,23 +3,78 @@ package io.eia.platform.messagingkafka
 import io.eia.shared.kernel.DomainError
 import io.eia.shared.kernel.Result
 
+/** [EventConsumer] が購読する 1 つのトピックと、その処理(ADR-0028 §1)。 */
+public sealed interface Subscription {
+    /** 購読するトピックの名前(DLQ は購読しない)。 */
+    public val topicName: String
+
+    /** 連携 ID(ログの `integration_id`。カタログの ID)。 */
+    public val integrationId: String
+}
+
 /**
- * [EventConsumer] が購読する 1 つのトピックと、その処理(ADR-0028 §1)。
+ * 社内のイベント・コマンド(CloudEvents のヘッダ付き。INTEGRATION_STANDARDS §2)の購読。
  *
- * @property topic 購読するトピック(Event・Command のどちらも。DLQ は購読しない)
+ * @property topic 購読するトピック(Event・Command のどちらも)
  * @property deserializer 値を読む型(契約の record 名の `@SerialName`。ADR-0025 §1)
- * @property integrationId 連携 ID(ログの `integration_id`。カタログの ID)
  * @property handler 1 件の処理。業務の更新と冪等消費の記録(platform/inbox)を同じトランザクションで行う
  */
 public class EventSubscription<T>(
     public val topic: EventTopic,
     public val deserializer: AvroEventDeserializer<T>,
-    public val integrationId: String,
+    override val integrationId: String,
     public val handler: EventHandler<T>,
-) {
+) : Subscription {
+    override val topicName: String get() = topic.name
+
     init {
         require(integrationId.isNotBlank()) { "integrationId が空です" }
     }
+}
+
+/**
+ * CloudEvents のヘッダを持たない外部のトピックの購読(ADR-0028 改訂履歴)。例: レガシーの生の CDC(Debezium の Envelope。ADR-0026)。
+ *
+ * - ヘッダを検査しない。レコードごとに新しいトレースと Correlation ID を始める(外部はトレースを持たない)。
+ * - 値がない(tombstone)・Avro として読めない値は、リトライせずに DLQ に送る。ほかの失敗の扱い・コミット・読み直しは [EventSubscription] と同じ。
+ * - 冪等消費の記録(ce_id)はない。処理の側で、重複しても結果が同じになるようにする(状態の最新を出す変換など)。
+ *
+ * @property topicName 購読するトピック(命名規約 `{domain}.{entity}.{event}.v{n}` の外。例 `_cdc.legacy.public.t_juchu`)
+ * @property deserializer 値を読む型(Apicurio の wire format の Avro)
+ * @property handler 1 件の処理
+ */
+public class ExternalSubscription<T>(
+    override val topicName: String,
+    public val deserializer: AvroEventDeserializer<T>,
+    override val integrationId: String,
+    public val handler: RecordHandler<T>,
+) : Subscription {
+    init {
+        require(topicName.isNotBlank()) { "topicName が空です" }
+        require(!topicName.endsWith(DeadLetterPublisher.SUFFIX)) { "DLQ は購読しません: $topicName" }
+        require(integrationId.isNotBlank()) { "integrationId が空です" }
+    }
+}
+
+/** 外部のトピックの 1 件の処理。成功なら [Handled]、失敗なら [HandlingFailure](扱いは [EventHandler] と同じ)。 */
+public fun interface RecordHandler<T> {
+    public suspend fun handle(record: ConsumedRecord<T>): Result<Handled, HandlingFailure>
+}
+
+/**
+ * 外部のトピックから受信したレコード。値の読み取りは済んでいる。
+ *
+ * @property key Kafka のキー(外部の形式のまま)。ない場合は null
+ */
+public class ConsumedRecord<T>(
+    public val key: ByteArray?,
+    public val value: T,
+    public val topic: String,
+    public val partition: Int,
+    public val offset: Long,
+) {
+    // 値はログに出さない(CLAUDE.md §5 可観測性)
+    override fun toString(): String = "ConsumedRecord(topic=$topic, partition=$partition, offset=$offset)"
 }
 
 /** 1 件の処理。成功なら [Handled]、失敗なら [HandlingFailure](種類でリトライ・DLQ・読み直しを決める)。 */

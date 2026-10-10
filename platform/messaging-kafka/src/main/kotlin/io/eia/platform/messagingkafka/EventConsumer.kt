@@ -45,6 +45,7 @@ import kotlin.time.toJavaDuration
  *   - [HandlingFailure.Unavailable]・Schema Registry の一時的な失敗・DLQ に送れないときは、DLQ に送らず、処理を終えた分までを
  *     コミットして、未処理の位置から Backoff の後に読み直す。その間 [ready] は false(`/health/ready` が 503)で、lag が増える。
  * - **追跡**: CONSUMER の span(`{topic} process`)は、ヘッダの `traceparent` の子にする。Correlation ID はヘッダの値を引き継ぐ。
+ *   CloudEvents のヘッダを持たない外部のトピック([ExternalSubscription]。レガシーの生の CDC など)は、レコードごとに新しいトレースを始める。
  *   DLQ・処理の中の発行(Outbox)は、この span の下になる。
  * - ログ・span・DLQ のヘッダに値は入れない(CLAUDE.md §5 可観測性)。
  *
@@ -56,7 +57,7 @@ import kotlin.time.toJavaDuration
 public class EventConsumer(
     private val consumer: Consumer<ByteArray?, ByteArray?>,
     private val groupId: String,
-    subscriptions: List<EventSubscription<*>>,
+    subscriptions: List<Subscription>,
     private val deadLetters: DeadLetterPublisher,
     private val observability: ObservabilityRuntime,
     private val metrics: ConsumerMetrics = ConsumerMetrics(observability.meter),
@@ -66,7 +67,7 @@ public class EventConsumer(
     private val pollTimeout: Duration = DEFAULT_POLL_TIMEOUT,
     private val random: Random = Random.Default,
 ) {
-    private val subscriptions: Map<String, EventSubscription<*>> = subscriptions.associateBy { it.topic.name }
+    private val subscriptions: Map<String, Subscription> = subscriptions.associateBy { it.topicName }
     private val propagator = observability.openTelemetry.propagators.textMapPropagator
 
     init {
@@ -158,10 +159,60 @@ public class EventConsumer(
     private suspend fun process(record: ConsumerRecord<ByteArray?, ByteArray?>): Outcome {
         val subscription = requireNotNull(subscriptions[record.topic()]) { "購読していないトピックです: ${record.topic()}" }
         val started = TimeSource.Monotonic.markNow()
+        val outcome =
+            when (subscription) {
+                is EventSubscription<*> -> processEvent(subscription, record)
+                is ExternalSubscription<*> -> processExternal(subscription, record)
+            }
+        metrics.processed(record.topic(), groupId, started.elapsedNow().inWholeMicroseconds / MICROS_PER_SECOND)
+        return outcome
+    }
+
+    /** 社内のイベント: CONSUMER の span はヘッダの `traceparent` の子。Correlation ID はヘッダの値を引き継ぐ。 */
+    private suspend fun <T> processEvent(
+        subscription: EventSubscription<T>,
+        record: ConsumerRecord<ByteArray?, ByteArray?>,
+    ): Outcome {
         val metadata = EventMetadata.fromHeaders(record.headers())
         val parent = propagator.extract(Context.root(), record.headers(), KafkaHeadersGetter)
         val correlationId = (metadata as? Result.Ok)?.value?.correlationId ?: CorrelationId.generate()
-        return withContext(ObservabilityContext(correlationId, subscription.integrationId, parent)) {
+        return inSpan(record, ObservabilityContext(correlationId, subscription.integrationId, parent)) { span ->
+            when (metadata) {
+                is Result.Err -> {
+                    val fields = metadata.error.violations.joinToString(", ") { "${it.field}: ${it.reason}" }
+                    deadLetter(span, record, HandlingFailure.Rejected(INVALID_HEADERS, "ヘッダが不正です($fields)"), 1)
+                }
+
+                is Result.Ok -> {
+                    span.setAttribute(MESSAGING_MESSAGE_ID, metadata.value.id.toString())
+                    decoded(span, record, subscription.deserializer) { value ->
+                        val key = record.key()?.toString(Charsets.UTF_8)
+                        val event = ConsumedEvent(metadata.value, key, value, record.topic(), record.partition(), record.offset())
+                        handleWithRetry(span, record) { subscription.handler.handle(event) }
+                    }
+                }
+            }
+        }
+    }
+
+    /** 外部のトピック: ヘッダを検査せず、レコードごとに新しいトレースと Correlation ID を始める。 */
+    private suspend fun <T> processExternal(
+        subscription: ExternalSubscription<T>,
+        record: ConsumerRecord<ByteArray?, ByteArray?>,
+    ): Outcome =
+        inSpan(record, ObservabilityContext(CorrelationId.generate(), subscription.integrationId, Context.root())) { span ->
+            decoded(span, record, subscription.deserializer) { value ->
+                val consumed = ConsumedRecord(record.key(), value, record.topic(), record.partition(), record.offset())
+                handleWithRetry(span, record) { subscription.handler.handle(consumed) }
+            }
+        }
+
+    private suspend fun inSpan(
+        record: ConsumerRecord<ByteArray?, ByteArray?>,
+        context: ObservabilityContext,
+        block: suspend (Span) -> Outcome,
+    ): Outcome =
+        withContext(context) {
             observability.withSpan("${record.topic()} process", SpanKind.CONSUMER) { span ->
                 span.setAttribute(MESSAGING_SYSTEM, KAFKA)
                 span.setAttribute(MESSAGING_DESTINATION, record.topic())
@@ -169,111 +220,67 @@ public class EventConsumer(
                 span.setAttribute(MESSAGING_OPERATION, OPERATION_PROCESS)
                 span.setAttribute(MESSAGING_PARTITION, record.partition().toString())
                 span.setAttribute(MESSAGING_OFFSET, record.offset())
-                val outcome =
-                    when (metadata) {
-                        is Result.Err -> {
-                            val fields = metadata.error.violations.joinToString(", ") { "${it.field}: ${it.reason}" }
-                            deadLetter(span, record, HandlingFailure.Rejected(INVALID_HEADERS, "ヘッダが不正です($fields)"), 1)
-                        }
-
-                        is Result.Ok -> {
-                            span.setAttribute(MESSAGING_MESSAGE_ID, metadata.value.id.toString())
-                            handle(span, subscription, record, metadata.value)
-                        }
-                    }
-                metrics.processed(record.topic(), groupId, started.elapsedNow().inWholeMicroseconds / MICROS_PER_SECOND)
-                outcome
+                block(span)
             }
         }
-    }
 
-    @Suppress("ReturnCount") // 値がない・読めないときは、処理の前に返す
-    private suspend fun <T> handle(
+    /** 値を読んでから [then] に渡す。値がない・読めないときは DLQ、Schema Registry の一時的な失敗は読み直し。 */
+    private suspend fun <T> decoded(
         span: Span,
-        subscription: EventSubscription<T>,
         record: ConsumerRecord<ByteArray?, ByteArray?>,
-        metadata: EventMetadata,
+        deserializer: AvroEventDeserializer<T>,
+        then: suspend (T) -> Outcome,
     ): Outcome {
         val payload =
             record.value()
                 ?: return deadLetter(span, record, HandlingFailure.Rejected(UNEXPECTED_TOMBSTONE, "値がない(tombstone)"), 1)
-        val value =
-            when (val decoded = subscription.deserializer.deserialize(payload)) {
-                is Result.Ok -> {
-                    decoded.value
-                }
+        return when (val decoded = deserializer.deserialize(payload)) {
+            is Result.Ok -> {
+                then(decoded.value)
+            }
 
-                is Result.Err -> {
-                    return when (val error = decoded.error) {
-                        is SchemaUnavailable.Temporary -> unavailable(span, HandlingFailure.Unavailable(error.code, error.message))
-                        else -> deadLetter(span, record, HandlingFailure.Rejected(UNDECODABLE, "値を読めません(${error.code})"), 1)
+            is Result.Err -> {
+                when (val error = decoded.error) {
+                    is SchemaUnavailable.Temporary -> {
+                        span.setAttribute(ERROR_TYPE, error.code)
+                        Outcome.RetryLater(error.code)
+                    }
+
+                    else -> {
+                        deadLetter(span, record, HandlingFailure.Rejected(UNDECODABLE, "値を読めません(${error.code})"), 1)
                     }
                 }
             }
-        val key = record.key()?.toString(Charsets.UTF_8)
-        val event = ConsumedEvent(metadata, key, value, record.topic(), record.partition(), record.offset())
-        return handleWithRetry(span, subscription.handler, record, event)
+        }
     }
 
     /** Transient はその場でリトライし、尽きたら DLQ。Rejected は DLQ、Unavailable は読み直し。 */
-    private suspend fun <T> handleWithRetry(
+    private suspend fun handleWithRetry(
         span: Span,
-        handler: EventHandler<T>,
         record: ConsumerRecord<ByteArray?, ByteArray?>,
-        event: ConsumedEvent<T>,
+        handle: suspend () -> Result<Handled, HandlingFailure>,
     ): Outcome {
         var attempt = 1
         while (true) {
-            val failure =
-                when (val result = invoke(handler, event)) {
-                    is Result.Ok -> {
-                        metrics.handled(record.topic(), groupId, result.value)
-                        return Outcome.Done
-                    }
-
-                    is Result.Err -> {
-                        result.error
-                    }
-                }
-            if (failure !is HandlingFailure.Transient || attempt >= handlerRetry.maxAttempts) {
-                return if (failure is HandlingFailure.Unavailable) {
-                    unavailable(
-                        span,
-                        failure,
-                    )
-                } else {
-                    deadLetter(span, record, failure, attempt)
-                }
+            val result = invokeGuarded(record, handle)
+            if (result is Result.Ok) {
+                metrics.handled(record.topic(), groupId, result.value)
+                return Outcome.Done
             }
-            metrics.retried(record.topic(), groupId, failure.code)
-            delay(handlerRetry.backoff(attempt, random))
-            attempt++
+            val failure = (result as Result.Err).error
+            if (failure is HandlingFailure.Transient && attempt < handlerRetry.maxAttempts) {
+                metrics.retried(record.topic(), groupId, failure.code)
+                delay(handlerRetry.backoff(attempt, random))
+                attempt++
+                continue
+            }
+            return if (failure is HandlingFailure.Unavailable) {
+                span.setAttribute(ERROR_TYPE, failure.code)
+                Outcome.RetryLater(failure.code)
+            } else {
+                deadLetter(span, record, failure, attempt)
+            }
         }
-    }
-
-    /** 処理の想定しない例外(実装の誤り)は Transient として扱う(リトライが尽きれば DLQ に隔離し、本流を止めない)。 */
-    @Suppress("TooGenericExceptionCaught") // 想定しない例外も DLQ に隔離するため。キャンセルは再送出する
-    private suspend fun <T> invoke(
-        handler: EventHandler<T>,
-        event: ConsumedEvent<T>,
-    ): Result<Handled, HandlingFailure> =
-        try {
-            handler.handle(event)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            val type = e::class.simpleName ?: "unknown"
-            // 例外のメッセージは値を含みうるため、型の名前だけを残す
-            logger.error("処理が想定しない例外を投げました({}。{} partition={} offset={})", type, event.topic, event.partition, event.offset)
-            Result.Err(HandlingFailure.Transient(UNEXPECTED_EXCEPTION, "処理が例外を投げました($type)"))
-        }
-
-    private fun unavailable(
-        span: Span,
-        failure: HandlingFailure.Unavailable,
-    ): Outcome {
-        span.setAttribute(ERROR_TYPE, failure.code)
-        return Outcome.RetryLater(failure.code)
     }
 
     private suspend fun deadLetter(
@@ -358,6 +365,25 @@ public class EventConsumer(
             )
     }
 }
+
+/** 処理の想定しない例外(実装の誤り)は Transient として扱う(リトライが尽きれば DLQ に隔離し、本流を止めない)。 */
+@Suppress("TooGenericExceptionCaught") // 想定しない例外も DLQ に隔離するため。キャンセルは再送出する
+private suspend fun invokeGuarded(
+    record: ConsumerRecord<ByteArray?, ByteArray?>,
+    handle: suspend () -> Result<Handled, HandlingFailure>,
+): Result<Handled, HandlingFailure> =
+    try {
+        handle()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        val type = e::class.simpleName ?: "unknown"
+        // 例外のメッセージは値を含みうるため、型の名前だけを残す
+        guardLogger.error("処理が想定しない例外を投げました({}。{} partition={} offset={})", type, record.topic(), record.partition(), record.offset())
+        Result.Err(HandlingFailure.Transient(EventConsumer.UNEXPECTED_EXCEPTION, "処理が例外を投げました($type)"))
+    }
+
+private val guardLogger = LoggerFactory.getLogger(EventConsumer::class.java)
 
 /** 処理を終えたオフセットのコミット。統合テストで、処理の後・コミットの前に止める場合の差し替えに使う。 */
 public fun interface OffsetCommitter {
