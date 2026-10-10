@@ -119,8 +119,8 @@ dlq-replay: ## DLQ のメッセージを元のトピックに戻す。既定は 
 stats: ## 起動中コンテナのメモリ使用量(docker stats)
 	@$(INFRA)/scripts/stats.sh
 
-# 秘密情報は infra/local/.env から環境変数で渡す(verify.sh と同じ)。基盤は make up PROFILE="order cdc" で起動しておく
+# 秘密情報は infra/local/.env から環境変数で渡す(verify.sh と同じ)。基盤は make up PROFILE="order cdc saga" で起動しておく
 # シナリオの後に、監査記録の全体の検査が OK で、アンカーがあることを確かめる(AuditAnchorE2E がアンカーの保存を待つ。ADR-0017)
-e2e: env ## E2E シナリオ(tests/e2e。make up PROFILE="order cdc" で起動した基盤に、公開されたエンドポイントとレガシーのアプリの操作だけで接続する)
+e2e: env ## E2E シナリオ(tests/e2e。make up PROFILE="order cdc saga" で起動した基盤に、公開されたエンドポイント・レガシーのアプリの操作・参加者の停止だけで接続する)
 	@set -a && . $(INFRA)/.env && set +a && $(GRADLE) :tests:e2e:e2eTest
 	@$(INFRA)/scripts/audit-anchored.sh order

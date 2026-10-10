@@ -96,6 +96,8 @@ jobs:
               - 'tests/e2e/**'
               # make up PROFILE=order が組み立てる契約の登録のコンテナ(compose の schema-publish)
               - 'tools/schema-publish/**'
+              # SagaE2E が DLQ の Replay に使う CLI
+              - 'tools/dlq-replay/**'
               - 'build-logic/**'
               - 'gradle/libs.versions.toml'
               - 'Makefile'
@@ -190,12 +192,12 @@ jobs:
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           docker system prune --all --force >/dev/null
-      # order と cdc(レガシーの CDC と ACL。P06 ⑤。LegacyOrderAclE2E)
-      - name: Up (core + order + cdc)
+      # order と cdc(レガシーの CDC と ACL。P06 ⑤。LegacyOrderAclE2E)と saga(注文 Saga の参加者。P07 ⑥。SagaE2E)
+      - name: Up (core + order + cdc + saga)
         id: up
         run: |
           start=$(date +%s)
-          make up PROFILE="order cdc"
+          make up PROFILE="order cdc saga"
           echo "seconds=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
       - name: E2E
         id: e2e
@@ -211,7 +213,7 @@ jobs:
             echo
             echo "| 段階 | 秒 |"
             echo "|---|---|"
-            echo "| 基盤の起動(make up PROFILE=\"order cdc\") | ${{ steps.up.outputs.seconds }} |"
+            echo "| 基盤の起動(make up PROFILE=\"order cdc saga\") | ${{ steps.up.outputs.seconds }} |"
             echo "| E2E(make e2e) | ${{ steps.e2e.outputs.seconds }} |"
             echo
             python3 scripts/ci/test-summary.py
