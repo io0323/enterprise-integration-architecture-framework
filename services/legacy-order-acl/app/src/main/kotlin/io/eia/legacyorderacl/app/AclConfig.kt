@@ -1,6 +1,6 @@
 package io.eia.legacyorderacl.app
 
-import io.eia.legacyorderacl.adapters.inbound.LegacyChangeConsumer
+import io.eia.legacyorderacl.adapters.inbound.LegacyChangeHandler
 import io.eia.shared.kernel.FieldViolation
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.ValidationError
@@ -51,7 +51,7 @@ internal data class AclConfig(
                     is Result.Err -> null.also { violations += parsed.error.violations }
                 }
             return if (violations.isEmpty()) {
-                ok(AclConfig(bootstrap, registry, env[GROUP_ID] ?: LegacyChangeConsumer.GROUP_ID, port ?: DEFAULT_HEALTH_PORT, reconcile))
+                ok(AclConfig(bootstrap, registry, env[GROUP_ID] ?: LegacyChangeHandler.GROUP_ID, port ?: DEFAULT_HEALTH_PORT, reconcile))
             } else {
                 err(ValidationError(violations))
             }

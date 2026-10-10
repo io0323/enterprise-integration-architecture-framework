@@ -2,11 +2,11 @@
 
 package io.eia.legacyorderacl.app
 
-import io.eia.legacyorderacl.adapters.inbound.LegacyChangeConsumer
-import io.eia.legacyorderacl.adapters.inbound.OffsetCommitter
+import io.eia.legacyorderacl.adapters.inbound.LegacyChangeHandler
 import io.eia.legacyorderacl.adapters.outbound.LegacyOrderEventSchemas
 import io.eia.platform.messagingkafka.ApicurioWireFormat
 import io.eia.platform.messagingkafka.EventMetadata
+import io.eia.platform.messagingkafka.OffsetCommitter
 import io.eia.platform.schemaregistry.ApicurioRegistryClient
 import io.eia.platform.schemaregistry.ContentId
 import io.eia.platform.schemaregistry.SchemaRegistryConfig
@@ -58,7 +58,7 @@ import kotlin.time.TimeSource
 import kotlin.uuid.Uuid
 import java.net.http.HttpClient as JdkHttpClient
 
-private const val RAW_TOPIC = LegacyChangeConsumer.TOPIC
+private const val RAW_TOPIC = LegacyChangeHandler.TOPIC
 private const val DLQ_TOPIC = "$RAW_TOPIC.dlq"
 private const val OUTPUT_TOPIC = "sales.legacy-order.changed.v1"
 
@@ -383,5 +383,75 @@ class LegacyOrderAclIT :
             out.last { it.key == "C0001" }.status shouldBe "CANCELLED"
             out.last { it.key == "C0002" }.status shouldBe "ACCEPTED"
             stop(restarted)
+        }
+
+        // #88: 読み取りは platform/messaging-kafka の EventConsumer(外部のトピックの購読)。
+        // 以前の読み取りのループは、オフセットのコミットの例外を捕まえず、Kafka の停止・リバランスでスレッドが終わっていた
+        test("#88: コミットの途中で Kafka に届かなくなっても(停止 → 再開)読み取りは止まらず、再開の後の変更も出す。ready のまま") {
+            val outage = AtomicBoolean(false)
+            val timedOut = AtomicBoolean(false)
+            val server =
+                start("acl-it.outage") { consumer, offsets ->
+                    if (outage.compareAndSet(true, false)) {
+                        // ブローカーを止めた状態でコミットする(実際の TimeoutException)。終わったら再開する
+                        kafka.dockerClient.pauseContainerCmd(kafka.containerId).exec()
+                        try {
+                            consumer.commitSync(offsets, Duration.ofSeconds(3))
+                        } catch (e: org.apache.kafka.common.errors.TimeoutException) {
+                            timedOut.set(true)
+                            throw e
+                        } finally {
+                            kafka.dockerClient.unpauseContainerCmd(kafka.containerId).exec()
+                        }
+                    } else {
+                        consumer.commitSync(offsets)
+                    }
+                }
+            awaitReady(server)
+            outage.set(true)
+            change("c", "D0001", "1", lsn = 400)
+            val keys = setOf("D0001")
+            outputs(keys)(read(OUTPUT_TOPIC) { outputs(keys)(it).isNotEmpty() })
+            val deadline = TimeSource.Monotonic.markNow() + 60.seconds
+            while (!timedOut.get()) {
+                check(deadline.hasNotPassedNow()) { "コミットのタイムアウトが起きません" }
+                Thread.sleep(100)
+            }
+
+            // 読み取りの最中(poll の間)にも止めて再開する
+            kafka.dockerClient.pauseContainerCmd(kafka.containerId).exec()
+            Thread.sleep(5_000)
+            kafka.dockerClient.unpauseContainerCmd(kafka.containerId).exec()
+
+            change("u", "D0001", "2", lsn = 410)
+            outputs(keys)(read(OUTPUT_TOPIC) { records -> outputs(keys)(records).any { it.status == "ALLOCATED" } })
+                .last()
+                .status shouldBe "ALLOCATED"
+            ready(server) shouldBe 200
+            stop(server)
+        }
+
+        test("#88: 同じ Consumer Group にほかのインスタンスが入って出ても(リバランス)、読み取りは止まらず、変更を欠けずに出す") {
+            val first = start("acl-it.rebalance")
+            awaitReady(first)
+            change("c", "E0001", "1", lsn = 500)
+            change("c", "E0002", "1", lsn = 510)
+
+            // 2 つ目が入る(パーティションの割り当てが分かれる)→ その間の変更 → 2 つ目が出る(1 つ目に戻る)
+            val second = start("acl-it.rebalance")
+            awaitReady(second)
+            change("u", "E0001", "2", lsn = 520)
+            change("u", "E0002", "2", lsn = 530)
+            val keys = setOf("E0001", "E0002")
+            read(OUTPUT_TOPIC) { records -> outputs(keys)(records).count { it.status == "ALLOCATED" } >= 2 }
+            stop(second)
+
+            change("u", "E0001", "3", lsn = 540)
+            change("u", "E0002", "3", lsn = 550)
+            val out = outputs(keys)(read(OUTPUT_TOPIC) { records -> outputs(keys)(records).count { it.status == "SHIPPED" } >= 2 })
+            out.filter { it.key == "E0001" }.map { it.status }.distinct() shouldBe listOf("ACCEPTED", "ALLOCATED", "SHIPPED")
+            out.filter { it.key == "E0002" }.map { it.status }.distinct() shouldBe listOf("ACCEPTED", "ALLOCATED", "SHIPPED")
+            ready(first) shouldBe 200
+            stop(first)
         }
     })

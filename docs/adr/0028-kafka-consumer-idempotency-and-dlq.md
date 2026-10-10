@@ -11,7 +11,7 @@ Framework は非同期の連携に「冪等 + DLQ + Replay」の 3 点セット�
 - 冪等消費の記録(processed_message)の置き場所・キー・保持期間。
 - #80(スロットが無効になった期間のイベントの作り直し)で、作り直したイベントの `ce_id` が元と変わる場合の重複の扱い。
 
-P06 ⑤b の legacy-order-acl は、同じ役割の読み取りのループ(`LegacyChangeConsumer`)を個別に持っている(共通部品への移行は #88)。
+P06 ⑤b の legacy-order-acl は、同じ役割の読み取りのループ(`LegacyChangeConsumer`)を個別に持っていた(共通部品への移行は #88。改訂履歴)。
 
 ## Decision
 ### 1. Consumer(`EventConsumer`)
@@ -95,7 +95,12 @@ P06 ⑤b の legacy-order-acl は、同じ役割の読み取りのループ(`Leg
 - 受信側の各サービスは、自分の DB に `inbox` のスキーマを持ち、業務の更新と同じトランザクションで記録する。記録の行が増えるので、定期的な削除が要る。
 - Transient のリトライの間と Unavailable の間は、同じパーティションの後続のメッセージが待たされる(順序と引き換え)。Unavailable が長引けば lag のアラートになる。
 - 保持期間(14 日)より後に同じ `ce_id` のメッセージが届くと、重複として捨てられない。トピック・DLQ の保持期間を延ばすときは見直す。業務キーの冪等(§3)が二重の守りになる。
-- legacy-order-acl の読み取りのループは、当面は個別の実装のまま(#88 で移す)。
+- legacy-order-acl の読み取りのループは、#88 で共通部品に移した(改訂履歴)。
 
 ## 改訂履歴
 - 2026-10-09: P07 ② で、§5 にアラートを、§6 に Replay を加えた。
+- 2026-10-10: #88 で、legacy-order-acl の読み取りのループ(`LegacyChangeConsumer`)を `EventConsumer` に移した。以前のループはオフセットのコミットの例外を捕まえず、Kafka の停止(コミットの `TimeoutException`)やリバランス(`CommitFailedException`)で読み取りのスレッドが終わっていた。
+  - **外部のトピックの購読(`ExternalSubscription`)** を加えた。CloudEvents のヘッダを持たないトピック(レガシーの生の CDC。ADR-0026)を、ヘッダを検査せずに読み、レコードごとに新しいトレースと Correlation ID を始める。処理(`RecordHandler`)は `ConsumedRecord`(キーは受け取ったバイト列のまま)を受け取る。失敗の扱い(§2)・コミット・読み直し・メトリクスは `EventSubscription` と同じ。冪等消費の記録(§3)はない(ce_id がない。処理の側で、重複しても結果が同じになるようにする)。命名規約の外のトピック名を受け付け、DLQ(`.dlq`)は購読できない。
+  - 値がない(tombstone)レコードは、以前は ACL が `UNDECODABLE` で DLQ に送っていたが、`UNEXPECTED_TOMBSTONE` になる(Debezium のコネクタは `tombstones.on.delete=false` なので、実際には届かない)。
+  - ACL の DLQ と読み直しの件数は、`eia.acl.dead_letters`・`eia.acl.retries` から `eia.consumer.dead_letters`・`eia.consumer.unavailable`(Consumer Group `legacy-order-acl.translate`)に移した。`eia.acl.records` は変換して発行した件数(`upserted`・`deleted`)だけを数える。ダッシュボード(CDC — Legacy)を合わせて直した。アラート(`acl.rules.yml`)は kafka-exporter のメトリクスで判定しているので変わらない。
+  - Kafka の停止と再開(コミットの途中・読み取りの最中)とリバランスで読み取りが止まらないことを、`LegacyOrderAclIT` で確かめる。

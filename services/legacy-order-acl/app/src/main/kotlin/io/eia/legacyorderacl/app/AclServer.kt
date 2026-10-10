@@ -1,7 +1,7 @@
 package io.eia.legacyorderacl.app
 
-import io.eia.legacyorderacl.adapters.inbound.LegacyChangeConsumer
-import io.eia.legacyorderacl.adapters.inbound.OffsetCommitter
+import io.eia.platform.messagingkafka.EventConsumer
+import io.eia.platform.messagingkafka.OffsetCommitter
 import io.eia.platform.observability.Observability
 import io.eia.platform.observability.ObservabilityConfig
 import io.eia.platform.observability.ObservabilityRuntime
@@ -46,7 +46,7 @@ import java.util.concurrent.Executors
 /**
  * legacy-order-acl のプロセス(ADR-0026)。
  *
- * - 書き込むイベントのスキーマ ID を解決してから、生の CDC の読み取りを始める([LegacyChangeConsumer]。1 つのスレッドで動かす)。
+ * - 書き込むイベントのスキーマ ID を解決してから、生の CDC の読み取りを始める([EventConsumer]。1 つのスレッドで動かす)。
  * - ヘルスチェックのポートは平文で `/health/live` と `/health/ready` だけ。ready は、スキーマ ID をすべて解決して読み取りを始め、
  *   直近の処理が一時的な失敗でないときだけ UP(処理の遅れは Consumer Group の lag で監視する。ADR-0026 §10)。
  */
@@ -135,7 +135,7 @@ internal class AclServer private constructor(
                         val runtime = Observability.init(observability)
                         val koin = koinApplication { modules(aclModule(config, runtime, committer, password)) }.koin
                         val schemaIds = koin.get<SchemaIdBook>()
-                        val loop = koin.get<LegacyChangeConsumer>()
+                        val loop = koin.get<EventConsumer>()
                         // Kafka の Consumer はスレッドセーフでないので、読み取りは 1 つのスレッドだけで行う
                         val consumerThread = Executors.newSingleThreadExecutor { Thread(it, "legacy-order-acl-consumer") }
                         val scope = CoroutineScope(SupervisorJob() + consumerThread.asCoroutineDispatcher())

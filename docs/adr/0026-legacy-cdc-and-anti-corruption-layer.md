@@ -96,7 +96,7 @@ signal 表への書き込み(再同期の指示)は DBA(所有者のロール)�
 - **一時的な巻き戻り**: 再送では、最後のコミットの後の変更が順に送り直される(例: A1・A2・A3 の後に A2・A3)。消費者は、A3 の後に A2 を受け取り、A3 が届くまで少し前の状態に戻ることがある。再送が終われば最新の状態に収束する。状態が戻ることを許さない消費者は、イベントの `source.lsn` で比べる(大きい方が新しい)。Snapshot のレコードは同じ LSN を共有するため、Snapshot 同士の比較には使えない(契約の AsyncAPI に書いた)。
 - 処理の中で一時的な失敗(Kafka・Apicurio)が起きたら、処理を終えた分までをコミットし、残りを未処理の位置に戻して、Backoff して読み直す(kernel の `RetryPolicy`。上限なしで繰り返す)。その間 ACL の `/health/ready` は失敗にする。
 - `/health/ready` は「処理できる」(書き込むスキーマ ID を解決して読み取りを始め、直近の処理が一時的な失敗でない)ことを表し、パーティションの割り当ては条件にしない。生の CDC のトピックはコネクタの登録で作られ、`make up` の後になるため。処理の遅れは Consumer Group の lag で見る(§10)。
-- 1 件の発行(`EventProducer` の送信。acks=all)の完了まで待ってから次の 1 件を処理する。コミットは poll ごとに、処理を終えたオフセットだけを行う(`LegacyChangeConsumer`)。発行の後・コミットの前に止まった場合に、重複だけで欠けないことを統合テスト(`LegacyOrderAclIT`)で確かめた。
+- 1 件の発行(`EventProducer` の送信。acks=all)の完了まで待ってから次の 1 件を処理する。コミットは poll ごとに、処理を終えたオフセットだけを行う(`EventConsumer`。ADR-0028。#88 までは `LegacyChangeConsumer`)。発行の後・コミットの前に止まった場合に、重複だけで欠けないことを統合テスト(`LegacyOrderAclIT`)で確かめた。
 
 ### 7. 変換できないレコードと DLQ(Framework 6.5)
 - 変換の規則(§8)に合わないレコードは、黙って捨てず、**DLQ `_cdc.legacy.public.t_juchu.dlq`**(入力のトピック + `.dlq`。Framework 6.5・INTEGRATION_STANDARDS §1)に送り、本流を止めない。後続の変更(同じ注文の後の変更を含む)は通常どおり変換する。
@@ -111,7 +111,7 @@ signal 表への書き込み(再同期の指示)は DBA(所有者のロール)�
 - **DLQ のトピックの機密区分は出力と同じ confidential** とする。生のバイト列は顧客名などを含むため。保持は **7 日**(`retention.ms=604800000`。生のトピックと同じ)とする。
   - 両方をトピックの定義 `infra/local/kafka/topics.conf` に書く。Kafka のトピックの設定には機密区分を書けないため、定義のファイルの列で持つ(読み取りの権限の制御は secure profile の #26)。compose の `kafka-topics`(1 回だけ動くコンテナ。`kafka/create-topics.sh`)がこの定義でトピックを作り、既にあれば設定をそろえる。統合テストも同じファイルを読む。
   - 7 日にする理由: 生のトピックより長く持つと、機密のデータを持つ期間が延びる。回復(下)は DLQ のレコードを使わないため、DLQ は原因の調査の間だけあればよい。DLQ に入るとアラートが出る(§10)ので、7 日の間に調査できる。
-- 件数はメトリクスにする(`eia.acl.records{outcome=upserted|deleted|dead_lettered}`・`eia.acl.dead_letters{reason}`。OTel → Prometheus)。
+- 件数はメトリクスにする(`eia.acl.records{outcome=upserted|deleted}`、DLQ は `eia.consumer.dead_letters{reason}`(ADR-0028)。OTel → Prometheus)。
 - **回復**: DLQ のレコードを本流に戻すと、その後に届いた同じ注文の変更より古い状態で上書きし、状態が戻りうる。このため回復の手順は、**変換の規則やレガシーのデータを直した後、signal 表から対象の注文の Incremental Snapshot を指示し、今の状態を送り直す**(部分の再同期。⑥ の Runbook)。一般の Replay の CLI(P07)は、この DLQ には使わない。
 
 ### 8. 変換の規則(ACL の domain。commonTest で検査する)
@@ -173,3 +173,4 @@ signal 表への書き込み(再同期の指示)は DBA(所有者のロール)�
   - `platform/messaging-kafka` に `EventProducer.sendTombstone` と `DeadLetterPublisher` を加えた(ADR-0025 の改訂履歴)。
 - 2026-10-08: P06 ⑥a で、照合(レガシーの表と出力の最新の状態の比較)を ADR-0027 に決めた。照合は legacy-order-acl の中で動き、読み取り専用のロール `eiaf_reconcile` でレガシーの DB を読む(ADR-0027 §1 の例外)。§7 の「回復は signal 表の部分の再同期」の自動化(上限 100 件)は P06 ⑥b。
 - 2026-10-09: P06 ⑥b で、Incremental Snapshot で読んだレコードが `source.lsn` を持たないことがあると分かった(照合の再同期の統合テストで、取り直した 2 件が `UNDECODABLE` で DLQ に入った)。Snapshot のレコード(`source.snapshot` が false 以外)は LSN がなくても受け入れ、位置 0 で出す。ストリーミングの変更に LSN がなければ、これまでどおり DLQ。契約(AsyncAPI)に「Snapshot のレコードは位置で比べず受け入れる」を書いた。ACL の DLQ のログに `detail`(列と規則。値は含まない)を加えた。
+- 2026-10-10: #88 で、読み取りのループを `platform/messaging-kafka` の `EventConsumer`(外部のトピックの購読。ADR-0028 改訂履歴)に移した。変換の振る舞い(§6・§7。変換できない値はリトライせずに DLQ、一時的な失敗は最後のコミットの位置から読み直す、変更ごとに新しいトレース)は変えていない。DLQ と読み直しの件数のメトリクスは `eia.consumer.*` に移した。

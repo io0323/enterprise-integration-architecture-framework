@@ -2,7 +2,7 @@
 
 package io.eia.legacyorderacl.adapters.reconcile
 
-import io.eia.legacyorderacl.adapters.inbound.LegacyChangeConsumer
+import io.eia.legacyorderacl.adapters.inbound.LegacyChangeHandler
 import io.eia.legacyorderacl.adapters.outbound.KafkaLegacyOrderStatePublisher
 import io.eia.legacyorderacl.adapters.outbound.LegacyOrderEventSchemas
 import io.eia.legacyorderacl.application.port.inbound.ChangePosition
@@ -117,8 +117,8 @@ class ReconcileAdaptersIT :
 
         /** ACL の Consumer Group が、生の CDC の各パーティションを [offsets] まで処理したことにする(コミット済みのオフセット)。 */
         fun commitAcl(offsets: Long) {
-            val partitions = (0..2).associate { TopicPartition(LegacyChangeConsumer.TOPIC, it) to OffsetAndMetadata(offsets) }
-            admin.alterConsumerGroupOffsets(LegacyChangeConsumer.GROUP_ID, partitions).all().get()
+            val partitions = (0..2).associate { TopicPartition(LegacyChangeHandler.TOPIC, it) to OffsetAndMetadata(offsets) }
+            admin.alterConsumerGroupOffsets(LegacyChangeHandler.GROUP_ID, partitions).all().get()
         }
 
         beforeSpec {
@@ -145,7 +145,7 @@ class ReconcileAdaptersIT :
             admin
                 .createTopics(
                     listOf(
-                        NewTopic(LegacyChangeConsumer.TOPIC, 3, 1.toShort()),
+                        NewTopic(LegacyChangeHandler.TOPIC, 3, 1.toShort()),
                         NewTopic(LegacyOrderEventSchemas.LEGACY_ORDER_CHANGED.name, 3, 1.toShort()),
                     ),
                 ).all()
@@ -242,7 +242,7 @@ class ReconcileAdaptersIT :
                     publisher.delete("J000000002", POSITION).ok()
                     publisher.upsert(order("J000000003", LegacyOrderStatus.ALLOCATED), POSITION).ok()
                     // 生の CDC に 1 件(ACL がそれを処理したことにする)
-                    producer.send(ProducerRecord(LegacyChangeConsumer.TOPIC, 0, "J000000001".toByteArray(), byteArrayOf(1))).get()
+                    producer.send(ProducerRecord(LegacyChangeHandler.TOPIC, 0, "J000000001".toByteArray(), byteArrayOf(1))).get()
                 }
                 commitAcl(1)
 
@@ -258,7 +258,7 @@ class ReconcileAdaptersIT :
                     KafkaProducerSettings(kafka.bootstrapServers, "reconcile-it").toProperties(),
                     ByteArraySerializer(),
                     ByteArraySerializer(),
-                ).use { it.send(ProducerRecord(LegacyChangeConsumer.TOPIC, 1, "J000000004".toByteArray(), byteArrayOf(1))).get() }
+                ).use { it.send(ProducerRecord(LegacyChangeHandler.TOPIC, 1, "J000000004".toByteArray(), byteArrayOf(1))).get() }
                 commitAcl(0)
                 published(
                     SHORT,
