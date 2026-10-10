@@ -32,6 +32,11 @@ P03 で `infra/local/` に ADR-0003 のミドルウェア一式を Docker Compos
 - ダイジェストはマルチアーキテクチャのインデックスのダイジェストとし、**linux/amd64 と linux/arm64 の両方を含む**ものだけを使う(Apple Silicon の開発機と CI の amd64 ランナーで同じ版を使うため)。
 - 版は採用時点の最新の安定版とし、`docker buildx imagetools inspect <image>:<tag>` でダイジェストと対応アーキテクチャを確認して更新する(手順は `infra/local/README.md`)。
 - 例外: Kafka Connect(Debezium)は公開イメージを使わず、`images.env` の `KAFKA_IMAGE` から組み立てる(§9)。
+- **固定の定期確認**(#35): `.github/workflows/pin-check.yml` が毎日、`images.env` の全イメージについて、固定したダイジェストを今も取得できるか(上流での削除)と、タグが別のダイジェストに付け直されていないか(付け直されていれば、新しいダイジェストが linux/amd64 と linux/arm64 を含むか)を確かめる。§9 の成果物(SHA-256 で固定)も同じワークフローで確かめる。
+  - 異常があれば、固定ごとに Issue を作る(タイトル `[pin-check] <変数名>:`。ラベル `type:chore`・`area:infra`)。同じ固定の Issue が開いていれば、新しい値のときだけコメントを足す。本文に `images.env` の行の候補(両方のアーキテクチャを確かめたもの)を書く。
+  - 毎日にしたのは、distroless の `nonroot` のように、上流が頻繁にタグを付け直すイメージがあるため(付け直しても、固定したダイジェストが取得できる間は壊れない。取得できなくなる前に気づく)。
+  - `images.env` と Kafka Connect の Dockerfile を変える PR でも実行し、取得できない・SHA-256 が合わない値を入れたら失敗する(付け直しだけなら成功。上流の変化は PR のせいではない)。
+  - 対応の手順は `infra/local/README.md` の「イメージの更新」。
 
 ### 3. SFTP は linuxserver/openssh-server を使う
 - 当初の候補の `atmoz/sftp` は、2026-09 時点でも amd64 だけのイメージしか公開していない。`emberstack/sftp` は 2024 年以降更新がない。
@@ -106,7 +111,7 @@ Docker のヘルスチェックはコンテナの中で実行されるため、�
 - **例外: JMX exporter は GitHub のリリースから取得する**(P06 ④)。Connect と Debezium のメトリクス(`:9404`)のため、Prometheus の JMX exporter(`jmx_prometheus_javaagent`)を javaagent として載せる。
   - JMX exporter は 1.1 以降、Maven Central に公開されていない(Maven Central の最新は 1.0.1)。成果物は GitHub のリリース(`https://github.com/prometheus/jmx_exporter/releases/download/<版>/jmx_prometheus_javaagent-<版>.jar`)にだけある。CLAUDE.md §2 の「最新の安定版」を満たすため、GitHub から取得する。
   - GitHub のリリースの成果物は、Maven Central と違って差し替えや削除ができる。ただし版と SHA-256 を Dockerfile の `ARG` で固定し、`ADD --checksum` で取得するので、**差し替えられれば組み立てが失敗して検知できる**(黙って別のものを使うことはない)。SHA-256 は、リリースに添付された `.sha256` と、取得したファイルの値の両方で確かめる。
-  - 削除された場合も組み立てが失敗する。固定したもの(images.env のダイジェストと、Dockerfile の成果物)が今も取得できるかの定期確認は Issue #35 で扱う。
+  - 削除された場合も組み立てが失敗する。固定したもの(images.env のダイジェストと、Dockerfile の成果物)が今も取得でき、SHA-256 が合うかは、§2 の定期確認(`pin-check.yml`。#35)が毎日確かめる。組み立ての前に気づける。
 - **Testcontainers(P06 以降の方針)**: 統合テストも同じ Dockerfile から組み立てる。`platform/test-support` の `KafkaConnectContainer` が、docker の CLI(BuildKit)で `infra/local/images/kafka-connect/` を組み立て、build 引数 `KAFKA_IMAGE` に `InfraImages`(§5)が返すダイジェスト固定の名前を渡す(Testcontainers の `ImageFromDockerfile` は BuildKit を使わず、`ADD --checksum` と `COPY --chmod` を組み立てられないため。P06 ③b)。版とチェックサムを Dockerfile の 1 か所に保ち、compose と統合テストでずれないようにする。
 - **版の更新**: Dockerfile の `ARG`(版と SHA-256)を書き換える。SHA-256 は Maven Central(JMX exporter は GitHub のリリース)の `.sha256` と、取得したファイルの値の両方で確かめる(手順は `infra/local/README.md`)。
 
@@ -169,3 +174,4 @@ Docker のヘルスチェックはコンテナの中で実行されるため、�
 - 2026-10-09: P07 ④a で `saga` profile を加えた(注文 Saga の参加者。inventory-migrate・inventory-service。kafka-connect・exporter・schema-publish・kafka-topics も saga で起動する)。参加者の `mem_limit` は 256m(開発機で core + order + saga を同時に動かすため。ADR-0029)。CI の infra の verify にも saga を加えた。
 - 2026-10-09: P07 ④b で saga profile に payment-service・shipping-service(と各 migrate)を加えた。`mem_limit` は inventory と同じ 256m(実測は各 170MiB 前後)。
 - 2026-10-10: 本文を復元した。P06 ⑥b のコミット(696d6e6)で、改訂履歴の 1 行を追記するつもりが、ファイル全体をその 1 行で上書きしていた(32,924 バイト → 383 バイト)。その後の P07 の改訂履歴の追記(2 件)はその上に足されていた。直前の完全な版(b4584fe)に、それ以降の改訂履歴の 3 件を足して戻した。ほかのファイルに同じ上書きがないことを、2026-09-20 以降の履歴で確かめた(大きさが 6 割未満になった変更は、意図した分割・置き換えだけだった)。
+- 2026-10-10: #35 で、固定の定期確認(`.github/workflows/pin-check.yml`・`infra/local/scripts/check-pins.py`)を加えた(§2・§9)。

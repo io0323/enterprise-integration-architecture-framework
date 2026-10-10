@@ -12,3 +12,6 @@ infra/local/data/
 *.log
 .vscode/
 infra/local/certs/
+
+# Python のキャッシュ(infra/local/scripts のテスト)
+__pycache__/
