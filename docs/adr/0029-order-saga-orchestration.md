@@ -116,3 +116,4 @@ Framework は複数のシステムにまたがる業務の更新に Saga を求�
   - メトリクス `eia.saga.transitions{from,to,failure}`・`eia.saga.resends{state}`・`eia.saga.stalled{state}`・`eia.saga.ignored{state,signal}`。アラート `OrderSagaCompensationStalled`(`prometheus/rules/saga.rules.yml`。critical。対応は `docs/runbooks/order-saga.md`)。
   - `sales.order.cancelled.v1` の `reason` は補償の理由(`STOCK_UNAVAILABLE`・`PAYMENT_DECLINED`・`SHIPMENT_REJECTED`・`TIMED_OUT`)。
   - 確かめること: 期限が DB の時計で書かれ判定されること・SKIP LOCKED(`ExposedSagaStoreIT`)、Outbox → Debezium のコマンドと返信による正常・決済の失敗・タイムアウトの補償(`OrderSagaIT`)。
+- 2026-10-10: P07 ⑥ で E2E(`SagaE2E`)とダッシュボード(Grafana の Order — Saga)を入れた。E2E の段の期限は compose と同じ 30 秒(短くしない。タイムアウトのシナリオは inventory-service を止めて作り、期限を過ぎて解放のコマンドが出ることを待つので、待ち時間は期限の長さで決まる)。CI の e2e は `make up PROFILE="order cdc saga"`。

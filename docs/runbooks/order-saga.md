@@ -11,6 +11,7 @@
 | `EventConsumerStalled` / `EventConsumerUnavailable`(`order.saga`) | warning | [返信を読めないとき](#返信を読めないとき) |
 
 ## まず見るもの
+- Grafana の **Order — Saga**(http://localhost:19300/d/eiaf-order-saga): 終端と補償の理由・送り直し・上限を超えた送り直し・返信とコマンドの処理・lag・DLQ。
 - Saga の状態(order の DB。読み取りだけ。値は個人情報を含まない):
   ```sql
   -- 終わっていない Saga を、期限の古い順に
