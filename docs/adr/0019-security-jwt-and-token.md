@@ -196,3 +196,10 @@ P04a ③ で `platform/security` を作る。Framework 12.1 は、受信側で�
 - 2026-10-01: `JwtVerifierConfig.requireClientId` を追加した(既定は無効。既存の利用者の振る舞いは変わらない)。有効にすると、`azp` も `client_id` もないトークンを `missing_client_id` で拒否し、401 `invalid_token` を返す。呼び出し元のクライアントでデータを分ける API(Idempotency-Key の範囲。ADR-0022 §3)で有効にする。order-service は有効にする(P05 ④b-1)。
 - 2026-10-01: P05 ⑤c で、Gateway(APISIX)でも JWT を検証することにした(署名・exp・iss・aud・azp。スコープはサービスだけが確かめる。ADR-0023 §2)。Rate Limit の検証用に、2 つ目の client-credentials クライアント `eiaf-e2e-b` を realm に加えた(スコープの扱いは §8 のまま)。
 - 2026-10-02: P05 ⑨ で、`JwtVerifier.verify` を共有の `Dispatchers.IO` から、その上限つきの view(`limitedParallelism(16)`。`JwksConfig.verificationParallelism`)に移した(§3「検証を動かすスレッド」・Consequences)。IdP が遅いときに、同じ IO のスレッドで動く DB の処理が待たされることを計測で確かめた(`docs/reports/p05-jwks-dispatcher.md`)。仮想スレッドの方式も効き、ピン留めも起きなかったが、JDK 21 での版への依存を避けて採らなかった。あわせて、JWKS の取得に失敗したとき、例外の型の連なり(値は出さない)を WARN に残すようにした(取得の失敗の原因を調べられるように。取り直しの頻度の制限の中では取得しないので、回数は限られる)。
+- 2026-10-10: #74 で、**起動時に JWKS を先に取得し、取得できるまでサービスの `/health/ready` を 503 にする** ことにした(`JwtVerifier.prefetch`・`prefetchUntilLoaded`・`isReady`。order-service)。
+  - 原因: P07 の検証(2026-10-09)で、開発機の負荷が高いときに、最初のリクエストでの JWKS の取得が `JWKSetRetrievalException <- SocketTimeoutException` になったことを確かめた(Keycloak の応答が読み取りのタイムアウトの 2 秒を超えた)。取得に失敗すると、取り直しの頻度の制限(§3。30 秒)の間は取り直さないので、その間のリクエストはすべて 503 になっていた。
+  - 先読みは検証と同じ JWKS のキャッシュ(Nimbus の `JWKSource`)を通すので、取得できればリクエストの中では IdP を待たない。先読みの失敗も頻度の制限に数えられるので、繰り返しの間隔(2 秒)ごとの呼び出しのうち、IdP に問い合わせるのは制限の間隔ごとに 2 回まで(Nimbus の `RateLimitedJWKSetSource`)。
+  - 一度取得した後は、IdP が止まっても ready のまま(§3 のキャッシュと `outageTolerant` で検証を続け、取得できないときの 503 はリクエストごと)。readiness を IdP の状態に連動させると、IdP の障害で全部のインスタンスがトラフィックから外れるため。
+  - 読み取りのタイムアウト(2 秒)は変えない。リクエストの中で JWKS を取得するのは、未知の `kid`(鍵のローテーション)のときだけになる。
+  - 確かめること: `JwksPrefetchSpec`、`OrderAppIT` の「IdP の応答が遅く JWKS を取得できない間は /health/ready が 503…」。
+

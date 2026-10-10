@@ -61,9 +61,15 @@ internal class AppEnvironment(
     private val appPassword = randomHex()
     private val databases = AtomicInteger()
     private val key: RSAKey = RSAKeyGenerator(2048).keyID("test-key").generate()
+
+    /** true の間、JWKS の応答を order-service の読み取りのタイムアウト(2 秒)より遅らせる(起動の直後に IdP が遅い場合。#74)。 */
+    @Volatile
+    var jwksSlow: Boolean = false
+
     private val jwks: HttpServer =
         HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
             createContext("/jwks") { exchange ->
+                if (jwksSlow) Thread.sleep(JWKS_SLOW_MILLIS)
                 val body = JWKSet(key.toPublicJWK()).toString().toByteArray()
                 exchange.sendResponseHeaders(200, body.size.toLong())
                 exchange.responseBody.use { it.write(body) }
@@ -195,3 +201,5 @@ internal class AppEnvironment(
         private fun randomHex(): String = HexFormat.of().formatHex(ByteArray(16).also(SecureRandom()::nextBytes))
     }
 }
+
+private const val JWKS_SLOW_MILLIS = 3_000L

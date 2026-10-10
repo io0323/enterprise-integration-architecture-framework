@@ -11,6 +11,7 @@ import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import kotlinx.coroutines.delay
 import java.net.http.HttpResponse
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 
 private const val BODY =
@@ -109,6 +110,32 @@ class OrderAppIT :
                     // 受け付けは監査にも記録する(再送は記録しない。ADR-0017)
                     environment.count(db, "SELECT count(*) FROM audit.audit_log WHERE action = 'order.create'") shouldBe 1
                 } finally {
+                    server.stop()
+                }
+            }
+        }
+
+        context("JWKS の先読み(#74。ADR-0019 改訂履歴)") {
+            test("IdP の応答が遅く JWKS を取得できない間は /health/ready が 503。取得できれば 200 で、その後 IdP が遅くなっても受け付ける") {
+                val db = environment.newDatabase()
+                OrderCommands.run(listOf("migrate"), environment.migrateEnv(db)) shouldBe OrderCommands.OK
+                environment.jwksSlow = true
+                val server = OrderServer.start(environment.serveEnv(db)).ok()
+                try {
+                    // 先読みがタイムアウトしている間は、トラフィックを受けない(最初のリクエストで JWKS の取得を待たせない)
+                    Thread.sleep(6_000)
+                    environment.plain.get("http://127.0.0.1:${server.healthPort}/health/ready").statusCode() shouldBe 503
+
+                    // IdP が応答するようになれば、取り直しの頻度の制限(30 秒)の後に先読みが成功して ready になる
+                    environment.jwksSlow = false
+                    environment.awaitReady(server, 60.seconds)
+
+                    // 取得した JWKS で検証する(リクエストの中で IdP を待たない)
+                    environment.jwksSlow = true
+                    environment.place(server, key = "key-jwks").statusCode() shouldBe 201
+                    environment.plain.get("http://127.0.0.1:${server.healthPort}/health/ready").statusCode() shouldBe 200
+                } finally {
+                    environment.jwksSlow = false
                     server.stop()
                 }
             }

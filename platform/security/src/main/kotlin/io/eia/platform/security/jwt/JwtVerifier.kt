@@ -5,6 +5,8 @@ import com.nimbusds.jose.JOSEObjectType
 import com.nimbusds.jose.JWSAlgorithm
 import com.nimbusds.jose.KeySourceException
 import com.nimbusds.jose.crypto.factories.DefaultJWSVerifierFactory
+import com.nimbusds.jose.jwk.JWKMatcher
+import com.nimbusds.jose.jwk.JWKSelector
 import com.nimbusds.jose.jwk.source.JWKSource
 import com.nimbusds.jose.jwk.source.JWKSourceBuilder
 import com.nimbusds.jose.jwk.source.RateLimitReachedException
@@ -23,6 +25,7 @@ import io.eia.shared.kernel.flatMap
 import io.eia.shared.kernel.ok
 import io.opentelemetry.api.metrics.Meter
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import java.io.Closeable
@@ -30,6 +33,7 @@ import java.security.Key
 import java.text.ParseException
 import kotlin.time.Clock
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * アクセストークン(JWT)を検証する(Framework 12.1。CLAUDE.md §5「JWT は iss・aud・exp 検証」。ADR-0019)。
@@ -76,7 +80,6 @@ public class JwtVerifier internal constructor(
 
     private val algorithms: Set<JWSAlgorithm> = config.algorithms.map(JWSAlgorithm::parse).toSet()
     private val keySelector = JWSVerificationKeySelector(algorithms, jwkSource)
-    private val verifierFactory = DefaultJWSVerifierFactory()
 
     /**
      * 直前の鍵の取得が失敗したか(JWKS を取得できず、使える JWKS もなかったか)。
@@ -85,12 +88,43 @@ public class JwtVerifier internal constructor(
      */
     @Volatile
     private var keysUnavailable: Boolean = false
+
+    /** 一度でも JWKS を取得できたか([prefetch] か検証で)。取得の後は、IdP が止まってもキャッシュで検証できる(ADR-0019 §3)。 */
+    @Volatile
+    private var keysLoaded: Boolean = false
+
+    /**
+     * 検証を受け付けられるか(JWKS を一度でも取得できたか)。サービスの `/health/ready` に使う(#74)。
+     * 起動の直後に IdP の応答が遅いと、最初のリクエストで JWKS の取得がタイムアウトし、取り直しの頻度の制限の間 503 が続くため、
+     * 起動時に [prefetchUntilLoaded] で取得し終えるまでトラフィックを受けない。
+     */
+    public val isReady: Boolean get() = keysLoaded
+
     private val recorder = JwtRejectionRecorder(meter)
     private val dispatcher = Dispatchers.IO.limitedParallelism(config.jwks.verificationParallelism)
 
     /** [token](`Authorization: Bearer` の値)を検証する。 */
     public suspend fun verify(token: String): Result<VerifiedToken, JwtVerificationError> =
         withContext(dispatcher) { verifyBlocking(token) }
+
+    /**
+     * JWKS を取得してキャッシュに入れる。取得できれば true。失敗は WARN(例外の型の連なりだけ)を残して false。
+     * 取り直しの頻度の制限([JwksConfig.rateLimitMinInterval])の中では取得せずに false を返す(失敗した取得も 1 回と数えるため)。
+     */
+    public suspend fun prefetch(): Boolean =
+        withContext(dispatcher) {
+            try {
+                jwkSource.get(JWKSelector(JWKMatcher.Builder().build()), null)
+                keysLoaded = true
+                keysUnavailable = false
+                true
+            } catch (_: RateLimitReachedException) {
+                false
+            } catch (e: KeySourceException) {
+                logger.warn("JWKS を取得できません(起動時の先読み。error.type={})", causeTypes(e))
+                false
+            }
+        }
 
     internal fun verifyBlocking(token: String): Result<VerifiedToken, JwtVerificationError> {
         val result = check(token)
@@ -158,7 +192,10 @@ public class JwtVerifier internal constructor(
     /** JWKS から鍵を選ぶ。JWKS を取得できず検証できないときは null。 */
     private fun selectKeys(jwt: SignedJWT): List<Key>? =
         try {
-            keySelector.selectJWSKeys(jwt.header, null).also { keysUnavailable = false }
+            keySelector.selectJWSKeys(jwt.header, null).also {
+                keysUnavailable = false
+                keysLoaded = true
+            }
         } catch (_: RateLimitReachedException) {
             // 取り直そうとしたが、最小の間隔の中だった(KeySourceException の子なので先に捕まえる)。
             // - 直前の取得が失敗していた(IdP が止まり、使える JWKS がない): 検証できないので null(503)
@@ -170,17 +207,6 @@ public class JwtVerifier internal constructor(
             logger.warn("JWKS を取得できません(error.type={})", causeTypes(e))
             keysUnavailable = true
             null
-        }
-
-    private fun verifies(
-        jwt: SignedJWT,
-        key: Key,
-    ): Boolean =
-        try {
-            jwt.verify(verifierFactory.createJWSVerifier(jwt.header, key))
-        } catch (_: JOSEException) {
-            // 鍵の型とアルゴリズムが合わないなど。この鍵では検証できない
-            false
         }
 
     /**
@@ -230,6 +256,9 @@ public class JwtVerifier internal constructor(
 
         private const val MAX_CAUSES = 5
 
+        /** 先読みの繰り返しの間隔。取り直しの頻度の制限の中の呼び出しは、IdP に問い合わせずに終わる。 */
+        internal val PREFETCH_INTERVAL = 2.seconds
+
         /** トークンの文字列の長さの上限。解析の前に弾き、巨大な入力の解析に時間とメモリを使わせない。 */
         public const val MAX_TOKEN_LENGTH: Int = 8 * 1024
 
@@ -265,3 +294,21 @@ public class JwtVerifier internal constructor(
 }
 
 private fun reject(reason: JwtRejectionReason): Result<Nothing, JwtVerificationError> = err(JwtVerificationError.InvalidToken(reason))
+
+/** JWKS を取得できるまで、[interval] ごとに [JwtVerifier.prefetch] を繰り返す(起動時。取得できるまで [JwtVerifier.isReady] は false)。 */
+public suspend fun JwtVerifier.prefetchUntilLoaded(interval: Duration = JwtVerifier.PREFETCH_INTERVAL) {
+    while (!prefetch()) delay(interval)
+}
+
+private val verifierFactory = DefaultJWSVerifierFactory()
+
+private fun verifies(
+    jwt: SignedJWT,
+    key: Key,
+): Boolean =
+    try {
+        jwt.verify(verifierFactory.createJWSVerifier(jwt.header, key))
+    } catch (_: JOSEException) {
+        // 鍵の型とアルゴリズムが合わないなど。この鍵では検証できない
+        false
+    }
