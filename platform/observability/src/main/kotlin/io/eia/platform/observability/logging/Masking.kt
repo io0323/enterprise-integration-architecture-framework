@@ -122,9 +122,33 @@ public object Masking {
     private fun limitInput(text: String): String {
         if (text.length <= MAX_INPUT_LENGTH) return text
         val half = MAX_INPUT_LENGTH / 2
+        val headEnd = headEnd(text, half)
         val tailStart = text.indexOf('\n', text.length - half).let { if (it < 0) text.length else it + 1 }
-        return "${text.take(half)}…[truncated ${tailStart - half} chars]…\n${text.substring(tailStart)}"
+        return "${text.take(headEnd)}…[truncated ${tailStart - headEnd} chars]…\n${text.substring(tailStart)}"
     }
+
+    /**
+     * 先頭側の終わり(#33)。[limit] の位置で語の途中を切ると、切れ目にかかった値(メールアドレス・電話番号・カード番号・JWT)が
+     * 崩れた形で残り、どの規則にも当たらずに出力されるため、[limit] の直前の区切り文字の後ろで切る(値を丸ごと捨てる)。
+     * 数字の間の空白は、カード番号・電話番号の桁の区切りなので区切り文字にしない。区切り文字がなければ、先頭側は空にする。
+     * 後ろへ戻る幅は最大で [limit](入力の長さに比例)。
+     */
+    private fun headEnd(
+        text: String,
+        limit: Int,
+    ): Int {
+        var i = limit - 1
+        while (i >= 0) {
+            val c = text[i]
+            val betweenDigits = c == ' ' && i > 0 && text[i - 1].isDigit() && text[i + 1].isDigit()
+            if (c in HEAD_DELIMITERS && !betweenDigits) return i + 1
+            i--
+        }
+        return 0
+    }
+
+    /** 先頭側を切る位置にしてよい区切り文字。値の一部になる文字(`@` `.` `-` `+` `_` `=` など)は含めない。 */
+    private val HEAD_DELIMITERS = setOf(' ', '\t', '\n', '\r', ',', ';', '"', '\'', '<', '>', '(', ')', '[', ']', '{', '}', '|', '`')
 
     /** 伏せた後の文字列を切り詰める。値はすでに伏せてあるので、どこで切っても秘密情報は出ない。 */
     private fun truncate(masked: String): String {
