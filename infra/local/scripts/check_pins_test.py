@@ -39,6 +39,50 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(sorted(names), ["APICURIO_CONVERTER_SHA256", "DEBEZIUM_POSTGRES_SHA256", "JMX_EXPORTER_SHA256"])
 
 
+class RetryTest(unittest.TestCase):
+    def setUp(self):
+        self.original = (pins.RETRY_DELAYS, pins.fetch_sha256)
+        pins.RETRY_DELAYS = [0, 0]
+
+    def tearDown(self):
+        pins.RETRY_DELAYS, pins.fetch_sha256 = self.original
+
+    def fetches(self, *results):
+        calls = iter(results)
+        pins.fetch_sha256 = lambda url: next(calls)
+
+    def test_transient_failures_are_retried(self):
+        # 1 回目は HTTP 503、2 回目は誤った応答、3 回目で正しいファイル → 異常にしない
+        self.fetches((None, "HTTP 503"), ("d" * 64, None), ("e" * 64, None))
+        finding = pins.check_artifact("X_SHA256", "https://example.test/x", "e" * 64)
+        self.assertTrue(finding.ok)
+
+    def test_persistent_failure_is_reported_with_the_status(self):
+        self.fetches((None, "HTTP 429"), (None, "HTTP 429"), (None, "HTTP 429"))
+        finding = pins.check_artifact("X_SHA256", "https://example.test/x", "e" * 64)
+        self.assertEqual(finding.problems, ["取得できない(HTTP 429。3 回試した)"])
+        self.assertTrue(finding.broken)
+
+    def test_persistent_mismatch_is_reported_with_a_candidate(self):
+        self.fetches(("d" * 64, None), ("d" * 64, None), ("d" * 64, None))
+        finding = pins.check_artifact("X_SHA256", "https://example.test/x", "e" * 64)
+        self.assertIn("SHA-256 が固定した値と合わない", finding.problems[0])
+        self.assertEqual(finding.current, "d" * 64)
+        self.assertTrue(finding.candidate.startswith("ARG X_SHA256=" + "d" * 64))
+
+
+class EnvironmentTest(unittest.TestCase):
+    def image(self, current):
+        return pins.Finding("I", "image", "r:t@" + DIGEST, [] if current else ["タグ t を取得できない"], current)
+
+    def test_most_images_unreachable_is_an_environment_problem(self):
+        self.assertTrue(pins.environment_broken([self.image(None), self.image(None), self.image(DIGEST)]))
+        self.assertTrue(pins.environment_broken([self.image(None), self.image(DIGEST)]))
+
+    def test_a_few_unreachable_images_are_reported(self):
+        self.assertFalse(pins.environment_broken([self.image(None), self.image(DIGEST), self.image(DIGEST)]))
+
+
 class FakeGh:
     def __init__(self, issues):
         self.issues = issues
