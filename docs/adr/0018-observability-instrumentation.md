@@ -137,3 +137,5 @@ P06・P07 で自前で実装する範囲(`platform/messaging-kafka` / `platform/
 - 2026-10-01: P05 ⑤c で、Gateway が外部の `traceparent` / `tracestate` を捨て、ゲートウェイでトレースを始めることにした(ADR-0023 §4)。APISIX の `opentelemetry` が `plugin_metadata` を読まずに何もしていなかった不具合を直し、Tempo に apisix の span が記録されることを `make verify PROFILE=order` で確かめるようにした。
 - 2026-10-01: P05 ⑥a で、RED のダッシュボード(`Order API — RED`)を Grafana の provisioning で加えた(`infra/local/grafana/provisioning/dashboards/`)。式は §5 の属性(`http_route`・`http_response_status_code`・`error_type`)と、OTLP から Prometheus への名前の変換(`http.server.request.duration` → `http_server_request_duration_seconds_*`、カウンタは `_total`)に合わせた。
 - 2026-10-01: P05 ⑦a の前に、応答を返し始めた後に予算を超えた要求を `error.type=timeout` で数えるのをやめた(§5)。200 を受け取ったクライアントの要求がエラーに見えていたため。超過は `eia.http.server.deadline_overruns` と `eia.deadline.overrun` で別に数える。
+- 2026-10-10: #33 で、入力の上限(64KB)を超えたときの先頭側の切り方を直した。以前は 32KB の位置で語の途中でも切っていたので、切れ目にかかった値(メールアドレス・電話番号・カード番号・JWT)の断片が崩れた形で残り、どの規則にも当たらずに出力されることがあった(切れ目の後に改行がなく、末尾側が捨てられる場合)。先頭側は、切れ目の直前の区切り文字(空白・改行・`,` `;` 引用符・括弧など)の後ろで切り、値を丸ごと捨てる。数字の間の空白は、カード番号・電話番号の桁の区切りなので区切り文字にしない。区切り文字がなければ先頭側は空にする。戻る幅は最大 32KB で、処理時間は入力長に比例したまま。確かめること: `MaskingSpec` の「#33: …」。
+

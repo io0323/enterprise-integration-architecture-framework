@@ -2,11 +2,13 @@ package io.eia.platform.observability.logging
 
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.comparables.shouldBeLessThan
 import io.kotest.matchers.doubles.shouldBeLessThan
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 
 private const val JWT =
     "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJvcmRlci1zZXJ2aWNlIiwiYXVkIjoib3JkZXItYXBpIn0.c2lnbmF0dXJlLXZhbHVl"
@@ -217,6 +219,46 @@ class MaskingSpec :
                 rest.length shouldBe half
                 masked shouldNotContain "cretV4lue"
                 masked.endsWith(trailer) shouldBe true
+            }
+
+            // #33: 入力の上限の先頭側の切れ目(MAX_INPUT_LENGTH / 2)にかかった値の断片を残さない。
+            // 切れ目の後に改行がないと末尾側は捨てられ、先頭側の終わりが最後の切り詰めの後も出力に残る
+            val values =
+                mapOf(
+                    "メールアドレス" to ("hanako.sato@example.com" to listOf("hanako", "sato@", "@example")),
+                    "電話番号(ハイフン)" to ("090-1234-5678" to listOf("090-", "1234-5")),
+                    "電話番号(空白・国番号)" to ("+81 90 1234 5678" to listOf("+81 90", "90 1234")),
+                    "カード番号(区切りなし)" to ("4111111111111111" to listOf("41111111")),
+                    "カード番号(空白区切り)" to ("4111 1111 1111 1111" to listOf("4111 1111", "1111 1111 1111")),
+                    "JWT" to (
+                        "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEifQ.c2lnbmF0dXJlLXNpZ25hdHVyZS1zaWduYXR1cmU" to
+                            listOf("eyJhbGciOiJS", "eyJzdWIi")
+                    ),
+                )
+            values.forEach { (name, case) ->
+                val (value, fragments) = case
+                test("#33: 入力の上限の切れ目にかかった値の断片を残さない: $name") {
+                    val half = Masking.MAX_INPUT_LENGTH / 2
+                    // 切れ目が値の 1 文字目の後・中央・最後の 1 文字の前に来るように置く
+                    listOf(1, value.length / 2, value.length - 1).forEach { inside ->
+                        val prefix = "word ".repeat(half / 5 + 1).take(half - inside - 1) + " "
+                        val input = prefix + value + " " + "y".repeat(Masking.MAX_INPUT_LENGTH)
+                        val masked = Masking.mask(input)
+
+                        fragments.forEach { fragment -> masked shouldNotContain fragment }
+                        masked shouldContain "[truncated "
+                    }
+                }
+            }
+
+            test("#33: 切れ目の前に区切り文字がなければ、先頭側の連続を丸ごと捨てる(処理は入力長に比例)") {
+                val input = "a".repeat(Masking.MAX_INPUT_LENGTH) + "hanako.sato@example.com" + "b".repeat(Masking.MAX_INPUT_LENGTH)
+                val started = TimeSource.Monotonic.markNow()
+                val masked = Masking.mask(input)
+
+                masked shouldNotContain "aaaa"
+                masked shouldNotContain "hanako"
+                started.elapsedNow() shouldBeLessThan 1.seconds
             }
 
             test("大きな配列(4,096 文字超)の値も末尾まで伏せる") {
