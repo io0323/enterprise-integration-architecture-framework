@@ -11,10 +11,12 @@
   4. 取得したファイルの SHA-256 が固定した値と一致するか(差し替えの検知)。
 
 使い方:
-  check-pins.py [--summary FILE] [--issues] [--simulate] [--fail-on-broken]
+  check-pins.py [--summary FILE] [--create-issues] [--simulate] [--fail-on-broken]
     --summary FILE    結果の表(Markdown)を FILE に追記する(GitHub の Step Summary)
-    --issues          異常ごとに Issue を作る(同じ固定の Issue が開いていれば、新しい値のときだけコメントを足す)。gh を使う
-    --simulate        固定した値を、取得できない値に書き換えて確かめる(Issue の作成の確認用。タイトルに [simulated] を付ける)
+    --create-issues   異常ごとに Issue を作る(同じ固定の Issue が開いていれば、新しい値のときだけコメントを足す)。gh を使う。
+                      付けなければ、作るはずの Issue(作る / コメントする / 報告済み)を表示するだけで、何も作らない
+    --simulate        固定した値を、取得できない値に書き換えて確かめる(確認用。タイトルに [simulated] を付ける)。
+                      --create-issues を付けなければ、本物の Issue は作らない
     --fail-on-broken  取得できない・SHA-256 が合わないものがあれば終了コード 1(PR の確認用。付け直しだけなら 0)
 
 取得の一時的な失敗は、待ってやり直してから判断する(RETRY_DELAYS)。イメージの半分以上でタグを取得できなければ、
@@ -227,8 +229,11 @@ def gh(*args: str) -> str:
     return subprocess.run(["gh", *args], check=True, capture_output=True, text=True).stdout
 
 
-def report_issue(f: Finding, simulate: bool) -> str:
-    """同じ固定の Issue が開いていれば、新しい値のときだけコメントを足す。なければ作る。"""
+def report_issue(f: Finding, simulate: bool, create: bool) -> str:
+    """同じ固定の Issue が開いていれば、新しい値のときだけコメントを足す。なければ作る。
+
+    [create] が False なら、開いている Issue を読むだけで、作らず・コメントせずに、行う予定のことを返す(表示だけ)。
+    """
     prefix = f"{TITLE_PREFIX}{'[simulated]' if simulate else ''} {f.name}:"
     found = json.loads(gh("issue", "list", "--state", "open", "--label", "area:infra", "--search", f'"{prefix}" in:title',
                           "--json", "number,title,body,comments", "--limit", "20"))
@@ -240,11 +245,25 @@ def report_issue(f: Finding, simulate: bool) -> str:
         marker = f.current or " / ".join(f.problems)
         if marker in seen:
             return f"#{issue['number']}(報告済み)"
+        if not create:
+            return f"#{issue['number']} にコメントする(表示だけ)"
         gh("issue", "comment", str(issue["number"]), "--body", body)
         return f"#{issue['number']}(コメントを追加)"
     title = f"{prefix} 固定した{'イメージ' if f.kind == 'image' else '成果物'}を確認する"
+    if not create:
+        return f"作る(表示だけ): {title}"
     url = gh("issue", "create", "--title", title, "--label", LABELS, "--body", body).strip()
     return f"#{url.rsplit('/', 1)[-1]}(作成)"
+
+
+def planned_issue(f: Finding, simulate: bool, create: bool) -> str:
+    """[report_issue] の結果。表示だけのときに gh が使えなければ(未認証など)、開いている Issue を確かめずに予定だけを返す。"""
+    try:
+        return report_issue(f, simulate, create)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        if create:
+            raise
+        return "作る(表示だけ。開いている Issue は gh が使えないため確かめていない)"
 
 
 def environment_broken(findings: list[Finding]) -> bool:
@@ -257,7 +276,7 @@ def environment_broken(findings: list[Finding]) -> bool:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--summary")
-    parser.add_argument("--issues", action="store_true")
+    parser.add_argument("--create-issues", action="store_true")
     parser.add_argument("--simulate", action="store_true")
     parser.add_argument("--fail-on-broken", action="store_true")
     args = parser.parse_args(argv)
@@ -285,11 +304,16 @@ def main(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return 2
+    plan = ["", "### Issue" + ("" if args.create_issues else "(表示だけ。作らない)"), ""]
     for f in problems:
         print(f"{f.name}: {' / '.join(f.problems)}", file=sys.stderr)
-        if args.issues:
-            print(f"  Issue: {report_issue(f, args.simulate)}", file=sys.stderr)
+        action = planned_issue(f, args.simulate, args.create_issues)
+        print(f"  Issue: {action}", file=sys.stderr)
+        plan.append(f"- `{f.name}`: {action}")
     print(f"確認 {len(findings)} 件、異常 {len(problems)} 件", file=sys.stderr)
+    if args.summary and problems:
+        with open(args.summary, "a", encoding="utf-8") as out:
+            out.write("\n".join(plan) + "\n")
     return 1 if args.fail_on_broken and any(f.broken for f in problems) else 0
 
 
