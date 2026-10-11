@@ -1,5 +1,7 @@
 """check-pins.py の単体テスト(ネットワークと gh を使わない)。`python3 -I infra/local/scripts/check_pins_test.py`。"""
+import contextlib
 import importlib.util
+import io
 import json
 import sys
 import unittest
@@ -103,12 +105,12 @@ class ReportIssueTest(unittest.TestCase):
         f.candidate = f"KAFKA_IMAGE=apache/kafka:4.3.1@{current}"
         return f
 
-    def run_with(self, issues, finding, simulate=False):
+    def run_with(self, issues, finding, simulate=False, create=True):
         fake = FakeGh(issues)
         original = pins.gh
         pins.gh = fake
         try:
-            return pins.report_issue(finding, simulate), fake.calls
+            return pins.report_issue(finding, simulate, create), fake.calls
         finally:
             pins.gh = original
 
@@ -130,11 +132,94 @@ class ReportIssueTest(unittest.TestCase):
         self.assertEqual(result, "#7(報告済み)")
         self.assertFalse(any(c[:2] in (("issue", "create"), ("issue", "comment")) for c in calls))
 
+    def test_without_create_nothing_is_created_or_commented(self):
+        # 表示だけ: 開いている Issue を読むだけで、作らず・コメントしない
+        result, calls = self.run_with([], self.finding(), create=False)
+        self.assertEqual(result, "作る(表示だけ): [pin-check] KAFKA_IMAGE: 固定したイメージを確認する")
+        self.assertEqual([c[:2] for c in calls], [("issue", "list")])
+
+        open_issue = {"number": 7, "title": "[pin-check] KAFKA_IMAGE: 固定したイメージを確認する", "body": "old", "comments": []}
+        result, calls = self.run_with([open_issue], self.finding(), create=False)
+        self.assertEqual(result, "#7 にコメントする(表示だけ)")
+        self.assertEqual([c[:2] for c in calls], [("issue", "list")])
+
+    def test_plan_without_gh_does_not_fail(self):
+        def missing(*args):
+            raise FileNotFoundError("gh")
+
+        original = pins.gh
+        pins.gh = missing
+        try:
+            self.assertIn("表示だけ", pins.planned_issue(self.finding(), True, False))
+            with self.assertRaises(FileNotFoundError):
+                pins.planned_issue(self.finding(), True, True)
+        finally:
+            pins.gh = original
+
     def test_simulated_issues_do_not_mix_with_real_ones(self):
         real = {"number": 7, "title": "[pin-check] KAFKA_IMAGE: 固定したイメージを確認する", "body": "", "comments": []}
         result, calls = self.run_with([real], self.finding(), simulate=True)
         self.assertEqual(result, "#123(作成)")
         self.assertTrue(any("[pin-check][simulated] KAFKA_IMAGE: 固定したイメージを確認する" in c for c in calls))
+
+
+
+class SimulateTest(unittest.TestCase):
+    """main の simulate: 書き換えた 2 つ(1 つ目のイメージと成果物)だけを報告し、既定では Issue を作らない(ネットワークは使わない)。"""
+
+    def setUp(self):
+        images = pins.parse_images(pins.IMAGES_ENV.read_text())
+        artifacts = [a for path in pins.DOCKERFILES for a in pins.parse_artifacts(path.read_text())]
+        digests = {f"{repo}:{tag}": digest for _, repo, tag, digest in images}
+        pinned = {digest for *_, digest in images}
+        checksums = {url: sha for _, url, sha in artifacts}
+        manifest = lambda digest: {  # noqa: E731
+            "digest": digest,
+            "manifests": [{"platform": {"os": "linux", "architecture": a}} for a in ("amd64", "arm64")],
+        }
+
+        def imagetools(ref):
+            if "@" in ref:
+                return manifest(ref.split("@")[1]) if ref.split("@")[1] in pinned else None
+            return manifest(digests[ref])
+
+        self.original = (pins.imagetools, pins.fetch_sha256, pins.gh, pins.RETRY_DELAYS)
+        pins.imagetools = imagetools
+        pins.fetch_sha256 = lambda url: (checksums[url], None)
+        self.gh = FakeGh([])
+        pins.gh = self.gh
+        pins.RETRY_DELAYS = []
+        self.first_image = images[0][0]
+        self.first_artifact = artifacts[0][0]
+
+    def tearDown(self):
+        pins.imagetools, pins.fetch_sha256, pins.gh, pins.RETRY_DELAYS = self.original
+
+    def run_main(self, *argv):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            code = pins.main(list(argv))
+        return code, err.getvalue()
+
+    def test_simulate_reports_only_the_two_rewritten_pins_without_creating_issues(self):
+        code, err = self.run_main("--simulate")
+        self.assertEqual(code, 0)
+        reported = [line.split(":")[0] for line in err.splitlines() if line and not line.startswith(" ") and ":" in line]
+        self.assertEqual(reported, [self.first_image, self.first_artifact])
+        self.assertIn("確認 22 件、異常 2 件", err)
+        self.assertEqual(err.count("作る(表示だけ): [pin-check][simulated]"), 2)
+        self.assertEqual({c[:2] for c in self.gh.calls}, {("issue", "list")})
+
+    def test_simulate_creates_issues_only_when_asked(self):
+        code, err = self.run_main("--simulate", "--create-issues")
+        self.assertEqual(code, 0)
+        self.assertEqual(sum(1 for c in self.gh.calls if c[:2] == ("issue", "create")), 2)
+
+    def test_without_simulate_everything_is_ok(self):
+        code, err = self.run_main("--create-issues")
+        self.assertEqual(code, 0)
+        self.assertIn("確認 22 件、異常 0 件", err)
+        self.assertEqual(self.gh.calls, [])
 
 
 if __name__ == "__main__":
