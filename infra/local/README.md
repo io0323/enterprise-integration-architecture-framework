@@ -167,7 +167,8 @@ curl -s -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token
 
 - 取得の一時的な失敗(Maven Central・レジストリの 4xx/5xx・誤った応答)は、待ってやり直してから判断する(3 回)。イメージの半分以上でタグを取得できないときは、確認の環境(docker・ネットワーク)の問題として失敗で終わり、Issue は作らない。
 - Issue はタイトル `[pin-check] <変数名>:` で、固定ごとに 1 つ。開いている間は、新しい値のときだけコメントが足される。更新の PR で閉じる(`Closes #<番号>`)。
-- Issue の作成を確かめるときは、手動の実行で `simulate` を有効にする(1 つ目のイメージと成果物を取得できない値に書き換える。タイトルに `[simulated]` が付くので、確かめた後に閉じる)。
+- Issue を作るのは定期の実行だけ。手動の実行は、既定では作るはずの Issue(作る / コメントする / 報告済み)を Step Summary に表示するだけで、`create_issues` を有効にしたときだけ作る。
+- 確認の仕組みそのものを確かめるときは、手動の実行で `simulate` を有効にする(1 つ目のイメージと成果物を取得できない値に書き換える)。既定どおり `create_issues` は無効のままにし、表示だけで確かめる。Issue の作成と重複の防止は、gh を差し替えた単体テスト(`check_pins_test.py`)で確かめている。
 
 ### Kafka Connect(Debezium)のイメージ
 

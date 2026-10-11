@@ -6,7 +6,11 @@ on:
   workflow_dispatch:
     inputs:
       simulate:
-        description: 固定した値を取得できない値に書き換えて確かめる(Issue の作成の確認用。タイトルに [simulated] が付く)
+        description: 1 つ目のイメージと成果物を取得できない値に書き換えて確かめる(確認用。タイトルに [simulated] が付く)
+        type: boolean
+        default: false
+      create_issues:
+        description: 本物の Issue を作る・コメントする(既定は、作るはずの Issue を表示するだけ)
         type: boolean
         default: false
   # 固定を変える PR では、取得できない・SHA-256 が合わない値を入れていないかを確かめる(Issue は作らない)
@@ -25,7 +29,8 @@ concurrency:
 
 # 固定したイメージのダイジェストと、Kafka Connect の成果物の SHA-256 の定期確認(ADR-0016 §2・§9。#35)。
 # - 取得できない(上流で削除された)・タグが付け直された・成果物の SHA-256 が合わない、を検知する。
-# - 定期・手動の実行では、異常ごとに Issue を作る(同じ固定の Issue が開いていれば、新しい値のときだけコメントを足す)。
+# - 定期の実行では、異常ごとに Issue を作る(同じ固定の Issue が開いていれば、新しい値のときだけコメントを足す)。
+#   手動の実行は、create_issues を有効にしたときだけ作る。既定は、作るはずの Issue を Step Summary に表示するだけ。
 # 対応の手順は infra/local/README.md の「イメージの更新」。アクションは ci.yml と同じくコミット SHA で固定する。
 jobs:
   pr:
@@ -57,7 +62,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SIMULATE: ${{ inputs.simulate }}
+          CREATE_ISSUES: ${{ github.event_name == 'schedule' || inputs.create_issues }}
         run: |
-          args=(--summary "$GITHUB_STEP_SUMMARY" --issues)
+          args=(--summary "$GITHUB_STEP_SUMMARY")
+          if [ "$CREATE_ISSUES" = "true" ]; then args+=(--create-issues); fi
           if [ "$SIMULATE" = "true" ]; then args+=(--simulate); fi
           python3 -I infra/local/scripts/check-pins.py "${args[@]}"
