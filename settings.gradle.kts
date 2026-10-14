@@ -58,6 +58,7 @@ include(
     ":services:batch-etl:domain",
     ":services:batch-etl:application",
     ":services:batch-etl:adapters",
+    ":services:batch-etl:app",
     ":tools:architecture-test",
     ":tools:audit-verify",
     ":tools:contract-check",
