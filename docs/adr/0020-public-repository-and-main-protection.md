@@ -105,3 +105,6 @@ LICENSE を置いていないため、著作権法上、すべての権利が作
 - 2026-10-01: 必須チェックに ci の `integration (Testcontainers)` と `macos (macosArm64 tests)` を加えた(§3)。どちらもジョブの `if` でスキップされる作りで、スキップは成功に数えられるため、関係のない PR を止めない。contract-check と infra は workflow の `paths` で起動しないことがあるため、必須にしない。
 - 2026-10-01: 必須チェックに ci の `changes` も加えた(§3)。`changes` が失敗すると `integration` と `macos` がスキップされ、成功に数えられる抜け道を塞ぐため。
 - 2026-10-01: 必須チェックに ci の `e2e` を加えた(§3。P05 ⑥b)。ジョブの `if` でスキップされる作りで、スキップは成功に数えられるため、関係のない PR を止めない。CI で通ったことを確かめてから加え、Ruleset を読み直して確かめた。
+- 2026-10-14: #24 で、ci の統合テストをモジュールのグループ(sales・platform・participants。`scripts/ci/integration-groups.py`)ごとの matrix のジョブ `integration (<グループ>)` に分けた。必須チェックの名前 `integration (Testcontainers)` は、グループのジョブの結果をまとめるジョブが持つ(Ruleset は変えない)。まとめるジョブは常に走り、グループのジョブがすべて成功したか、変更がなくスキップされたときだけ成功する。`changes` が失敗したとき(グループが走らなかったとき)は失敗にする(§3 の抜け道を作らない)。全体のカバレッジの閾値(ルートの `:koverVerify`)は、集約の対象のモジュールの統合テストを同じ Gradle の実行で測る必要があるので、集約の対象をすべて sales のグループに入れ、そこで検証する。グループの分け方の漏れ・重複は、各グループのジョブの最初に `--check` で検査する。
+  - あわせて、build と統合テストのジョブの Gradle のキャッシュを、setup-gradle の `basic` から `actions/cache` の restore / save に変えた。`basic` のキーはビルドファイルのハッシュだけで前の版に戻れず(ビルドファイルを変えた PR は全部をコンパイルし直す)、build・integration・e2e が同じキーを取り合い、build の分が保存されないことがあった(`Unable to reserve cache ... another job may be creating this cache`)。ジョブごとのキーにし、前の版に接頭辞で戻れるようにし、main への push のときだけ保存する(PR は main の最新を復元して使う)。
+
