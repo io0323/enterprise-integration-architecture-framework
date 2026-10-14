@@ -37,8 +37,9 @@ tasks.register<Test>("e2eTest") {
     group = LifecycleBasePlugin.VERIFICATION_GROUP
     testClassesDirs = e2eTest.output.classesDirs
     classpath = e2eTest.runtimeClasspath
-    // 結果は基盤の状態で決まるので、入力が同じでも毎回実行する
+    // 結果は基盤の状態で決まるので、入力が同じでも毎回実行する(ビルドキャッシュからも取らない)
     outputs.upToDateWhen { false }
+    outputs.cacheIf("E2E は起動した基盤の状態に依存する") { false }
     // 開発用の証明書(mTLS の確認)はリポジトリのルートからの相対パスで読む
     systemProperty("eiaf.repo.root", rootProject.layout.projectDirectory.asFile.absolutePath)
     // DLQ の Replay の CLI(SagaE2E。make dlq-replay と同じ tools/dlq-replay)。サービスのコードではなく運用のツールとして呼ぶ
