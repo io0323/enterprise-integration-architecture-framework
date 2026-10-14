@@ -133,6 +133,8 @@ class ContractSchemasSpec :
                     subjects,
                     ApicurioRegistryClient(SchemaRegistryConfig("http://registry.test/apis/registry/v3"), http),
                     lines::add,
+                    // 再試行の待ちはしない(待ちの長さは PublishRetrySpec で確かめる)
+                    sleep = {},
                 )
             }
             val created = HttpStatusCode.OK to """{"version":{"contentId":1}}"""

@@ -63,24 +63,43 @@ internal suspend fun publish(
     sleep: suspend (Duration) -> Unit = { delay(it) },
 ): Int {
     val failures = mutableListOf<SchemaRegistryError>()
-    subjects.forEach { subject ->
-        when (val result = registerWithRetry(subject, client, retry, sleep, out)) {
-            is Result.Ok -> {
-                out("OK   ${subject.artifactId} contentId=${result.value}")
-            }
-
-            is Result.Err -> {
-                failures += result.error
-                out("FAIL ${subject.artifactId} ${result.error.message}")
-            }
-        }
+    var processed = 0
+    var unreachable = false
+    // 再試行してもレジストリに接続できない(拒否ではない)なら、残りも同じく失敗するので、待たずに終える
+    // (以前は残りのスキーマごとに再試行の待ち(約 23 秒)を繰り返し、レジストリが止まっていると 7 分待っていた。#24)
+    while (!unreachable && processed < subjects.size) {
+        val error = publishOne(subjects[processed], client, retry, sleep, out)
+        processed++
+        if (error != null) failures += error
+        unreachable = error != null && error !is SchemaRejected
     }
+    if (unreachable && processed < subjects.size) out("SKIP 残りの ${subjects.size - processed} 件(レジストリに接続できないため)")
     return when {
         failures.isEmpty() -> ExitCode.OK
         failures.all { it is SchemaRejected } -> ExitCode.REJECTED
         else -> ExitCode.CANNOT_RUN
     }
 }
+
+/** 1 つのスキーマを登録して結果を表示する。失敗したらそのエラー、成功なら null。 */
+private suspend fun publishOne(
+    subject: SchemaSubject,
+    client: ApicurioRegistryClient,
+    retry: RetryPolicy,
+    sleep: suspend (Duration) -> Unit,
+    out: (String) -> Unit,
+): SchemaRegistryError? =
+    when (val result = registerWithRetry(subject, client, retry, sleep, out)) {
+        is Result.Ok -> {
+            out("OK   ${subject.artifactId} contentId=${result.value}")
+            null
+        }
+
+        is Result.Err -> {
+            out("FAIL ${subject.artifactId} ${result.error.message}")
+            result.error
+        }
+    }
 
 private suspend fun registerWithRetry(
     subject: SchemaSubject,
