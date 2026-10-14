@@ -350,6 +350,19 @@ class OrderSagaIT :
                 ),
             )
             awaitStatus(orderId, "SHIPPED")
+            // 状態の遷移ごとに sales.order.status-changed.v1(Outbox → Debezium。キーは注文 ID。版は遷移ごとに増える。ADR-0031 §2)
+            val changes =
+                read(
+                    OrderEventSchemas.ORDER_STATUS_CHANGED,
+                    io.eia.order.adapters.out.outbox.OrderStatusChangedV1
+                        .serializer(),
+                    count = 2,
+                ) {
+                    it.orderId == orderId
+                }
+            changes.map { it.first }.toSet() shouldBe setOf(orderId)
+            changes.map { Triple(it.second.previousStatus.name, it.second.status.name, it.second.version) } shouldBe
+                listOf(Triple("PLACED", "CONFIRMED", 1L), Triple("CONFIRMED", "SHIPPED", 2L))
         }
 
         test("決済の失敗: 在庫の解放のコマンドを送り、解放の返信で注文は CANCELLED、sales.order.cancelled.v1(PAYMENT_DECLINED)") {

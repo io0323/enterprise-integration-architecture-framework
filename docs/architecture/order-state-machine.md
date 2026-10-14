@@ -44,7 +44,7 @@ stateDiagram-v2
 |---|---|---|
 | 受け付け(`[*] → PLACED`) | `sales.order.created.v1` | `contracts/asyncapi/order-events.v1.yaml`(INT-SALES-002) |
 | `→ CANCELLED` | `sales.order.cancelled.v1`(Saga の補償の完了。`reason` は補償の理由。ADR-0029 §8) | 同上 |
-| `→ CONFIRMED` / `→ SHIPPED` / `→ DELIVERED` | 未定 | 購読者がいないため P07 では追加しない(ADR-0029 §8)。必要になるフェーズで、先に契約に追加する(Contract First) |
+| 受け付けの後の遷移(`→ CONFIRMED` / `→ SHIPPED` / `→ CANCELLED` など) | `sales.order.status-changed.v1`(遷移の前後の状態と、遷移の後の版。P08。ADR-0031 §2) | 同上 |
 
 ## Saga の状態との対応
 P07 で確定した。Saga の状態遷移と、注文の状態との対応は `docs/architecture/order-saga.md`(ADR-0029)。

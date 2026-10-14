@@ -42,12 +42,18 @@ internal class OrderDatabaseEnvironment : AutoCloseable {
         }
     }
 
-    /** DB を 1 つ作り、所有者のロールでマイグレーションする。 */
-    fun newDatabase(): OrderDatabase {
+    /**
+     * DB を 1 つ作り、所有者のロールでマイグレーションする。
+     *
+     * @param linguisticCollation true なら、DB の既定の照合順序を ICU の言語的な並び(`und`。大文字小文字・記号を区別しない並び)にする。
+     *   Alpine の PostgreSQL の既定(musl の en_US.utf8)はバイト順と同じになるため、並びを明示しない SQL の誤りが見えない(ADR-0031 §3)
+     */
+    fun newDatabase(linguisticCollation: Boolean = false): OrderDatabase {
         val name = "order_it_${databases.incrementAndGet()}"
+        val locale = if (linguisticCollation) " TEMPLATE template0 LOCALE_PROVIDER icu ICU_LOCALE 'und' LOCALE 'C'" else ""
         superuser(postgres.databaseName) { connection ->
             connection.createStatement().use { statement ->
-                statement.execute("CREATE DATABASE $name OWNER $OWNER_ROLE")
+                statement.execute("CREATE DATABASE $name OWNER $OWNER_ROLE$locale")
                 statement.execute("REVOKE ALL ON DATABASE $name FROM PUBLIC")
                 statement.execute("GRANT CONNECT ON DATABASE $name TO ${OrderSchema.APP_ROLE}, ${OrderSchema.CDC_ROLE}")
             }

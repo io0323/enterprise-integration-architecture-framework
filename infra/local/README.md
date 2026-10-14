@@ -90,7 +90,7 @@ Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)�
 | PostgreSQL(CDC) | `debezium`(REPLICATION) | `DEBEZIUM_DB_PASSWORD` |
 | PostgreSQL(CDC の監視) | `postgres_exporter`(`pg_monitor` だけ。表のデータは読めない) | `POSTGRES_EXPORTER_DB_PASSWORD`。**P06 ④ より前に作ったボリュームには無いので、`make clean` が必要** |
 | Keycloak 管理 | `admin` | `KEYCLOAK_ADMIN_PASSWORD` |
-| Keycloak client credentials | `eiaf-e2e`(スコープ `sales.order:read` / `sales.order:write`、`aud` = `order-api`) | `EIAF_E2E_CLIENT_SECRET` |
+| Keycloak client credentials | `eiaf-e2e`(スコープ `sales.order:read` / `sales.order:write` / `sales.order:report`(日次の集計。P08。ADR-0031 §3)、`aud` = `order-api`) | `EIAF_E2E_CLIENT_SECRET`。**`sales.order:report` は P08 ① より前に作ったボリュームには無いので、`make clean` が必要** |
 | Keycloak client credentials(2 つ目) | `eiaf-e2e-b`(`eiaf-e2e` と同じ設定。クライアントごとの Rate Limit・冪等の範囲の確認用。ADR-0023 §5) | `EIAF_E2E_B_CLIENT_SECRET`。**P05 ⑤c より前に作ったボリュームには無いので、`make clean` が必要** |
 | Grafana | `admin` | `GRAFANA_ADMIN_PASSWORD` |
 | MQTT | `MQTT_USERNAME` | `MQTT_PASSWORD` |

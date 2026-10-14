@@ -13,6 +13,7 @@ import io.eia.order.application.port.outbound.SagaStore
 import io.eia.order.application.port.outbound.TransactionRunner
 import io.eia.order.domain.Order
 import io.eia.order.domain.OrderId
+import io.eia.order.domain.OrderStatus
 import io.eia.order.domain.RestoredLine
 import io.eia.order.domain.Saga
 import io.eia.order.domain.SagaCommand
@@ -159,7 +160,26 @@ internal class FakeOrderEventOutbox(
 ) : OrderEventOutbox {
     val placed = mutableListOf<OrderId>()
     val cancelled = mutableListOf<Pair<OrderId, SagaFailure?>>()
+
+    /** 状態の遷移(注文 ID・遷移の前・遷移の後・版)。 */
+    val statusChanged = mutableListOf<StatusChange>()
     var failWith: DomainError? = null
+
+    data class StatusChange(
+        val order: OrderId,
+        val from: OrderStatus,
+        val to: OrderStatus,
+        val version: Long,
+    )
+
+    override suspend fun orderStatusChanged(
+        order: Order,
+        from: OrderStatus,
+    ): Result<Unit, DomainError> {
+        failWith?.let { return err(it) }
+        transaction.write { statusChanged += StatusChange(order.id, from, order.status, order.version) }
+        return ok(Unit)
+    }
 
     override suspend fun orderPlaced(order: Order): Result<Unit, DomainError> {
         failWith?.let { return err(it) }

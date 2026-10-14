@@ -8,6 +8,7 @@ import io.eia.order.adapters.out.audit.ExposedOrderAuditTrail
 import io.eia.order.adapters.out.outbox.OrderEventSchemas
 import io.eia.order.adapters.out.outbox.OutboxOrderEvents
 import io.eia.order.adapters.out.persistence.ExposedOrderRepository
+import io.eia.order.adapters.out.persistence.ExposedOrderSummaries
 import io.eia.order.adapters.out.persistence.ExposedTransactionBoundary
 import io.eia.order.adapters.out.persistence.ExposedTransactionRunner
 import io.eia.order.adapters.out.persistence.PostgresIdempotencyStore
@@ -18,6 +19,7 @@ import io.eia.order.adapters.out.saga.OutboxSagaCommands
 import io.eia.order.adapters.out.saga.SagaMetrics
 import io.eia.order.adapters.out.saga.SagaSchemas
 import io.eia.order.adapters.out.saga.UuidV7SagaIds
+import io.eia.order.application.port.inbound.GetDailyOrderSummaryUseCase
 import io.eia.order.application.port.inbound.GetOrderUseCase
 import io.eia.order.application.port.inbound.HandleSagaReplyUseCase
 import io.eia.order.application.port.inbound.PlaceOrderUseCase
@@ -30,6 +32,7 @@ import io.eia.order.application.port.outbound.ProcessedReplies
 import io.eia.order.application.port.outbound.SagaCommandOutbox
 import io.eia.order.application.port.outbound.SagaStore
 import io.eia.order.application.port.outbound.TransactionRunner
+import io.eia.order.application.usecase.GetDailyOrderSummaryService
 import io.eia.order.application.usecase.GetOrderService
 import io.eia.order.application.usecase.HandleSagaReplyService
 import io.eia.order.application.usecase.PlaceOrderService
@@ -113,6 +116,8 @@ internal fun orderModule(
         sagaBeans(config, runtime)
         single<PlaceOrderUseCase> { PlaceOrderService(get(), get(), get(), Clock.System, get(), get(), get()) }
         single<GetOrderUseCase> { GetOrderService(get()) }
+        // 日次の集計(分析の週次の照合用。ADR-0031 §3)
+        single<GetDailyOrderSummaryUseCase> { GetDailyOrderSummaryService(ExposedOrderSummaries(get())) }
         single<IdempotencyStore> { PostgresIdempotencyStore(get()) }
         single { IdempotencyHandler(get(), IdempotencyConfig(lease = config.idempotencyLease)) }
         single<TransactionBoundary> { ExposedTransactionBoundary(get()) }
@@ -155,8 +160,7 @@ private fun Module.eventBeans(
             get(),
             get(),
             get(),
-            OrderEventSchemas.orderCreatedSerializer(get()),
-            OrderEventSchemas.orderCancelledSerializer(get()),
+            OrderEventSchemas.serializers(get()),
         )
     }
 }

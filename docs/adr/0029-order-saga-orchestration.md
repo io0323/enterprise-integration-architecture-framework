@@ -117,3 +117,4 @@ Framework は複数のシステムにまたがる業務の更新に Saga を求�
   - `sales.order.cancelled.v1` の `reason` は補償の理由(`STOCK_UNAVAILABLE`・`PAYMENT_DECLINED`・`SHIPMENT_REJECTED`・`TIMED_OUT`)。
   - 確かめること: 期限が DB の時計で書かれ判定されること・SKIP LOCKED(`ExposedSagaStoreIT`)、Outbox → Debezium のコマンドと返信による正常・決済の失敗・タイムアウトの補償(`OrderSagaIT`)。
 - 2026-10-10: P07 ⑥ で E2E(`SagaE2E`)とダッシュボード(Grafana の Order — Saga)を入れた。E2E の段の期限は compose と同じ 30 秒(短くしない。タイムアウトのシナリオは inventory-service を止めて作り、期限を過ぎて解放のコマンドが出ることを待つので、待ち時間は期限の長さで決まる)。CI の e2e は `make up PROFILE="order cdc saga"`。
+- 2026-10-14: P08 ①で、§8 の「CONFIRMED / SHIPPED のイベントは、購読者が出てきたら契約に足す」に従い、`sales.order.status-changed.v1`(受け付けの後の状態の遷移ごと。取消を含む。遷移の後の版つき)を足した。購読者は分析(batch-etl。ADR-0031 §2)。Saga が注文の状態を移すときに、同じトランザクションで Outbox に書く。

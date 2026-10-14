@@ -48,7 +48,7 @@ dependencies {
 // 書き込むイベントの契約のスキーマ(contracts/avro)をリソースに含める。契約が唯一の真実で、コードに複製しない(ADR-0025 §2)
 tasks.named<ProcessResources>("processResources") {
     from(rootProject.layout.projectDirectory.dir("contracts/avro/sales")) {
-        include("OrderCreated.avsc", "OrderCancelled.avsc")
+        include("OrderCreated.avsc", "OrderCancelled.avsc", "OrderStatusChanged.avsc")
         into("contracts/avro/sales")
     }
     // 注文 Saga のコマンド(Orchestrator が書く。ADR-0029 §2)
