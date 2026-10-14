@@ -126,7 +126,7 @@ services/legacy-sim/app/
 | shipping | 出荷(模擬。注文 Saga の参加者。P07 ④b。ADR-0029)。domain に出荷の規則(`ShippingRules`。出荷できる国(既定 JP)なら直ちに出荷・出荷の後の取消は `ALREADY_SHIPPED`・取消が先に届いたら「取消済み」の印)、adapters にコマンドの受信(`ShippingCommandHandlers`。`shipping.command`)・出荷の記録(届け先は国だけ。書き換えないので行をロックしない)・返事の Outbox。構成は inventory と同じ | Kafka(コマンド INT-SHIPPING-001 → 返事 INT-SHIPPING-002。Outbox + Debezium) |
 | legacy-sim | レガシー基幹 DB 模擬(改修できないレガシー。表と `simulate` だけ。1 モジュール。ADR-0026) | CDC(生の CDC のトピック `_cdc.legacy.*`) |
 | legacy-order-acl | レガシーの受注の CDC の Anti-Corruption Layer(状態を持たない変換・DLQ。P06 ⑤b。ADR-0026)。4 モジュール。domain に変換の規則(`LegacyOrderTranslation`)、application にユースケースと発行の Port、adapters に Debezium の Envelope の型・読み取りの処理(`LegacyChangeHandler`。読み取り・コミット・DLQ は platform/messaging-kafka の `EventConsumer` の外部のトピックの購読。#88)・発行(`KafkaLegacyOrderStatePublisher`)、app に起動とヘルスチェック。照合(P06 ⑥。ADR-0027): domain に `LegacyOrderFingerprint`、application に `ReconcileLegacyOrdersUseCase` と Port(`LegacySource`・`PublishedLegacyOrders`)、adapters に `reconcile/`(`JdbcLegacySource`・`KafkaPublishedLegacyOrders`・`ReconcileMetrics`)、app に定期の照合(`ReconcileJob`)と `reconcile` のサブコマンド。再同期(P06 ⑥b): application に `ResyncLegacyOrdersUseCase`(上限 100 件)、adapters に `JdbcSnapshotRequests`(signal 表)・`KafkaReconcileTombstones`(照合の tombstone)。レガシーの DB は読み取り専用のロールで読む(ADR-0027 §1 の例外) | CDC → Kafka(`sales.legacy-order.changed.v1`。INT-SALES-003) |
-| batch-etl | 分析基盤への ELT/ETL | Batch |
+| batch-etl | 分析基盤への ELT/ETL(ADR-0031)。注文のイベントを日次の DAG で取り込み(住所はロードの前に地域に変える ETL)、日本時間の日次のパーティションを SQL で置換して作る(ELT)。遅れて届いたデータは 31 日前まで作り直す | Batch |
 | file-exchange | ファイル授受 | MFT (S3 互換ストレージ/SFTP) |
 | saas-mock / webhook-receiver / integration-flow | SaaS 連携 | REST, Webhook |
 | iot-bridge | MQTT→Kafka | MQTT, Kafka |
