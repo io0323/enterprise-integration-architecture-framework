@@ -3,7 +3,7 @@ info:
   title: Order Events
   version: 1.0.0
   description: |
-    order-service が発行する注文の Domain Event(INT-SALES-002)。
+    order-service が発行する注文の Domain Event(INT-SALES-002)。受け付け・取消と、受け付けの後の状態の遷移(P08。ADR-0031)。
     Outbox + Debezium で発行する(ADR-0007)。パーティションキーは注文 ID。
     ヘッダは CloudEvents binary mode(`ce_*`)と `traceparent`・`correlationid`。
     処理できないメッセージは `{topic}.dlq` に隔離する(Framework 6.5)。
@@ -26,6 +26,11 @@ channels:
     messages:
       orderCancelled:
         $ref: "#/components/messages/OrderCancelled"
+  orderStatusChanged:
+    address: sales.order.status-changed.v1
+    messages:
+      orderStatusChanged:
+        $ref: "#/components/messages/OrderStatusChanged"
 operations:
   publishOrderCreated:
     action: send
@@ -39,6 +44,12 @@ operations:
       $ref: "#/channels/orderCancelled"
     messages:
       - $ref: "#/channels/orderCancelled/messages/orderCancelled"
+  publishOrderStatusChanged:
+    action: send
+    channel:
+      $ref: "#/channels/orderStatusChanged"
+    messages:
+      - $ref: "#/channels/orderStatusChanged/messages/orderStatusChanged"
 components:
   messages:
     OrderCreated:
@@ -61,6 +72,17 @@ components:
         schemaFormat: application/vnd.apache.avro+json;version=1.9.0
         schema:
           $ref: "../avro/sales/OrderCancelled.avsc"
+    OrderStatusChanged:
+      name: OrderStatusChanged
+      title: 注文の状態の遷移
+      summary: 受け付けの後の遷移(CONFIRMED・SHIPPED・CANCELLED など)。状態の遷移と同じトランザクションで Outbox に書く。取消は sales.order.cancelled.v1 も出る
+      contentType: avro/binary
+      headers:
+        $ref: "#/components/schemas/StandardHeaders"
+      payload:
+        schemaFormat: application/vnd.apache.avro+json;version=1.9.0
+        schema:
+          $ref: "../avro/sales/OrderStatusChanged.avsc"
   schemas:
     StandardHeaders:
       type: object

@@ -1,6 +1,6 @@
 id: INT-SALES-002
 name: Order Events
-description: 注文の登録・取消を通知する Domain Event
+description: 注文の登録・取消・状態の遷移を通知する Domain Event
 style: event
 pattern: pub-sub
 provider: { owner: team-order, system: order-service }
@@ -10,6 +10,7 @@ contract: contracts/asyncapi/order-events.v1.yaml
 channels:
   - sales.order.created.v1
   - sales.order.cancelled.v1
+  - sales.order.status-changed.v1
 tier: 1
 dataClassification: confidential
 slo: { availability: "99.99", latencyP99: "5s" }

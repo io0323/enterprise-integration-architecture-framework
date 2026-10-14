@@ -1,0 +1,25 @@
+{
+  "type": "record",
+  "name": "OrderStatusChanged",
+  "namespace": "io.eia.events.sales",
+  "doc": "注文の状態が変わった(sales.order.status-changed.v1)。受け付け(PLACED)の後の遷移だけを出す(受け付けは sales.order.created.v1)。分析(batch-etl。ADR-0031)が注文の今の状態を持つために使う。",
+  "fields": [
+    { "name": "orderId", "type": "string" },
+    {
+      "name": "status",
+      "doc": "遷移の後の状態",
+      "type": {
+        "type": "enum",
+        "name": "OrderStatus",
+        "symbols": ["PLACED", "CONFIRMED", "SHIPPED", "DELIVERED", "CANCELLED"]
+      }
+    },
+    { "name": "previousStatus", "doc": "遷移の前の状態", "type": "OrderStatus" },
+    {
+      "name": "version",
+      "type": "long",
+      "doc": "遷移の後の注文の版(楽観的ロックの版)。同じ注文の中で単調に増える。受信側は版の大きいほうを今の状態とする(届く順に依存しない)"
+    },
+    { "name": "changedAt", "type": { "type": "long", "logicalType": "timestamp-micros" } }
+  ]
+}
