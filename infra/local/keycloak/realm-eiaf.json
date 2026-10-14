@@ -76,6 +76,22 @@
       "fullScopeAllowed": false,
       "defaultClientScopes": ["order-api-audience"],
       "optionalClientScopes": ["sales.order:read", "sales.order:write", "sales.order:report"]
+    },
+    {
+      "clientId": "eiaf-batch-etl",
+      "name": "分析のバッチ(batch-etl)の週次の照合。注文の日次の集計だけを読む(ADR-0031 §3・§6)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${EIAF_BATCH_ETL_CLIENT_SECRET}",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "fullScopeAllowed": false,
+      "defaultClientScopes": ["order-api-audience"],
+      "optionalClientScopes": ["sales.order:report"]
     }
   ]
 }

@@ -8,6 +8,7 @@ import io.eia.batchetl.adapters.kafka.OrderCreatedV1
 import io.eia.batchetl.adapters.kafka.OrderStatusChangedV1
 import io.eia.batchetl.adapters.kafka.OrderStatusV1
 import io.eia.batchetl.adapters.persistence.BatchEtlSchema
+import io.eia.batchetl.adapters.persistence.JdbcMartSummaries
 import io.eia.batchetl.adapters.persistence.JdbcOrderMart
 import io.eia.batchetl.adapters.persistence.JdbcRawOrderStore
 import io.eia.batchetl.application.port.inbound.IngestReport
@@ -16,8 +17,12 @@ import io.eia.batchetl.application.port.outbound.SourcePosition
 import io.eia.batchetl.application.usecase.BuildDailyOrderMartService
 import io.eia.batchetl.application.usecase.IngestOrderEventsService
 import io.eia.batchetl.domain.BusinessDay
+import io.eia.batchetl.domain.DailyOrderDigest
+import io.eia.batchetl.domain.DailySummary
+import io.eia.batchetl.domain.DayReconciliation
 import io.eia.batchetl.domain.LateDataPolicy
 import io.eia.batchetl.domain.OrderRecord
+import io.eia.batchetl.domain.OrderStatus
 import io.eia.platform.batch.BatchRunner
 import io.eia.platform.batch.PartitionKey
 import io.eia.platform.batch.RunKey
@@ -146,9 +151,17 @@ class BatchEtlIT :
             this.password = password
         }
 
-        fun env(maxPollRecords: Int = 500): Env {
+        /**
+         * @param linguisticCollation true なら DB の既定の照合順序を ICU の言語的な並び(`und`)にする。Alpine の PostgreSQL の既定は
+         *   バイト順と同じになるため、並びを明示しない SQL の誤りが見えない(ADR-0031 §3)
+         */
+        fun env(
+            maxPollRecords: Int = 500,
+            linguisticCollation: Boolean = false,
+        ): Env {
             val database = "batch_etl_${databases.size + 1}".also { databases += it }
-            superuser("CREATE DATABASE $database OWNER batch_etl")
+            val locale = if (linguisticCollation) " TEMPLATE template0 LOCALE_PROVIDER icu ICU_LOCALE 'und' LOCALE 'C'" else ""
+            superuser("CREATE DATABASE $database OWNER batch_etl$locale")
             superuser("REVOKE ALL ON DATABASE $database FROM PUBLIC")
             superuser("GRANT CONNECT ON DATABASE $database TO ${BatchEtlSchema.APP_ROLE}")
             BatchEtlSchema.migrate(dataSource(database, "batch_etl", ownerPassword)).getOrNull()!!
@@ -405,6 +418,54 @@ class BatchEtlIT :
             env.query("SELECT count(*) FROM mart.order_daily WHERE business_date = '2026-09-03'") shouldBe listOf(listOf("0"))
             env.query("SELECT business_date::text FROM etl.dirty_day") shouldBe listOf(listOf("2026-09-03"))
             LateDataPolicy.REBUILD_WINDOW_DAYS shouldBe 31
+        }
+
+        test("照合の集計: 注文 ID のバイト順(UTF-8)で並べた行の SHA-256 と件数。DB の既定が言語的な並びでも変わらない。結果を記録する") {
+            val env = env(linguisticCollation = true)
+            // 言語的な並び(大文字小文字・記号を区別しない)とバイト順で並びが変わる ID
+            val ids = listOf("b-1", "B-2", "_c", "a-1", "é-1")
+            for (id in ids) placed(id, "2026-10-13T01:00:00Z")
+            changed("a-1", OrderStatusV1.SHIPPED, 2)
+            env.ingest().ok()
+            env.build(dayD).ok()
+            val summaries = JdbcMartSummaries(env.app)
+
+            val summary = summaries.summary(dayD).ok()!!
+
+            val expected =
+                ids
+                    .sortedWith { a, b -> java.util.Arrays.compareUnsigned(a.toByteArray(), b.toByteArray()) }
+                    .joinToString(DailyOrderDigest.LINE_SEPARATOR) { id ->
+                        DailyOrderDigest.line(id, if (id == "a-1") OrderStatus.SHIPPED else OrderStatus.PLACED, 1200, "JPY")
+                    }
+            summary.orderCount shouldBe 5
+            summary.digest shouldBe
+                java.util.HexFormat
+                    .of()
+                    .formatHex(
+                        java.security.MessageDigest
+                            .getInstance("SHA-256")
+                            .digest(expected.toByteArray()),
+                    )
+            // まだ作っていない日は null。注文のない日は空のバイト列の SHA-256
+            summaries.summary(dayD.minusDays(1)).ok() shouldBe null
+            env.build(dayD.minusDays(-1)).ok()
+            summaries.summary(dayD.minusDays(-1)).ok()!!.digest shouldBe "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+            val runDay = BusinessDay.parse("2026-10-19").ok()
+            summaries
+                .record(
+                    runDay,
+                    listOf(
+                        DayReconciliation(dayD, summary, summary),
+                        DayReconciliation(dayD.minusDays(1), DailySummary(dayD.minusDays(1), 2, summary.digest), null),
+                    ),
+                ).ok()
+            summaries.record(runDay, listOf(DayReconciliation(dayD, summary.copy(orderCount = 6), summary))).ok()
+            env.query(
+                "SELECT business_date::text, outcome, source_count, mart_count FROM mart.reconciliation ORDER BY business_date",
+            ) shouldBe
+                listOf(listOf("2026-10-12", "UNVERIFIED", "2", null), listOf("2026-10-13", "DRIFT", "6", "5"))
         }
 
         test("取り込んだ位置のイベントが保持期間を過ぎて消えていたら、黙って先に進まずに失敗にする") {

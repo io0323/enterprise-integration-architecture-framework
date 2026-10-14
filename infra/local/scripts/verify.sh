@@ -871,6 +871,29 @@ verify_gateway() {
     fail "Gateway: X-Correlation-Id を付けない"
   fi
 
+  # 分析のバッチ(eiaf-batch-etl)は注文の日次の集計だけを読める(最小権限。ADR-0031 §3・§6)
+  local report_token report_day
+  report_token="$(curl -fsS -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token \
+    -d grant_type=client_credentials -d client_id=eiaf-batch-etl --data-urlencode "client_secret=$EIAF_BATCH_ETL_CLIENT_SECRET" \
+    --data-urlencode 'scope=sales.order:report' | json 'd["access_token"]' 2>/dev/null || true)"
+  report_day="$(TZ=Asia/Tokyo date -v-1d +%F 2>/dev/null || TZ=Asia/Tokyo date -d yesterday +%F)"
+  if [[ -z "$report_token" ]]; then
+    fail "Keycloak: eiaf-batch-etl のトークンを取れない(このクライアントより前に作ったボリュームなら make clean → make up)"
+  else
+    out="$(curl -sS -o - -w '\n%{http_code}' -H "Authorization: Bearer $report_token" "http://localhost:19080/sales/v1/order-summaries/daily/$report_day" || true)"
+    if [[ "$(tail -n1 <<<"$out")" == 200 ]] && grep -q '"timeZone":"Asia/Tokyo"' <<<"$out"; then
+      pass "Gateway: eiaf-batch-etl は日次の集計を読める(sales.order:report。日本時間の区切り)"
+    else
+      fail "Gateway: eiaf-batch-etl が日次の集計を読めない ($(tail -n1 <<<"$out"))"
+    fi
+    code="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $report_token" "$url/ord-none" || true)"
+    if [[ "$code" == 403 ]]; then pass "Gateway: eiaf-batch-etl は個々の注文を読めない(403)"; else fail "Gateway: eiaf-batch-etl の注文の参照が $code"; fi
+  fi
+  code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token \
+    -d grant_type=client_credentials -d client_id=eiaf-batch-etl --data-urlencode "client_secret=$EIAF_BATCH_ETL_CLIENT_SECRET" \
+    --data-urlencode 'scope=sales.order:read' || true)"
+  if [[ "$code" == 400 ]]; then pass "Keycloak: eiaf-batch-etl は sales.order:read を取れない"; else fail "Keycloak: eiaf-batch-etl の sales.order:read の要求が $code"; fi
+
   # 同じ Idempotency-Key の再送で同じ応答(ROADMAP P05 の DoD。Gateway 経由)
   local key="verify-gw-$$-$(date +%s)" body first second
   body='{"customerId":"cust-gw","lines":[{"productId":"prod-1","sku":"SKU-1","quantity":1,"unitPrice":{"amount":"1000","currency":"JPY"}}],"shippingAddress":{"countryCode":"JP","postalCode":"100-0001","city":"Chiyoda","line1":"1-1"}}'

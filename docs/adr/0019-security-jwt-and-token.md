@@ -203,3 +203,4 @@ P04a ③ で `platform/security` を作る。Framework 12.1 は、受信側で�
   - 読み取りのタイムアウト(2 秒)は変えない。リクエストの中で JWKS を取得するのは、未知の `kid`(鍵のローテーション)のときだけになる。
   - 確かめること: `JwksPrefetchSpec`、`OrderAppIT` の「IdP の応答が遅く JWKS を取得できない間は /health/ready が 503…」。
 - 2026-10-14: P08 ①で、realm にクライアントスコープ `sales.order:report`(注文の日次の集計の参照。ADR-0031 §3)を足し、`eiaf-e2e`・`eiaf-e2e-b` の optional のスコープに加えた。§8 のとおり optional(要求したときだけ入る)。分析(batch-etl)のクライアントは、照合を入れる P08 ④で足す。realm の取り込みは realm がないときだけ行われるので、前に作ったローカルのボリュームでは `make clean` が要る。
+- 2026-10-15: P08 ④で、分析のバッチの client-credentials クライアント `eiaf-batch-etl` を realm に足した。スコープは `sales.order:report` だけ(optional。`sales.order:read`・`write` は要求しても取れない。最小権限。ADR-0031 §6)、`aud` は `order-api`(`order-api-audience`)。Secret は `EIAF_BATCH_ETL_CLIENT_SECRET`。前に作ったローカルのボリュームでは `make clean` が要る。

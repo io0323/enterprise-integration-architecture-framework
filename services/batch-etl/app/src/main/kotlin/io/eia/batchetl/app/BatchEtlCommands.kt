@@ -4,6 +4,7 @@ import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import io.eia.batchetl.adapters.persistence.BatchEtlSchema
 import io.eia.batchetl.domain.BusinessDay
+import io.eia.batchetl.domain.ReconcileOutcome
 import io.eia.platform.batch.BatchRunner
 import io.eia.platform.batch.DagDefinition
 import io.eia.platform.batch.PartitionKey
@@ -25,8 +26,11 @@ internal object BatchEtlCommands {
     const val OK = 0
     const val FAILED = 1
     const val USAGE = 2
+
+    /** `reconcile` で、比べ直しても一致しない日があった。 */
+    const val DRIFT = 3
     private const val MIGRATE_POOL_SIZE = 3
-    private const val USAGE_TEXT = "使い方: batch-etl migrate | serve | run <yyyy-MM-dd> [--restart]"
+    private const val USAGE_TEXT = "使い方: batch-etl migrate | serve | run <yyyy-MM-dd> [--restart] | reconcile <yyyy-MM-dd> [--restart]"
 
     /** serve・run の環境にあってはならない変数(所有者のパスワード。ADR-0024 §2)。 */
     val FORBIDDEN_FOR_APP: List<String> =
@@ -41,7 +45,8 @@ internal object BatchEtlCommands {
         when (args.firstOrNull()) {
             "migrate" -> migrate(env)
             "serve" -> withoutOwnerPassword(env) { serve(env) }
-            "run" -> withoutOwnerPassword(env) { runOnce(args.drop(1), env) }
+            "run" -> withoutOwnerPassword(env) { runOnce(args.drop(1), env, reconcile = false) }
+            "reconcile" -> withoutOwnerPassword(env) { runOnce(args.drop(1), env, reconcile = true) }
             else -> USAGE.also { logger.error(USAGE_TEXT) }
         }
 
@@ -62,38 +67,56 @@ internal object BatchEtlCommands {
             is Result.Err -> USAGE.also { logger.error("起動できません: {}", server.error.message) }
         }
 
-    /** 1 日分を 1 回だけ実行する。成功した日は何もしない(`--restart` なら作り直す)。 */
+    /**
+     * 日次の DAG(`run`)か週次の照合の DAG(`reconcile`)を、そのパーティション(日付)について 1 回だけ実行する。
+     * 成功したパーティションは何もしない(`--restart` なら最初からやり直す)。照合で一致しない日があれば [DRIFT]。
+     */
+    @Suppress("ReturnCount") // 引数・設定の誤りは、実行の前に返す
     private fun runOnce(
         args: List<String>,
         env: Map<String, String>,
+        reconcile: Boolean,
     ): Int {
         val restart = args.drop(1) == listOf("--restart")
         val day = args.firstOrNull()?.let { BusinessDay.parse(it) }
         if (day !is Result.Ok || (args.size > 1 && !restart)) return USAGE.also { logger.error(USAGE_TEXT) }
-        return when (val wired = BatchEtlServer.wire(env)) {
+        val wired =
+            when (val result = BatchEtlServer.wire(env)) {
+                is Result.Err -> return USAGE.also { logger.error("設定が不正です: {}", result.error.message) }
+                is Result.Ok -> result.value
+            }
+        val (koin, runtime) = wired.second
+        try {
+            if (reconcile && wired.first.reconcile == null) {
+                return USAGE.also { logger.error("照合には {} と {} が必要です", BatchEtlConfig.GATEWAY_URL, BatchEtlConfig.TOKEN_URL) }
+            }
+            return execute(koin, day.value, if (restart) RunMode.RESTART else RunMode.RESUME, reconcile)
+        } finally {
+            BatchEtlServer.close(koin, runtime)
+        }
+    }
+
+    private fun execute(
+        koin: org.koin.core.Koin,
+        day: BusinessDay,
+        mode: RunMode,
+        reconcile: Boolean,
+    ): Int {
+        val dag = koin.get<DagDefinition>(if (reconcile) RECONCILE else DAILY)
+        return when (val outcome = runBlocking { koin.get<BatchRunner>().run(dag, PartitionKey(day.toString()), mode = mode) }) {
             is Result.Err -> {
-                USAGE.also { logger.error("設定が不正です: {}", wired.error.message) }
+                FAILED.also { logger.error("{} の実行が失敗しました: {}", day, outcome.error.message) }
             }
 
             is Result.Ok -> {
-                val (koin, runtime) = wired.value.second
-                try {
-                    val mode = if (restart) RunMode.RESTART else RunMode.RESUME
-                    val outcome =
-                        runBlocking {
-                            koin.get<BatchRunner>().run(
-                                koin.get<DagDefinition>(),
-                                PartitionKey(day.value.toString()),
-                                mode = mode,
-                            )
-                        }
-                    when (outcome) {
-                        is Result.Ok -> OK.also { report(outcome.value) }
-                        is Result.Err -> FAILED.also { logger.error("{} の実行が失敗しました: {}", day.value, outcome.error.message) }
-                    }
-                } finally {
-                    BatchEtlServer.close(koin, runtime)
-                }
+                report(outcome.value)
+                val drift =
+                    reconcile && koin
+                        .get<ReconcileMetrics>()
+                        .lastReport
+                        ?.days
+                        ?.any { it.outcome == ReconcileOutcome.DRIFT } == true
+                if (drift) DRIFT else OK
             }
         }
     }

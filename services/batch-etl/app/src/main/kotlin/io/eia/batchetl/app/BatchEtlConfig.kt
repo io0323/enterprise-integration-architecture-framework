@@ -6,7 +6,10 @@ import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.ValidationError
 import io.eia.shared.kernel.err
 import io.eia.shared.kernel.ok
+import kotlinx.datetime.DayOfWeek
 import kotlinx.datetime.LocalTime
+import java.net.URI
+import java.net.URISyntaxException
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
@@ -25,6 +28,10 @@ import kotlin.time.Duration.Companion.seconds
  * | `BATCH_ETL_DAILY_AT` | `01:00` | serve(日次の DAG を起動する日本時間の時刻。前日の分を処理する) |
  * | `BATCH_ETL_SLA_AT` | `06:00` | serve・run(前日の分を終える期限。日本時間の時刻) |
  * | `BATCH_ETL_POLL_INTERVAL` | 30s | serve(起動の条件と SLA の予測を確かめる間隔) |
+ * | `BATCH_ETL_GATEWAY_URL` | なし(なければ週次の照合をしない) | serve・reconcile(API Gateway。例 `http://apisix:9080`) |
+ * | `BATCH_ETL_TOKEN_URL` | なし(`BATCH_ETL_GATEWAY_URL` があれば必須) | serve・reconcile(Keycloak のトークンエンドポイント) |
+ * | `BATCH_ETL_CLIENT_ID` / `BATCH_ETL_CLIENT_SECRET`(`_FILE` も可) | `eiaf-batch-etl` / なし | serve・reconcile(スコープ `sales.order:report` だけ) |
+ * | `BATCH_ETL_RECONCILE_ON` / `BATCH_ETL_RECONCILE_AT` | `MONDAY` / `07:00` | serve(週次の照合の曜日と日本時間の時刻。日次の SLA の期限の後) |
  */
 internal data class BatchEtlConfig(
     val dbUrl: String,
@@ -36,10 +43,17 @@ internal data class BatchEtlConfig(
     val dailyAt: LocalTime,
     val slaAt: LocalTime,
     val pollInterval: Duration,
+    val reconcile: ReconcileSettings? = null,
 ) {
     companion object {
         val OWNER_PASSWORD = SecretName("BATCH_ETL_DB_PASSWORD")
         val APP_PASSWORD = SecretName("BATCH_ETL_APP_DB_PASSWORD")
+        val CLIENT_SECRET = SecretName("BATCH_ETL_CLIENT_SECRET")
+        const val GATEWAY_URL = "BATCH_ETL_GATEWAY_URL"
+        const val TOKEN_URL = "BATCH_ETL_TOKEN_URL"
+        const val CLIENT_ID = "BATCH_ETL_CLIENT_ID"
+        const val RECONCILE_ON = "BATCH_ETL_RECONCILE_ON"
+        const val RECONCILE_AT = "BATCH_ETL_RECONCILE_AT"
         const val DB_URL = "BATCH_ETL_DB_URL"
         const val KAFKA_BOOTSTRAP = "BATCH_ETL_KAFKA_BOOTSTRAP"
         const val SCHEMA_REGISTRY_URL = "BATCH_ETL_SCHEMA_REGISTRY_URL"
@@ -65,6 +79,7 @@ internal data class BatchEtlConfig(
                     dailyAt = reader.time(DAILY_AT, DEFAULT_DAILY_AT),
                     slaAt = reader.time(SLA_AT, DEFAULT_SLA_AT),
                     pollInterval = reader.duration(POLL_INTERVAL) ?: DEFAULT_POLL_INTERVAL,
+                    reconcile = reader.reconcile(),
                 )
             return if (reader.violations.isEmpty()) ok(config) else err(ValidationError(reader.violations))
         }
@@ -86,6 +101,15 @@ internal data class BatchEtlConfig(
         }
     }
 }
+
+/** 週次の照合(ADR-0031 §6)の設定。 */
+internal data class ReconcileSettings(
+    val gatewayUrl: URI,
+    val tokenUrl: URI,
+    val clientId: String,
+    val weeklyOn: DayOfWeek,
+    val at: LocalTime,
+)
 
 internal data class RunSettings(
     val bootstrapServers: String,
@@ -126,8 +150,39 @@ private class EnvReader(
                 ?: default.also { violations += FieldViolation(name, "HH:mm(00:00〜23:59)にしてください") }
         } ?: default
 
+    /** 照合の設定。`BATCH_ETL_GATEWAY_URL` がなければ null(照合をしない)。 */
+    fun reconcile(): ReconcileSettings? {
+        val gateway = url(BatchEtlConfig.GATEWAY_URL) ?: return null
+        val token = url(BatchEtlConfig.TOKEN_URL)
+        if (token == null && optional(BatchEtlConfig.TOKEN_URL) == null) {
+            violations += FieldViolation(BatchEtlConfig.TOKEN_URL, "${BatchEtlConfig.GATEWAY_URL} があれば必須です")
+        }
+        val day =
+            optional(BatchEtlConfig.RECONCILE_ON)?.let { value ->
+                DayOfWeek.entries.firstOrNull { it.name == value }
+                    ?: DayOfWeek.MONDAY.also { violations += FieldViolation(BatchEtlConfig.RECONCILE_ON, "曜日(MONDAY〜SUNDAY)にしてください") }
+            } ?: DayOfWeek.MONDAY
+        val at = time(BatchEtlConfig.RECONCILE_AT, DEFAULT_RECONCILE_AT)
+        return token?.let { ReconcileSettings(gateway, it, optional(BatchEtlConfig.CLIENT_ID) ?: "eiaf-batch-etl", day, at) }
+    }
+
+    private fun url(name: String): URI? =
+        optional(name)?.let { value ->
+            val uri =
+                try {
+                    URI(value)
+                } catch (_: URISyntaxException) {
+                    null
+                }
+            uri?.takeIf { it.scheme in setOf("http", "https") && it.host != null }
+                ?: null.also { violations += FieldViolation(name, "http(s) の絶対 URL にしてください") }
+        }
+
     private companion object {
         const val MAX_PORT = 65_535
+
+        /** 週次の照合の既定の時刻(日本時間)。日次の SLA の期限(06:00)の後。 */
+        val DEFAULT_RECONCILE_AT = LocalTime(7, 0)
         val TIME = Regex("^([01][0-9]|2[0-3]):([0-5][0-9])$")
     }
 }

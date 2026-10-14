@@ -88,8 +88,9 @@ internal class BatchEtlServer private constructor(
                 .fromEnvironment(env)
                 .flatMap { config -> config.forRun().map { run -> config to run } }
                 .flatMap { (config, run) ->
-                    when (val password = EnvSecretProvider(env).get(BatchEtlConfig.APP_PASSWORD)) {
-                        is Result.Ok -> ok(Triple(config, run, password.value))
+                    val secrets = EnvSecretProvider(env)
+                    when (val password = secrets.get(BatchEtlConfig.APP_PASSWORD)) {
+                        is Result.Ok -> clientSecretPresent(config, secrets).map { Triple(config, run, password.value) }
                         is Result.Err -> err(ValidationError.of(BatchEtlConfig.APP_PASSWORD.value, password.error.message))
                     }
                 }.flatMap { inputs ->
@@ -98,9 +99,21 @@ internal class BatchEtlServer private constructor(
                 }.map { (inputs, observability) ->
                     val (config, run, password: Secret) = inputs
                     val runtime = Observability.init(observability)
-                    val koin = koinApplication { modules(batchEtlModule(config, run, password, runtime)) }.koin
+                    val koin = koinApplication { modules(batchEtlModule(config, run, password, EnvSecretProvider(env), runtime)) }.koin
                     config to (koin to runtime)
                 }
+
+        /** 照合をするなら、Client Secret が読めること(起動の時に確かめる。値は持たない。取得のたびに読む)。 */
+        private fun clientSecretPresent(
+            config: BatchEtlConfig,
+            secrets: EnvSecretProvider,
+        ): Result<Unit, ValidationError> {
+            if (config.reconcile == null) return ok(Unit)
+            return when (val secret = secrets.get(BatchEtlConfig.CLIENT_SECRET)) {
+                is Result.Ok -> ok(Unit)
+                is Result.Err -> err(ValidationError.of(BatchEtlConfig.CLIENT_SECRET.value, secret.error.message))
+            }
+        }
 
         internal fun close(
             koin: Koin,
@@ -108,6 +121,7 @@ internal class BatchEtlServer private constructor(
         ) {
             koin.get<Producer<ByteArray, ByteArray>>().close()
             koin.get<HttpClient>().close()
+            koin.getOrNull<HttpClient>(RECONCILE)?.close()
             koin.get<HikariDataSource>().close()
             koin.close()
             runtime.close()
@@ -141,6 +155,7 @@ internal class BatchEtlServer private constructor(
                             }
                         }
                     }.start(wait = false)
+                if (config.reconcile == null) logger.warn("週次の照合は無効です({} がない)", BatchEtlConfig.GATEWAY_URL)
                 logger.info("batch-etl を起動しました")
                 BatchEtlServer(server, koin, runtime, scope)
             }

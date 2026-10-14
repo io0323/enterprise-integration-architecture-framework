@@ -76,6 +76,58 @@ class BatchEtlConfigSpec :
                 )
         }
 
+        test("週次の照合: Gateway の URL がなければしない。あればトークンの URL が必須。曜日と時刻を変えられる") {
+            BatchEtlConfig.fromEnvironment(minimal).ok().reconcile shouldBe null
+            BatchEtlConfig
+                .fromEnvironment(minimal + (BatchEtlConfig.GATEWAY_URL to "http://apisix:9080"))
+                .failure()
+                .violations
+                .map { it.field } shouldBe listOf(BatchEtlConfig.TOKEN_URL)
+            BatchEtlConfig
+                .fromEnvironment(
+                    minimal +
+                        mapOf(
+                            BatchEtlConfig.GATEWAY_URL to "ftp://apisix",
+                            BatchEtlConfig.TOKEN_URL to "not a url",
+                            BatchEtlConfig.RECONCILE_ON to "monday",
+                        ),
+                ).failure()
+                .violations
+                .map { it.field } shouldContainExactlyInAnyOrder
+                listOf(BatchEtlConfig.GATEWAY_URL)
+            val reconcile =
+                BatchEtlConfig
+                    .fromEnvironment(
+                        minimal +
+                            mapOf(
+                                BatchEtlConfig.GATEWAY_URL to "http://apisix:9080",
+                                BatchEtlConfig.TOKEN_URL to "http://keycloak:8080/realms/eiaf/protocol/openid-connect/token",
+                                BatchEtlConfig.RECONCILE_ON to "SUNDAY",
+                                BatchEtlConfig.RECONCILE_AT to "08:30",
+                            ),
+                    ).ok()
+                    .reconcile!!
+            reconcile shouldBe
+                ReconcileSettings(
+                    java.net.URI("http://apisix:9080"),
+                    java.net.URI("http://keycloak:8080/realms/eiaf/protocol/openid-connect/token"),
+                    "eiaf-batch-etl",
+                    kotlinx.datetime.DayOfWeek.SUNDAY,
+                    LocalTime(8, 30),
+                )
+            BatchEtlConfig
+                .fromEnvironment(
+                    minimal +
+                        mapOf(
+                            BatchEtlConfig.GATEWAY_URL to "http://apisix:9080",
+                            BatchEtlConfig.TOKEN_URL to "http://keycloak:8080/token",
+                            BatchEtlConfig.RECONCILE_ON to "monday",
+                        ),
+                ).failure()
+                .violations
+                .map { it.field } shouldBe listOf(BatchEtlConfig.RECONCILE_ON)
+        }
+
         test("設定を変えられる。serve・run の設定がそろう") {
             val config =
                 BatchEtlConfig

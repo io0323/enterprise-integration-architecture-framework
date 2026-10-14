@@ -760,9 +760,10 @@ services:
       KC_HEALTH_ENABLED: "true"
       KC_METRICS_ENABLED: "true"
       KC_LOG_LEVEL: warn
-      # realm-eiaf.json の ${EIAF_E2E_CLIENT_SECRET} / ${EIAF_E2E_B_CLIENT_SECRET} を置換する
+      # realm-eiaf.json の ${EIAF_E2E_CLIENT_SECRET} / ${EIAF_E2E_B_CLIENT_SECRET} / ${EIAF_BATCH_ETL_CLIENT_SECRET} を置換する
       EIAF_E2E_CLIENT_SECRET: ${EIAF_E2E_CLIENT_SECRET:?}
       EIAF_E2E_B_CLIENT_SECRET: ${EIAF_E2E_B_CLIENT_SECRET:?make env を実行してください}
+      EIAF_BATCH_ETL_CLIENT_SECRET: ${EIAF_BATCH_ETL_CLIENT_SECRET:?make env を実行してください}
       JAVA_OPTS_KC_HEAP: -XX:MaxRAMPercentage=60 -XX:InitialRAMPercentage=25
     ports:
       - 127.0.0.1:19180:8080
