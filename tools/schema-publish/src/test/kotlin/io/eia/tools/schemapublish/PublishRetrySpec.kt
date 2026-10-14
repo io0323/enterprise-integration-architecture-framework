@@ -82,4 +82,24 @@ class PublishRetrySpec :
             publish(listOf(SUBJECT), registry.client, {}, sleep = {}) shouldBe ExitCode.CANNOT_RUN
             registry.requests shouldBe RETRY.maxAttempts
         }
+
+        test("再試行してもレジストリに接続できなければ、残りのスキーマは試さずに終える(終了コード 2。待ちを繰り返さない)") {
+            val second = SchemaSubject("sales.test.updated.v1", SUBJECT.schema)
+            val registry = Registry(List(RETRY.maxAttempts) { IOException("connection refused") })
+            val waits = mutableListOf<Duration>()
+            val out = mutableListOf<String>()
+
+            publish(listOf(SUBJECT, second, second), registry.client, out::add, sleep = { waits += it }) shouldBe ExitCode.CANNOT_RUN
+
+            registry.requests shouldBe RETRY.maxAttempts
+            waits.size shouldBe RETRY.maxAttempts - 1
+            out.last() shouldBe "SKIP 残りの 2 件(レジストリに接続できないため)"
+        }
+
+        test("拒否のあとは、残りのスキーマも登録を続ける(拒否はスキーマごとの問題)") {
+            val second = SchemaSubject("sales.test.updated.v1", SUBJECT.schema)
+            val registry = Registry(listOf(HttpStatusCode.Conflict, HttpStatusCode.OK))
+            publish(listOf(SUBJECT, second), registry.client, {}, sleep = { error("待たない") }) shouldBe ExitCode.REJECTED
+            registry.requests shouldBe 2
+        }
     })
