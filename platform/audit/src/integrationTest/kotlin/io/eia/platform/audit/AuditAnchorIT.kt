@@ -186,17 +186,21 @@ class AuditAnchorIT :
             try {
                 var seen = committed.get()
                 repeat(5) {
-                    // 前回の検査の後に、追記が確定するまで待つ(待たないと、記録が増えていない回は unchanged になる。仕様どおり)。
+                    // 前回の検査の後に確定した追記を待つ(待たないと、記録が増えていない回は unchanged になる。仕様どおり)。
+                    // - seen は前回の検査が終わった後に読む。検査の前に読むと、検査の間に確定した(スナップショットに入った)追記で
+                    //   待ちが終わり、次の検査で記録が増えていない(#107)。
+                    // - 書き込みのスレッドは「確定 → 数える」の順なので、検査の終わりに、スナップショットに入った追記がまだ数えられて
+                    //   いないことがある(最大 1 件)。そのため 2 件増えるまで待つ(2 件目は、必ず検査の後に確定している)。
                     // 待つ時間の上限は、追記が止まったときにテストを止めないためのもの
                     val deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos()
-                    while (committed.get() == seen && System.nanoTime() < deadline) Thread.sleep(1)
-                    (committed.get() > seen) shouldBe true
-                    seen = committed.get()
+                    while (committed.get() < seen + 2 && System.nanoTime() < deadline) Thread.sleep(1)
+                    (committed.get() >= seen + 2) shouldBe true
                     // 検査の間も追記は続く。保存するのは、スナップショットの中で検証した末尾
                     db.app.connection
                         .use { cycle.run(it) }
                         .getOrNull()
                         .shouldBeInstanceOf<AnchorOutcome.Published>()
+                    seen = committed.get()
                 }
             } finally {
                 running.set(false)
