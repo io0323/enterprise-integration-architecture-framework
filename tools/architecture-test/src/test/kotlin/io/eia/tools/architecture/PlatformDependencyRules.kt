@@ -24,6 +24,8 @@ internal object PlatformDependencyRules {
      * 許可する依存(依存元 → 依存先)。ここにない依存は違反にする。追加するときは MODULE_DESIGN §2 の一覧も更新する。
      * - audit → security: S3 の資格情報を SecretProvider から取る(ADR-0008・ADR-0019 §6)
      * - audit → observability: details の値のマスキング(ADR-0018 §3)
+     * - batch → security: ファイルの到着の監視の S3 の資格情報を SecretProvider から取る(ADR-0030 §4・ADR-0019 §6)
+     * - batch → observability: 実行・ステップの span と traceparent の引き継ぎ(ADR-0030 §5・ADR-0018 §2)
      * - security → reliability: トークン取得の Retry と Circuit Breaker、Retry-After の解析(ADR-0019 §4・ADR-0021)
      * - security → api: 401 / 403 / 503 を Problem Details で返す(ADR-0019 §5・ADR-0022 §2)
      * - api → observability: Problem Details の correlationId(ADR-0022 §2)
@@ -36,6 +38,7 @@ internal object PlatformDependencyRules {
         mapOf(
             "api" to setOf("observability"),
             "audit" to setOf("security", "observability"),
+            "batch" to setOf("security", "observability"),
             "messaging-kafka" to setOf("schema-registry", "observability"),
             "outbox" to setOf("messaging-kafka", "observability"),
             "security" to setOf("reliability", "api"),

@@ -51,6 +51,8 @@ flowchart BT
   |---|---|---|
   | `platform:audit` | `platform:security` | S3 の資格情報を `SecretProvider` から取る(ADR-0008・ADR-0019 §6) |
   | `platform:audit` | `platform:observability` | details の値のマスキング(ADR-0018 §3) |
+  | `platform:batch` | `platform:security` | ファイルの到着の監視の S3 の資格情報を `SecretProvider` から取る(ADR-0030 §4・ADR-0019 §6) |
+  | `platform:batch` | `platform:observability` | 実行・ステップの span と traceparent の引き継ぎ(ADR-0030 §5・ADR-0018 §2) |
   | `platform:security` | `platform:reliability` | トークンの取得の Retry・Circuit Breaker、`Retry-After` の解析(ADR-0019 §4・ADR-0021 §11) |
   | `platform:security` | `platform:api` | 401 / 403 / 503 を Problem Details で返す(ADR-0019 §5・ADR-0022 §2) |
   | `platform:api` | `platform:observability` | Problem Details の `correlationId`(ADR-0022 §2) |
@@ -142,7 +144,7 @@ services/legacy-sim/app/
 | inbox | 冪等消費の記録(ADR-0028 §3)。`Inbox.markProcessed` / `markProcessedIn`(業務と同じ Exposed のトランザクションで `inbox.processed_message` に `(consumer_group, ce_id)` を `INSERT ... ON CONFLICT DO NOTHING`。重複なら `DUPLICATE`。自動コミットでは書かない)、`Inbox.purgeExpired`(DB の時計で保持期間(既定 14 日)を過ぎた行を古い順に消す)、`InboxSchema`(スキーマ `inbox`・権限。サービスの migrate で所有者が適用する)。Kafka にも他の platform にも依存しない | P07 |
 | outbox | Transactional Outbox(ADR-0007)。`Outbox.append` / `appendOutbox`(業務と同じ Exposed のトランザクションで INSERT し、同じ行を DELETE する既定の方式。自動コミットでは書かない)、`OutboxEvents`(イベントから記録を作る。`{topic} create` の PRODUCER の span・UUIDv7 の `ce_id` = `id`)、`OutboxSchema`(スキーマ `outbox`・権限・publication `eiaf_outbox`。サービスの migrate で所有者が適用する)、`OutboxMetrics`。保持期間の方式は #76 | P06 |
 | messaging-kafka | Kafka の共通部品(ADR-0025)。P06: CloudEvents binary mode のヘッダ(`EventMetadata`)・トピック名(`EventTopic`)・Avro の Serde(avro4k。スキーマ ID は Apicurio と同じ形式でペイロードの先頭に埋め込む。`ApicurioWireFormat`・`AvroEventSerializer`・`AvroEventDeserializer`)・DB の更新を伴わない送信の Producer(`EventProducer`。PRODUCER の span)。DB の更新と組み合わせるイベントは Outbox で発行する。tombstone(`EventProducer.sendTombstone`)と DLQ(`DeadLetterPublisher`。`{topic}.dlq`・`eiaf.dlq.*` のヘッダ。INTEGRATION_STANDARDS §2)は P06 ⑤b(最初の利用者は legacy-order-acl)。P07: 型付きの Consumer(`EventConsumer`・`EventSubscription`・`EventHandler`。CloudEvents のヘッダを持たない外部のトピック(レガシーの生の CDC)は `ExternalSubscription`・`RecordHandler`。パーティションごとに届いた順に処理し、処理の後にコミットする At-Least-Once。失敗の種類(`HandlingFailure`: Rejected → DLQ・Transient → 初回 + 3 回のリトライの後に DLQ・Unavailable → DLQ に送らず読み直す)。CONSUMER の span・`ConsumerMetrics`。ADR-0028)。冪等消費の記録は `platform/inbox`。DLQ の Replay(`DeadLetterReplayer`。既定は dry-run・件数の上限は必須・`ce_id` を変えずに元のトピックへ・生の CDC の DLQ は拒否。CLI は `tools/dlq-replay`。ADR-0028 §6) | P06, P07 |
-| batch | 軽量 DAG ランナー・Checkpoint・SLA メトリクス | P08 |
+| batch | 軽量 DAG ランナー(ADR-0030): DAG の Kotlin DSL(`dag { step(...) }`)、実行(`BatchRunner`。DAG とパーティションごとに advisory lock で 1 つだけ・成功したステップを飛ばす再開(`RunMode.RESUME`)とやり直し(`RESTART`)・依存のないステップの並列・ステップのリトライ(既定 3 回))、Checkpoint と Watermark(`StepContext`。結果と同じトランザクションで書く `JdbcBatchStore.writeCheckpoint(connection, ...)`)、起動(`BatchScheduler`: 時刻・前段の DAG の完了・`.manifest.json` の到着(`S3ObjectSource`))、traceparent の引き継ぎ(起動の情報を実行の記録に保存)、SLA の遅延の予測(`SlaMonitor`。p90 と前段の待ちを含む予測・`eia.batch.sla.slack`)、メトリクス(`BatchMetrics`)。記録はスキーマ `batch`(`BatchSchema`) | P08 |
 | file-transfer | manifest・checksum・S3 互換ストレージ / SFTP | P09 |
 | schema-registry | Apicurio Registry 3 の REST クライアント(`ApicurioRegistryClient`: 内容からの contentId の解決・ID からのスキーマの取得・登録)、起動時のスキーマ ID の解決(`SchemaIdBook`。リクエストの処理中はレジストリに問い合わせず、未解決の間は `/health/ready` を失敗にする)、書き手のスキーマのキャッシュ(`WriterSchemas`)(ADR-0025 §2・§3)。契約の登録は `tools/schema-publish`(`make schemas`)だけが行い、サービスは自動登録しない | P06 |
 
