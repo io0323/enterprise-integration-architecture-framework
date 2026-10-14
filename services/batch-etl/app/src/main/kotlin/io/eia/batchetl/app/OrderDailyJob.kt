@@ -1,5 +1,6 @@
 package io.eia.batchetl.app
 
+import io.eia.batchetl.adapters.kafka.IngestLag
 import io.eia.batchetl.application.port.inbound.BuildDailyOrderMartUseCase
 import io.eia.batchetl.application.port.inbound.IngestOrderEventsUseCase
 import io.eia.batchetl.application.port.inbound.IngestReport
@@ -21,7 +22,9 @@ import io.opentelemetry.api.metrics.Meter
 import kotlinx.datetime.LocalTime
 import kotlinx.datetime.TimeZone
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.DurationUnit
 
 /**
  * 日次の DAG `batch-etl.order-daily`(ADR-0031 §4)。パーティションは業務の日(日本時間)。
@@ -78,6 +81,9 @@ internal object OrderDailyJob {
  * | `eia.batch_etl.events.dead_lettered` | counter | なし(読めずに DLQ に送ったイベント) |
  * | `eia.batch_etl.partitions.rebuilt` | counter | `batch_etl.late`(実行の日より前の日を作り直したら true) |
  * | `eia.batch_etl.late_days.pending` | gauge | なし。自動では作り直さない古い日(31 日より前)で、印が残っている日の数(ADR-0031 §5。0 より大きければ運用者が判断する) |
+ * | `eia.batch_etl.ingest.lag_age` | gauge(秒) | なし。まだ取り込んでいないイベントのうち最も古いものの経過時間(ADR-0031 §7) |
+ * | `eia.batch_etl.ingest.retention` | gauge(秒) | なし。注文のイベントのトピックの保持期間(アラートの閾値はこれに対する割合) |
+ * | `eia.batch_etl.ingest.lost_events` | gauge | なし。保持期間を過ぎて消え、取り込めなくなったイベントの件数(0 より大きければ回復の手順) |
  */
 internal class BatchEtlMetrics(
     meter: Meter,
@@ -101,6 +107,7 @@ internal class BatchEtlMetrics(
             .setDescription("作り直した日次のパーティションの数")
             .build()
     private val pending = AtomicLong()
+    private val lag = AtomicReference<IngestLag?>()
 
     init {
         meter
@@ -109,6 +116,27 @@ internal class BatchEtlMetrics(
             .setUnit("{day}")
             .setDescription("遅れて届いたデータで変わったが、古いので自動では作り直さない日の数")
             .buildWithCallback { it.record(pending.get()) }
+        meter
+            .gaugeBuilder("eia.batch_etl.ingest.lag_age")
+            .setUnit("s")
+            .setDescription("まだ取り込んでいないイベントのうち最も古いものの経過時間")
+            .buildWithCallback { measurement -> lag.get()?.let { measurement.record(it.oldestPendingAge.toDouble(DurationUnit.SECONDS)) } }
+        meter
+            .gaugeBuilder("eia.batch_etl.ingest.retention")
+            .setUnit("s")
+            .setDescription("注文のイベントのトピックの保持期間")
+            .buildWithCallback { measurement -> lag.get()?.retention?.let { measurement.record(it.toDouble(DurationUnit.SECONDS)) } }
+        meter
+            .gaugeBuilder("eia.batch_etl.ingest.lost_events")
+            .ofLongs()
+            .setUnit("{event}")
+            .setDescription("保持期間を過ぎて消え、取り込めなくなったイベントの件数")
+            .buildWithCallback { measurement -> lag.get()?.let { measurement.record(it.lost.values.sum()) } }
+    }
+
+    /** 取り込みの遅れを確かめた結果(serve が定期的に確かめる)。 */
+    fun lag(value: IngestLag) {
+        lag.set(value)
     }
 
     fun ingested(report: IngestReport) {

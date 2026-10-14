@@ -3,6 +3,8 @@
 #
 # - 生の CDC の DLQ(_cdc.*)と legacy-order-acl の lag は acl.rules.yml が見る(回復の手順が違う。ADR-0026 §7)。
 # - kafka-exporter のメトリクスで判定するアラートは、その exporter が今 UP のとき(and on(instance) (up == 1))だけ判定する(cdc.rules.yml と同じ理由)。
+# - 分析のバッチ(batch-etl.order-ingest)は 1 日 1 回だけ読む(lag があるのが普通)ので、Consumer の停滞・遅れの判定から除く。
+#   batch-etl の取り込みの遅れは batch.rules.yml が保持期間に対して見る(ADR-0031 §7)。
 groups:
   - name: event-consumer
     rules:
@@ -23,9 +25,9 @@ groups:
       # 処理が進んでいれば(オフセットが増えていれば)lag があっても出さない。lag が 0 なら(届いていないだけ)出さない。
       - alert: EventConsumerStalled
         expr: |
-          (sum by (instance, consumergroup, topic) (kafka_consumergroup_lag_sum) > 0)
+          (sum by (instance, consumergroup, topic) (kafka_consumergroup_lag_sum{consumergroup!="batch-etl.order-ingest"}) > 0)
           and on(instance, consumergroup, topic)
-          (sum by (instance, consumergroup, topic) (changes(kafka_consumergroup_current_offset_sum[10m])) == 0)
+          (sum by (instance, consumergroup, topic) (changes(kafka_consumergroup_current_offset_sum{consumergroup!="batch-etl.order-ingest"}[10m])) == 0)
           and on(instance) (up == 1)
         for: 2m
         labels:
@@ -49,7 +51,7 @@ groups:
       # 1,000 件はローカルの量に対して十分に大きい値(本番は連携の SLO の latencyP99 とトピックの量で決める)
       - alert: EventConsumerLagHigh
         expr: |
-          sum by (instance, consumergroup) (kafka_consumergroup_lag_sum{consumergroup!="legacy-order-acl.translate"}) > 1000
+          sum by (instance, consumergroup) (kafka_consumergroup_lag_sum{consumergroup!~"legacy-order-acl\\.translate|batch-etl\\.order-ingest"}) > 1000
           and on(instance) (up == 1)
         for: 10m
         labels:

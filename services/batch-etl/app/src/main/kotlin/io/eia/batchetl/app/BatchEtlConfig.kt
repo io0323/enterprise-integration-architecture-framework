@@ -11,6 +11,7 @@ import kotlinx.datetime.LocalTime
 import java.net.URI
 import java.net.URISyntaxException
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -28,6 +29,7 @@ import kotlin.time.Duration.Companion.seconds
  * | `BATCH_ETL_DAILY_AT` | `01:00` | serve(日次の DAG を起動する日本時間の時刻。前日の分を処理する) |
  * | `BATCH_ETL_SLA_AT` | `06:00` | serve・run(前日の分を終える期限。日本時間の時刻) |
  * | `BATCH_ETL_POLL_INTERVAL` | 30s | serve(起動の条件と SLA の予測を確かめる間隔) |
+ * | `BATCH_ETL_LAG_PROBE_INTERVAL` | 5m | serve(取り込みの遅れ・保持期間・消えたイベントを確かめる間隔。ADR-0031 §7) |
  * | `BATCH_ETL_GATEWAY_URL` | なし(なければ週次の照合をしない) | serve・reconcile(API Gateway。例 `http://apisix:9080`) |
  * | `BATCH_ETL_TOKEN_URL` | なし(`BATCH_ETL_GATEWAY_URL` があれば必須) | serve・reconcile(Keycloak のトークンエンドポイント) |
  * | `BATCH_ETL_CLIENT_ID` / `BATCH_ETL_CLIENT_SECRET`(`_FILE` も可) | `eiaf-batch-etl` / なし | serve・reconcile(スコープ `sales.order:report` だけ) |
@@ -44,6 +46,7 @@ internal data class BatchEtlConfig(
     val slaAt: LocalTime,
     val pollInterval: Duration,
     val reconcile: ReconcileSettings? = null,
+    val lagProbeInterval: Duration = DEFAULT_LAG_PROBE_INTERVAL,
 ) {
     companion object {
         val OWNER_PASSWORD = SecretName("BATCH_ETL_DB_PASSWORD")
@@ -61,6 +64,8 @@ internal data class BatchEtlConfig(
         const val DAILY_AT = "BATCH_ETL_DAILY_AT"
         const val SLA_AT = "BATCH_ETL_SLA_AT"
         const val POLL_INTERVAL = "BATCH_ETL_POLL_INTERVAL"
+        const val LAG_PROBE_INTERVAL = "BATCH_ETL_LAG_PROBE_INTERVAL"
+        private val DEFAULT_LAG_PROBE_INTERVAL = 5.minutes
         private const val DEFAULT_HEALTH_PORT = 8081
         private val DEFAULT_DAILY_AT = LocalTime(1, 0)
         private val DEFAULT_SLA_AT = LocalTime(6, 0)
@@ -80,6 +85,7 @@ internal data class BatchEtlConfig(
                     slaAt = reader.time(SLA_AT, DEFAULT_SLA_AT),
                     pollInterval = reader.duration(POLL_INTERVAL) ?: DEFAULT_POLL_INTERVAL,
                     reconcile = reader.reconcile(),
+                    lagProbeInterval = reader.duration(LAG_PROBE_INTERVAL) ?: DEFAULT_LAG_PROBE_INTERVAL,
                 )
             return if (reader.violations.isEmpty()) ok(config) else err(ValidationError(reader.violations))
         }

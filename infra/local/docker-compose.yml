@@ -167,7 +167,7 @@ services:
   # トピックのオフセットと Consumer Group の lag(P06 ④。P07 の Consumer の DLQ・lag のアラートにも使う。ADR-0028 §5)
   kafka-exporter:
     image: ${KAFKA_EXPORTER_IMAGE:?}
-    profiles: [cdc, order, saga]
+    profiles: [cdc, order, saga, batch]
     command: ["--kafka.server=kafka:9092"]
     depends_on:
       kafka:
@@ -217,8 +217,9 @@ services:
   # アプリが書くトピックを、kafka/topics.conf のとおりに作って終わる(compacted の出力・DLQ の保持期間。auto.create.topics.enable=false)
   kafka-topics:
     image: ${KAFKA_IMAGE:?}
-    # cdc: ACL の出力と DLQ。order: 注文 Saga のコマンド・返信と DLQ。saga: 参加者のコマンドの DLQ(ADR-0028・ADR-0029)
-    profiles: [cdc, order, saga]
+    # cdc: ACL の出力と DLQ。order: 注文 Saga のコマンド・返信と DLQ。saga: 参加者のコマンドの DLQ(ADR-0028・ADR-0029)。
+    # batch: 注文のイベント(保持 14 日)と DLQ(ADR-0031 §7)
+    profiles: [cdc, order, saga, batch]
     entrypoint: ["/bin/bash", "/topics/create-topics.sh", "kafka:9092", "/topics/topics.conf"]
     depends_on:
       kafka:
@@ -308,6 +309,57 @@ services:
     volumes:
       - *probe-volume
     # 開発機で core + order + saga を同時に動かすため、order-service(384m)より小さくする(P07 の計画)
+    mem_limit: 256m
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "/probe/bin/wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/health/ready"]
+
+  # 注文の分析のバッチ(batch-etl。P08。ADR-0030・ADR-0031)。マイグレーションは所有者のパスワードを渡す唯一のコンテナ
+  batch-etl-migrate:
+    build: &batch-etl-build
+      context: ../../services/batch-etl/app
+      args:
+        JAVA_RUNTIME_IMAGE: ${JAVA_RUNTIME_IMAGE:?}
+    profiles: [batch]
+    command: ["migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      BATCH_ETL_DB_URL: jdbc:postgresql://postgres:5432/batch_etl
+      BATCH_ETL_DB_PASSWORD: ${BATCH_ETL_DB_PASSWORD:?make env を実行してください}
+      OTEL_SERVICE_NAME: batch-etl
+    mem_limit: 256m
+    restart: "no"
+
+  # 日次の DAG(毎日 01:00 JST に前日の分。SLA は 06:00 JST)と週次の照合(月曜 07:00 JST)を動かす。アプリのロールのパスワードだけを渡す。
+  # 注文のイベントは order profile の order-service が書く(make up PROFILE="order batch")。照合は Gateway 経由で order-service の日次の集計を読む
+  batch-etl:
+    build: *batch-etl-build
+    profiles: [batch]
+    command: ["serve"]
+    depends_on:
+      batch-etl-migrate:
+        condition: service_completed_successfully
+      schema-publish:
+        condition: service_completed_successfully
+      kafka-topics:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_healthy
+    environment:
+      BATCH_ETL_DB_URL: jdbc:postgresql://postgres:5432/batch_etl
+      BATCH_ETL_APP_DB_PASSWORD: ${BATCH_ETL_APP_DB_PASSWORD:?make env を実行してください}
+      BATCH_ETL_KAFKA_BOOTSTRAP: kafka:9092
+      BATCH_ETL_SCHEMA_REGISTRY_URL: http://apicurio:8080/apis/registry/v3
+      BATCH_ETL_GATEWAY_URL: http://apisix:9080
+      # トークンの iss は Keycloak の KC_HOSTNAME(http://localhost:19180)。Gateway・order-service の検証と同じ
+      BATCH_ETL_TOKEN_URL: http://keycloak:8080/realms/eiaf/protocol/openid-connect/token
+      BATCH_ETL_CLIENT_SECRET: ${EIAF_BATCH_ETL_CLIENT_SECRET:?make env を実行してください}
+      OTEL_SERVICE_NAME: batch-etl
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    volumes:
+      - *probe-volume
     mem_limit: 256m
     healthcheck:
       <<: *healthcheck
@@ -601,8 +653,9 @@ services:
       context: ../../tools/schema-publish
       args:
         JAVA_RUNTIME_IMAGE: ${JAVA_RUNTIME_IMAGE:?}
-    # cdc: legacy-order-acl が書くイベントのスキーマ(ADR-0026)。order: order-service のイベント。saga: 参加者の返事(ADR-0029)
-    profiles: [order, cdc, saga]
+    # cdc: legacy-order-acl が書くイベントのスキーマ(ADR-0026)。order: order-service のイベント。saga: 参加者の返事(ADR-0029)。
+    # batch: batch-etl が読む注文のイベントの書き手のスキーマ(ADR-0031)
+    profiles: [order, cdc, saga, batch]
     command: ["--registry", "http://apicurio:8080/apis/registry/v3", "--root", "/repo"]
     depends_on:
       apicurio:

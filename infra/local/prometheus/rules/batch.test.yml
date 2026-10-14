@@ -1,0 +1,190 @@
+# batch.rules.yml の単体テスト(promtool test rules。make alerts-test)。
+# 取り込みの遅れの閾値は保持期間に対する割合なので、保持期間を変えたときに判定が追従することも確かめる。
+rule_files:
+  - batch.rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ---------------------------------------------------------------- SLA
+  - name: 期限に遅れる見込み(余裕が負)が 2 分続けば警告する。余裕があれば出さない
+    interval: 1m
+    input_series:
+      - series: 'eia_batch_sla_slack_seconds{job="batch-etl",batch_dag="batch-etl.order-daily"}'
+        values: "3600 1800 600 -60 -120 -180 -240 -300"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: BatchSlaAtRisk
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: BatchSlaAtRisk
+        exp_alerts:
+          - exp_labels: { severity: warning, job: batch-etl, batch_dag: batch-etl.order-daily }
+            exp_annotations:
+              summary: "batch-etl.order-daily が SLA の期限に遅れる見込み(余裕が負)"
+              runbook: docs/runbooks/batch-rerun.md#sla-に遅れる見込みのとき
+
+  - name: 期限を過ぎて終わった実行と、失敗した実行を知らせる
+    interval: 1m
+    input_series:
+      - series: 'eia_batch_sla_missed_total{job="batch-etl",batch_dag="batch-etl.order-daily"}'
+        values: "0 0 1 1 1"
+      - series: 'eia_batch_runs_total{job="batch-etl",batch_dag="batch-etl.order-daily",batch_run_status="failed"}'
+        values: "0 0 0 1 1"
+      - series: 'eia_batch_runs_total{job="batch-etl",batch_dag="batch-etl.order-daily",batch_run_status="succeeded"}'
+        values: "0 1 2 2 2"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: BatchSlaMissed
+        exp_alerts:
+          - exp_labels: { severity: warning, job: batch-etl, batch_dag: batch-etl.order-daily }
+            exp_annotations:
+              summary: "batch-etl.order-daily が SLA の期限を過ぎて終わった"
+              runbook: docs/runbooks/batch-rerun.md#sla-に遅れる見込みのとき
+      - eval_time: 4m
+        alertname: BatchRunFailed
+        exp_alerts:
+          - exp_labels: { severity: warning, job: batch-etl, batch_dag: batch-etl.order-daily }
+            exp_annotations:
+              summary: "batch-etl.order-daily の実行が失敗した"
+              runbook: docs/runbooks/batch-rerun.md#実行が失敗したとき
+
+  # ---------------------------------------------------------------- 取り込みの遅れ(保持期間 14 日 = 1209600 秒)
+  - name: 取り込み残しが保持期間の半分(7 日)を超えたら警告、75%(10.5 日)を超えたら重大
+    interval: 1m
+    input_series:
+      # 6 日 → 8 日(15 分後から) → 11 日(30 分後から)
+      - series: 'eia_batch_etl_ingest_lag_age_seconds{job="batch-etl"}'
+        values: "518400x14 691200x14 950400x14"
+      - series: 'eia_batch_etl_ingest_retention_seconds{job="batch-etl"}'
+        values: "1209600x44"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: BatchEtlIngestLagNearRetention
+        exp_alerts: []
+      - eval_time: 26m
+        alertname: BatchEtlIngestLagNearRetention
+        exp_alerts:
+          - exp_labels: { severity: warning, job: batch-etl }
+            exp_annotations:
+              summary: "batch-etl の取り込み残しが、トピックの保持期間の半分を超えて古い(消える前に取り込む)"
+              runbook: docs/runbooks/batch-rerun.md#取り込みが保持期間に近づいたとき
+      - eval_time: 26m
+        alertname: BatchEtlIngestLagCritical
+        exp_alerts: []
+      - eval_time: 41m
+        alertname: BatchEtlIngestLagCritical
+        exp_alerts:
+          - exp_labels: { severity: critical, job: batch-etl }
+            exp_annotations:
+              summary: "batch-etl の取り込み残しが、トピックの保持期間の 75% を超えて古い(まもなく消える)"
+              runbook: docs/runbooks/batch-rerun.md#取り込みが保持期間に近づいたとき
+
+  - name: 保持期間を 30 日に変えると、同じ 11 日の遅れは半分(15 日)を超えないので警告しない(閾値が保持期間に追従する)
+    interval: 1m
+    input_series:
+      - series: 'eia_batch_etl_ingest_lag_age_seconds{job="batch-etl"}'
+        values: "950400x20"
+      - series: 'eia_batch_etl_ingest_retention_seconds{job="batch-etl"}'
+        values: "2592000x20"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: BatchEtlIngestLagNearRetention
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: BatchEtlIngestLagCritical
+        exp_alerts: []
+
+  - name: 取り込む前に消えたイベントがあれば、すぐに重大
+    interval: 1m
+    input_series:
+      - series: 'eia_batch_etl_ingest_lost_events{job="batch-etl"}'
+        values: "0 0 3 3"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: BatchEtlEventsLost
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: BatchEtlEventsLost
+        exp_alerts:
+          - exp_labels: { severity: critical, job: batch-etl }
+            exp_annotations:
+              summary: "batch-etl が取り込む前に、注文のイベント 3 件が保持期間を過ぎて消えた"
+              runbook: docs/runbooks/batch-rerun.md#保持期間を超えた回復
+
+  # ---------------------------------------------------------------- batch-etl が止まっている(Kafka 側)
+  # 系列は 1 分ごと(評価も 1 分ごと。for の間、毎回の評価で系列が見えるように)
+  - name: 毎日取り込んでいれば、取り込み残しがあっても出さない
+    interval: 1m
+    input_series:
+      # 1 日(1440 分)に 1 回コミットが進む
+      - series: 'kafka_consumergroup_current_offset_sum{instance="kafka-exporter:9308",consumergroup="batch-etl.order-ingest",topic="sales.order.created.v1"}'
+        values: "10x1439 20x1439 30x1439 40x1439"
+      - series: 'kafka_consumergroup_lag_sum{instance="kafka-exporter:9308",consumergroup="batch-etl.order-ingest",topic="sales.order.created.v1"}'
+        values: "5x5759"
+      - series: 'up{instance="kafka-exporter:9308",job="kafka-exporter"}'
+        values: "1x5759"
+    alert_rule_test:
+      - eval_time: 95h
+        alertname: BatchEtlIngestStale
+        exp_alerts: []
+
+  - name: 取り込み残しがあるのに、オフセットが 2 日進まなければ警告する(batch-etl が止まっていても分かる)
+    interval: 1m
+    input_series:
+      # 24 時間後に 1 回だけ進み、その後は止まる
+      - series: 'kafka_consumergroup_current_offset_sum{instance="kafka-exporter:9308",consumergroup="batch-etl.order-ingest",topic="sales.order.created.v1"}'
+        values: "10x1439 20x4319"
+      - series: 'kafka_consumergroup_lag_sum{instance="kafka-exporter:9308",consumergroup="batch-etl.order-ingest",topic="sales.order.created.v1"}'
+        values: "5x5759"
+      - series: 'up{instance="kafka-exporter:9308",job="kafka-exporter"}'
+        values: "1x5759"
+    alert_rule_test:
+      - eval_time: 60h
+        alertname: BatchEtlIngestStale
+        exp_alerts: []
+      - eval_time: 75h
+        alertname: BatchEtlIngestStale
+        exp_alerts:
+          - exp_labels: { severity: warning, instance: kafka-exporter:9308, consumergroup: batch-etl.order-ingest }
+            exp_annotations:
+              summary: "batch-etl が 2 日以上、注文のイベントを取り込んでいない(取り込み残しがある)"
+              runbook: docs/runbooks/batch-rerun.md#取り込みが保持期間に近づいたとき
+
+  - name: Prometheus に 2 日分の記録がなければ(起動の直後)、オフセットが変わっていなくても出さない
+    interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_current_offset_sum{instance="kafka-exporter:9308",consumergroup="batch-etl.order-ingest",topic="sales.order.created.v1"}'
+        values: "10x2400"
+      - series: 'kafka_consumergroup_lag_sum{instance="kafka-exporter:9308",consumergroup="batch-etl.order-ingest",topic="sales.order.created.v1"}'
+        values: "5x2400"
+      - series: 'up{instance="kafka-exporter:9308",job="kafka-exporter"}'
+        values: "1x2400"
+    alert_rule_test:
+      - eval_time: 40h
+        alertname: BatchEtlIngestStale
+        exp_alerts: []
+
+  # ---------------------------------------------------------------- 遅れて届いたデータ・照合
+  - name: 自動では作り直さない古い日が変わったら、照合で一致しない日があれば警告する
+    interval: 1m
+    input_series:
+      - series: 'eia_batch_etl_late_days_pending{job="batch-etl"}'
+        values: "0 2 2"
+      - series: 'eia_batch_etl_reconcile_drift_days{job="batch-etl"}'
+        values: "0 0 1"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: BatchEtlLateDaysPending
+        exp_alerts:
+          - exp_labels: { severity: warning, job: batch-etl }
+            exp_annotations:
+              summary: "遅れて届いたデータで、自動では作り直さない古い日(2 日)が変わった"
+              runbook: docs/runbooks/batch-rerun.md#遅れて届いたデータで古い日が変わったとき
+      - eval_time: 2m
+        alertname: BatchEtlReconcileDrift
+        exp_alerts:
+          - exp_labels: { severity: warning, job: batch-etl }
+            exp_annotations:
+              summary: "週次の照合で、order-service と一致しない日(1 日)がある"
+              runbook: docs/runbooks/batch-rerun.md#照合でずれが見つかったとき

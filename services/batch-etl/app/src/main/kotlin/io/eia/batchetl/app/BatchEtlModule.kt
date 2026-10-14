@@ -3,6 +3,7 @@ package io.eia.batchetl.app
 import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import io.eia.batchetl.adapters.http.HttpOrderSummarySource
+import io.eia.batchetl.adapters.kafka.KafkaIngestPositions
 import io.eia.batchetl.adapters.kafka.KafkaOrderEventSource
 import io.eia.batchetl.adapters.persistence.JdbcMartSummaries
 import io.eia.batchetl.adapters.persistence.JdbcOrderMart
@@ -33,6 +34,8 @@ import io.eia.platform.security.token.ClientCredentialsTokenProvider
 import io.eia.shared.resilience.ResilienceConfig
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
+import org.apache.kafka.clients.admin.Admin
+import org.apache.kafka.clients.admin.AdminClientConfig
 import org.apache.kafka.clients.consumer.KafkaConsumer
 import org.apache.kafka.clients.producer.KafkaProducer
 import org.apache.kafka.clients.producer.Producer
@@ -78,6 +81,8 @@ internal fun batchEtlModule(
             deadLetters = DeadLetterPublisher(get()),
         )
     }
+    single<Admin> { Admin.create(mapOf(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG to run.bootstrapServers)) }
+    single { KafkaIngestPositions({ KafkaConsumer(KafkaOrderEventSource.consumerProperties(run.bootstrapServers)) }, get()) }
     single<IngestOrderEventsUseCase> {
         IngestOrderEventsService(get<KafkaOrderEventSource>(), JdbcRawOrderStore(get<HikariDataSource>(), get()))
     }

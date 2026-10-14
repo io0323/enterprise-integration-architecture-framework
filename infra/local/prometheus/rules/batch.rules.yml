@@ -1,0 +1,105 @@
+# バッチ(platform/batch の DAG と batch-etl。P08。ADR-0030・ADR-0031)のアラート。対応は docs/runbooks/batch-rerun.md。
+# 単体テストは batch.test.yml(make alerts-test)。
+#
+# - SLA は「遅れると予測した時点」で知らせる(Framework 7.2。完了の失敗の後ではなく)。予測は platform/batch の SlaMonitor(ADR-0030 §6)。
+# - 取り込みの遅れは「保持期間に対する割合」で判定する(eia_batch_etl_ingest_retention_seconds。トピックの保持期間を変えると閾値も追従する)。
+#   Prometheus の保持期間(ローカルは 3 日)は Kafka の保持期間(14 日)より短いので、Kafka のオフセットの変化からは判定できない。
+#   batch-etl 自身が、取り込み残しの最も古いイベントの時刻を Kafka から読んで出す(ADR-0031 §7)。
+# - batch-etl が止まっていると上のメトリクスが出ないので、Kafka 側(kafka-exporter)の取り込みの停滞でも知らせる(BatchEtlIngestStale)。
+groups:
+  - name: batch
+    rules:
+      # 期限に遅れる見込み(余裕が負)。前段の遅れによる待ちも予測に入っている(ADR-0030 §6)
+      - alert: BatchSlaAtRisk
+        expr: min by (job, batch_dag) (eia_batch_sla_slack_seconds) < 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.batch_dag }} が SLA の期限に遅れる見込み(余裕が負)"
+          runbook: docs/runbooks/batch-rerun.md#sla-に遅れる見込みのとき
+
+      # 期限を過ぎて終わった
+      - alert: BatchSlaMissed
+        expr: sum by (job, batch_dag) (increase(eia_batch_sla_missed_total[1h])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.batch_dag }} が SLA の期限を過ぎて終わった"
+          runbook: docs/runbooks/batch-rerun.md#sla-に遅れる見込みのとき
+
+      # ステップがリトライの後も失敗した(FAILED は自動で再実行しない。運用者が再実行する。Framework 7.4)
+      - alert: BatchRunFailed
+        expr: sum by (job, batch_dag) (increase(eia_batch_runs_total{batch_run_status="failed"}[1h])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.batch_dag }} の実行が失敗した"
+          runbook: docs/runbooks/batch-rerun.md#実行が失敗したとき
+
+      # 取り込み残しの最も古いイベントが、保持期間の半分(14 日なら 7 日)を超えた。止まっていた期間と同じだけ、消えるまでの余裕が減っている
+      - alert: BatchEtlIngestLagNearRetention
+        expr: |
+          eia_batch_etl_ingest_lag_age_seconds > on(job) (0.5 * eia_batch_etl_ingest_retention_seconds)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "batch-etl の取り込み残しが、トピックの保持期間の半分を超えて古い(消える前に取り込む)"
+          runbook: docs/runbooks/batch-rerun.md#取り込みが保持期間に近づいたとき
+
+      # 保持期間の 75%(14 日なら 10.5 日)を超えた。すぐに取り込まないと消える
+      - alert: BatchEtlIngestLagCritical
+        expr: |
+          eia_batch_etl_ingest_lag_age_seconds > on(job) (0.75 * eia_batch_etl_ingest_retention_seconds)
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "batch-etl の取り込み残しが、トピックの保持期間の 75% を超えて古い(まもなく消える)"
+          runbook: docs/runbooks/batch-rerun.md#取り込みが保持期間に近づいたとき
+
+      # 取り込む前に保持期間を過ぎて消えた(取り込みは失敗し続ける。黙って先に進まない。ADR-0031 §4)
+      - alert: BatchEtlEventsLost
+        expr: max by (job) (eia_batch_etl_ingest_lost_events) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "batch-etl が取り込む前に、注文のイベント {{ $value }} 件が保持期間を過ぎて消えた"
+          runbook: docs/runbooks/batch-rerun.md#保持期間を超えた回復
+
+      # batch-etl が止まっている(上のメトリクスが出ない)ことも、Kafka 側から分かるようにする。
+      # 日次の取り込みは 1 日 1 回コミットするので、取り込み残しがあるのにオフセットが 2 日進まなければ停滞とみなす
+      # (2 日前の系列があること = Prometheus が 2 日分の記録を持つことを条件にし、起動の直後に誤って出さない)
+      - alert: BatchEtlIngestStale
+        expr: |
+          (sum by (instance, consumergroup) (kafka_consumergroup_lag_sum{consumergroup="batch-etl.order-ingest"}) > 0)
+          and on(instance, consumergroup)
+          (sum by (instance, consumergroup) (changes(kafka_consumergroup_current_offset_sum{consumergroup="batch-etl.order-ingest"}[2d])) == 0)
+          and on(instance, consumergroup)
+          (sum by (instance, consumergroup) (kafka_consumergroup_current_offset_sum{consumergroup="batch-etl.order-ingest"} offset 2d))
+          and on(instance) (up == 1)
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "batch-etl が 2 日以上、注文のイベントを取り込んでいない(取り込み残しがある)"
+          runbook: docs/runbooks/batch-rerun.md#取り込みが保持期間に近づいたとき
+
+      # 遅れて届いたデータで、自動では作り直さない古い日(31 日より前)が変わった(ADR-0031 §5)
+      - alert: BatchEtlLateDaysPending
+        expr: max by (job) (eia_batch_etl_late_days_pending) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "遅れて届いたデータで、自動では作り直さない古い日({{ $value }} 日)が変わった"
+          runbook: docs/runbooks/batch-rerun.md#遅れて届いたデータで古い日が変わったとき
+
+      # 週次の照合で、比べ直しても一致しない日がある(ADR-0031 §6)
+      - alert: BatchEtlReconcileDrift
+        expr: max by (job) (eia_batch_etl_reconcile_drift_days) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "週次の照合で、order-service と一致しない日({{ $value }} 日)がある"
+          runbook: docs/runbooks/batch-rerun.md#照合でずれが見つかったとき
