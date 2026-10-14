@@ -11,6 +11,11 @@ dependencies {
     // 取り込んだ位置(Watermark)を、行と同じトランザクションで書く(ADR-0030 §3)
     api(project(":platform:batch"))
     implementation(project(":platform:observability"))
+    // 週次の照合で order-service の日次の集計を読む: Client Credentials のトークン(ADR-0019 §4)と、
+    // Timeout・Retry・Circuit Breaker・応答の分類(ADR-0021)
+    api(project(":platform:security"))
+    api(project(":platform:reliability"))
+    api(libs.ktor.client.core)
     implementation(libs.kotlinx.coroutines.core)
     // 取り込みの位置(SourcePosition)の JSON
     implementation(libs.kotlinx.serialization.json)
@@ -20,6 +25,7 @@ dependencies {
     implementation(libs.slf4j.api)
 
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.ktor.client.mock)
 
     integrationTestImplementation(project(":platform:test-support"))
     integrationTestImplementation(libs.testcontainers.postgresql)

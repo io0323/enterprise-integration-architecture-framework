@@ -25,8 +25,16 @@ import io.kotest.matchers.shouldBe
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.request.get
+import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
+import io.ktor.server.engine.embeddedServer
+import io.ktor.server.netty.Netty
+import io.ktor.server.response.respondText
+import io.ktor.server.routing.get
+import io.ktor.server.routing.post
+import io.ktor.server.routing.routing
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -37,6 +45,7 @@ import org.postgresql.ds.PGSimpleDataSource
 import org.testcontainers.kafka.KafkaContainer
 import org.testcontainers.postgresql.PostgreSQLContainer
 import java.nio.file.Path
+import java.security.MessageDigest
 import java.security.SecureRandom
 import java.time.Duration
 import java.util.HexFormat
@@ -199,6 +208,68 @@ class BatchEtlAppIT :
             query("SELECT generation FROM batch.batch_run WHERE partition_key = '2026-10-13'") shouldBe "2"
         }
 
+        test("reconcile: Gateway 経由で日次の集計と比べる。一致すれば 0、比べ直しても一致しない日があれば 3。結果を記録する") {
+            // run のテストで 2026-10-13 に a-1・a-2・a-3 を作った。order-service と Keycloak の代わり
+            val lines = listOf("a-1", "a-2", "a-3").joinToString("\n") { "$it\tPLACED\t1500\tJPY" }
+            val correct = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(lines.toByteArray()))
+            var digest13 = correct
+            val authorizations = mutableListOf<String?>()
+            val fake =
+                embeddedServer(Netty, port = 0) {
+                    routing {
+                        post("/realms/eiaf/protocol/openid-connect/token") {
+                            call.respondText(
+                                """{"access_token":"report-token","token_type":"Bearer","expires_in":300,"scope":"sales.order:report"}""",
+                                ContentType.Application.Json,
+                            )
+                        }
+                        get("/sales/v1/order-summaries/daily/{date}") {
+                            authorizations += call.request.headers["Authorization"]
+                            val date = call.parameters["date"]!!
+                            val (count, hash) = if (date == "2026-10-13") 3 to digest13 else 0 to EMPTY_SHA256
+                            call.respondText(
+                                """{"date":"$date","timeZone":"Asia/Tokyo","from":"x","until":"y","orderCount":$count,"digest":"$hash"}""",
+                                ContentType.Application.Json,
+                            )
+                        }
+                    }
+                }.start(wait = false)
+            val port =
+                runBlocking {
+                    fake.engine
+                        .resolvedConnectors()
+                        .first()
+                        .port
+                }
+            val env =
+                appEnv() +
+                    mapOf(
+                        BatchEtlConfig.GATEWAY_URL to "http://localhost:$port",
+                        BatchEtlConfig.TOKEN_URL to "http://localhost:$port/realms/eiaf/protocol/openid-connect/token",
+                        BatchEtlConfig.CLIENT_SECRET.value to "batch-secret",
+                    )
+            try {
+                BatchEtlCommands.run(listOf("reconcile", "2026-10-14"), appEnv()) shouldBe BatchEtlCommands.USAGE
+                BatchEtlCommands.run(listOf("reconcile", "2026-10-14"), env - BatchEtlConfig.CLIENT_SECRET.value) shouldBe
+                    BatchEtlCommands.USAGE
+
+                BatchEtlCommands.run(listOf("reconcile", "2026-10-14"), env) shouldBe BatchEtlCommands.OK
+
+                query("SELECT outcome FROM mart.reconciliation WHERE run_date = '2026-10-14' AND business_date = '2026-10-13'") shouldBe
+                    "MATCH"
+                // パーティションを作っていない日は比べない
+                query("SELECT count(*) FROM mart.reconciliation WHERE run_date = '2026-10-14' AND outcome = 'UNVERIFIED'") shouldBe "37"
+                authorizations.toSet() shouldBe setOf("Bearer report-token")
+
+                digest13 = "f".repeat(64)
+                BatchEtlCommands.run(listOf("reconcile", "2026-10-14", "--restart"), env) shouldBe BatchEtlCommands.DRIFT
+                query("SELECT outcome FROM mart.reconciliation WHERE run_date = '2026-10-14' AND business_date = '2026-10-13'") shouldBe
+                    "DRIFT"
+            } finally {
+                fake.stop(0, 0)
+            }
+        }
+
         test("serve: 直近の起動の時刻の分(前日)を自動で実行し、ready になる") {
             val yesterday = BusinessDay.of(Clock.System.now()).minusDays(1).toString()
             val server = (BatchEtlServer.start(appEnv() + (BatchEtlConfig.DAILY_AT to "00:00")) as? Result.Ok)?.value ?: fail("起動できません")
@@ -221,6 +292,8 @@ class BatchEtlAppIT :
             }
         }
     })
+
+private const val EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 private fun randomHex(): String = HexFormat.of().formatHex(ByteArray(16).also(SecureRandom()::nextBytes))
 
