@@ -3,7 +3,7 @@
 # Debezium の公式イメージ(quay.io/debezium/connect)は使わない。最新のパッチ版のタグが毎日付け直され、
 # 古いダイジェストが取得できなくなるため、ダイジェストで固定できない(ADR-0016 §9)。
 # 代わりに、images.env で固定した apache/kafka に、Maven Central の成果物をバージョンと SHA-256 で固定して載せる
-# (Maven Central は公開後に成果物を差し替えられない)。
+# (Maven Central は公開後に成果物を差し替えられない)。取得は fetch-verified.sh(SHA-256 を確かめ、合わなければやり直す)。
 #
 # ベースイメージは images.env の KAFKA_IMAGE を build 引数で受け取る(docker compose / Testcontainers の両方から渡す)。
 # 既定値は置かない(渡し忘れたらビルドを失敗させ、images.env と版がずれないようにする)。
@@ -12,7 +12,8 @@ ARG KAFKA_IMAGE
 # ------------------------------------------------------------------ 成果物の取得と展開
 FROM ${KAFKA_IMAGE} AS plugins
 
-# 版を上げるときは、バージョンと SHA-256 を両方更新する(SHA-256 は Maven Central の .sha256 と、取得したファイルの値の両方で確認する)
+# 版を上げるときは、バージョンと SHA-256 を両方更新する(SHA-256 は Maven Central の .sha256 と、取得したファイルの値の両方で確認する)。
+# 名前は <名前>_SHA256 にする(定期確認の check-pins.py が読む)
 ARG DEBEZIUM_VERSION=3.6.3.Final
 ARG DEBEZIUM_POSTGRES_SHA256=68dfbd3aa0e22cbc164017311449f69dfe6b96b70e72c72c7a3a24ef5c7810e0
 # Apicurio Registry(サーバ。images.env の APICURIO_REGISTRY_IMAGE)と同じ版にする
@@ -24,16 +25,13 @@ ARG JMX_EXPORTER_VERSION=1.7.0
 ARG JMX_EXPORTER_SHA256=0ad843261c567d1924a017d542e14c40f2afff523d940c25ee000742fde4b3a9
 
 USER root
-# ADD --checksum は取得したファイルの SHA-256 が一致しなければビルドを失敗させる
-ADD --checksum=sha256:${DEBEZIUM_POSTGRES_SHA256} \
-    https://repo1.maven.org/maven2/io/debezium/debezium-connector-postgres/${DEBEZIUM_VERSION}/debezium-connector-postgres-${DEBEZIUM_VERSION}-plugin.tar.gz \
-    /tmp/debezium-connector-postgres.tar.gz
-ADD --checksum=sha256:${JMX_EXPORTER_SHA256} \
-    https://github.com/prometheus/jmx_exporter/releases/download/${JMX_EXPORTER_VERSION}/jmx_prometheus_javaagent-${JMX_EXPORTER_VERSION}.jar \
-    /jmx/jmx_prometheus_javaagent.jar
-ADD --checksum=sha256:${APICURIO_CONVERTER_SHA256} \
-    https://repo1.maven.org/maven2/io/apicurio/apicurio-registry-distro-connect-converter/${APICURIO_VERSION}/apicurio-registry-distro-connect-converter-${APICURIO_VERSION}.tar.gz \
-    /tmp/apicurio-converter.tar.gz
+# 取得は fetch-verified.sh(SHA-256 が一致しなければ待ってやり直し、すべて合わなければ失敗する。受け取った応答をログに出す。#106)。
+# 1 行に 1 つの成果物を `RUN fetch-verified.sh <URL> ${<名前>_SHA256} <置く場所>` の形で書く(定期確認の check-pins.py と、
+# infra の compose-config の検査がこの形を読む)
+COPY --chmod=0755 fetch-verified.sh /usr/local/bin/fetch-verified.sh
+RUN fetch-verified.sh https://repo1.maven.org/maven2/io/debezium/debezium-connector-postgres/${DEBEZIUM_VERSION}/debezium-connector-postgres-${DEBEZIUM_VERSION}-plugin.tar.gz ${DEBEZIUM_POSTGRES_SHA256} /tmp/debezium-connector-postgres.tar.gz
+RUN fetch-verified.sh https://github.com/prometheus/jmx_exporter/releases/download/${JMX_EXPORTER_VERSION}/jmx_prometheus_javaagent-${JMX_EXPORTER_VERSION}.jar ${JMX_EXPORTER_SHA256} /jmx/jmx_prometheus_javaagent.jar
+RUN fetch-verified.sh https://repo1.maven.org/maven2/io/apicurio/apicurio-registry-distro-connect-converter/${APICURIO_VERSION}/apicurio-registry-distro-connect-converter-${APICURIO_VERSION}.tar.gz ${APICURIO_CONVERTER_SHA256} /tmp/apicurio-converter.tar.gz
 # plugin.path の下にプラグインごとのディレクトリを置く。
 # Apicurio の配布物に含まれる kafka-clients は、Connect の本体(ベースイメージ)の版を使うため取り除く
 # (org.apache.kafka のクラスは本体から読まれるので使われないが、別の版の jar を並べておかない)

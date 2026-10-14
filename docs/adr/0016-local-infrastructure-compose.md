@@ -100,9 +100,9 @@ Docker のヘルスチェックはコンテナの中で実行されるため、�
   - そのため §2(タグとダイジェストで固定し、開発機・CI・統合テストで同じイメージを使う)を満たせない。
 - **方式**: `images.env` で固定済みの `apache/kafka`(`KAFKA_IMAGE`)に、Maven Central の成果物を載せる(`infra/local/images/kafka-connect/Dockerfile`)。
   - Debezium の Postgres コネクタ(`io.debezium:debezium-connector-postgres:<版>:plugin@tar.gz`)と、Apicurio の Converter(`io.apicurio:apicurio-registry-distro-connect-converter:<版>@tar.gz`。版は Apicurio Registry のサーバに合わせる)。
-  - 版と SHA-256 は Dockerfile の `ARG` で固定し、`ADD --checksum=sha256:...` で取得する(一致しなければビルドが失敗する)。Maven Central は公開した成果物を差し替えられないため、版と SHA-256 の固定は崩れない。
+  - 版と SHA-256 は Dockerfile の `ARG` で固定し、`fetch-verified.sh` で取得する(一致しなければ待ってやり直し、すべて合わなければビルドが失敗する。#106 の前は `ADD --checksum=sha256:...`)。Maven Central は公開した成果物を差し替えられないため、版と SHA-256 の固定は崩れない。
   - ベースイメージは build 引数 `KAFKA_IMAGE` で受け取る(既定値なし)。compose は `build.args` で `images.env` の値を渡す。
-  - CI(`compose-config`)で、`infra/local/images/*/Dockerfile` の `FROM` が `images.env` の変数だけであること、URL から取得する `ADD` に `--checksum` があることを検査する。
+  - CI(`compose-config`)で、`infra/local/images/*/Dockerfile` の `FROM` が `images.env` の変数だけであること、URL からの取得が `RUN fetch-verified.sh <URL> ${..._SHA256} <置く場所>` か `ADD --checksum=sha256:...` だけであることを検査する。
   - `make up` は `--build` を付けて、Dockerfile の変更を反映する(変更がなければキャッシュを使う)。
 - **設定の再現**: 公式イメージのエントリポイントと同じ規則で、`CONNECT_<NAME>` の環境変数を `connect-distributed.properties` の `<name>` にする(`connect-entrypoint.sh`)。既定値(Converter、flush の間隔、`rest.advertised.*` など)も公式イメージの実効値に合わせた。
   - 違いは 2 点: 待ち受けを `listeners=http://0.0.0.0:8083` で指定する(Kafka 4 で `rest.host.name` / `rest.port` は廃止)。`plugin.path` は `/opt/kafka/plugins`。
@@ -177,4 +177,5 @@ Docker のヘルスチェックはコンテナの中で実行されるため、�
 - 2026-10-10: #35 で、固定の定期確認(`.github/workflows/pin-check.yml`・`infra/local/scripts/check-pins.py`)を加えた(§2・§9)。
 - 2026-10-10: #99 のマージの後の確認(`simulate` の手動の実行を 2 回)で、重複の防止(2 回目は「報告済み」)は確かめられたが、GitHub のランナーから Maven Central の成果物の取得が一時的に HTTPError になり、simulate で書き換えていない成果物にも Issue ができた(#102)。#98 の CI の `digest mismatch` も同じ種類の一時的な失敗と見ている。取得とイメージの問い合わせは、失敗したら待ってやり直し(3 回)、全部が同じく失敗したときだけ異常にした。成果物の SHA-256 が合わない応答もやり直してから判断する。イメージの半分以上でタグを取得できないときは、確認の環境の問題として Issue を作らずに失敗で終わる。
 - 2026-10-11: #35 の続きで、`simulate` を表示だけにした。手動の実行は、既定では作るはずの Issue を表示するだけで、`create_issues`(`--create-issues`)を指定したときだけ本物の Issue を作る。定期の実行は従来どおり作る。#99 のマージの後の確認で、確かめるための Issue(#100〜#102)が本物の Issue の一覧に混ざったため。Issue の作成・コメント・重複の防止は、gh を差し替えた単体テストで確かめる。
+- 2026-10-14: #106 で、Kafka Connect のイメージの成果物の取得を `ADD --checksum` から `fetch-verified.sh`(`RUN`)に変えた(§9)。CI で 2 回(#98・#105)、Maven Central の成果物の代わりに別の応答(2 回とも、2 つの別の成果物とも同じ `sha256:807ceab0…`)を受け取って組み立てが失敗した。`ADD` は 1 回で失敗し、何を受け取ったかも分からなかった。`fetch-verified.sh` は、SHA-256 が合わなければ待ってやり直し(合わせて 4 回。10・30・60 秒)、毎回、受け取った応答の状態・ヘッダ・大きさ・先頭のバイトを組み立てのログに出す(原因を確かめるため。CDN の Cookie は出さない)。すべての試行で合わなければ失敗する。版と SHA-256 の固定、受け取った値に合わせて通さない方針は変えない。定期確認(`check-pins.py`)と `compose-config` の検査は、新しい形を読む。
 

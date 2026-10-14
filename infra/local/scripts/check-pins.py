@@ -82,11 +82,16 @@ def parse_images(text: str) -> list[tuple[str, str, str, str]]:
 
 
 def parse_artifacts(text: str) -> list[tuple[str, str, str]]:
-    """Dockerfile の `ADD --checksum=sha256:${VAR} <url>` から (変数名, URL, SHA-256) を返す。ARG の既定値で展開する。"""
+    """Dockerfile の成果物の取得から (変数名, URL, SHA-256) を返す。ARG の既定値で展開する。
+
+    読む形: `RUN fetch-verified.sh <url> ${VAR} <置く場所>`(#106)と `ADD --checksum=sha256:${VAR} <url>`。
+    """
     args = dict(re.findall(r"^ARG\s+([A-Z0-9_]+)=(\S+)", text, re.MULTILINE))
     joined = re.sub(r"\\\n\s*", " ", text)
+    found = [(var, url) for url, var in re.findall(r"^RUN\s+fetch-verified\.sh\s+(\S+)\s+\$\{([A-Z0-9_]+)\}\s", joined, re.MULTILINE)]
+    found += re.findall(r"^ADD\s+--checksum=sha256:\$\{([A-Z0-9_]+)\}\s+(\S+)", joined, re.MULTILINE)
     artifacts = []
-    for var, url in re.findall(r"^ADD\s+--checksum=sha256:\$\{([A-Z0-9_]+)\}\s+(\S+)", joined, re.MULTILINE):
+    for var, url in found:
         expanded = re.sub(r"\$\{([A-Z0-9_]+)\}", lambda m: args[m[1]], url)
         artifacts.append((var, expanded, args[var]))
     return artifacts

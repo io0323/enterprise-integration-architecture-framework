@@ -34,6 +34,13 @@ class ParseTest(unittest.TestCase):
         )
         self.assertEqual(pins.parse_artifacts(text), [("X_SHA256", "https://example.test/x/1.0/x-1.0.tar.gz", "b" * 64)])
 
+    def test_dockerfile_fetch_verified(self):
+        text = (
+            "ARG V=1.0\nARG X_SHA256=" + "b" * 64 + "\n"
+            "RUN fetch-verified.sh https://example.test/x/${V}/x-${V}.tar.gz ${X_SHA256} /tmp/x.tar.gz\n"
+        )
+        self.assertEqual(pins.parse_artifacts(text), [("X_SHA256", "https://example.test/x/1.0/x-1.0.tar.gz", "b" * 64)])
+
     def test_repository_files_are_parsed(self):
         # images.env と Kafka Connect の Dockerfile の全部の固定を読める(形が崩れたら CI で分かる)
         self.assertGreaterEqual(len(pins.parse_images(pins.IMAGES_ENV.read_text())), 19)

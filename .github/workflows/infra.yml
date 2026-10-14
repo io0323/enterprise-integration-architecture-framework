@@ -58,7 +58,8 @@ jobs:
           if grep -n -E '^\s+image:' infra/local/docker-compose.yml | grep -v -E 'image: \$\{[A-Z0-9_]+_IMAGE:\?[^}]*\}$'; then
             echo "docker-compose.yml の image は images.env の変数で指定してください"; exit 1
           fi
-      # 自前で組み立てるイメージ(ADR-0016 §9)も、ベースは images.env の変数だけにし、取得する成果物は SHA-256 で固定する
+      # 自前で組み立てるイメージ(ADR-0016 §9)も、ベースは images.env の変数だけにし、取得する成果物は SHA-256 で固定する。
+      # URL からの取得は `RUN fetch-verified.sh <URL> ${..._SHA256} <置く場所>`(#106)か `ADD --checksum=sha256:...` だけにする
       - name: Self-built images use images.env bases and checksummed downloads
         run: |
           status=0
@@ -67,8 +68,10 @@ jobs:
               echo "$dockerfile: FROM は images.env の変数(ARG で受け取る \${..._IMAGE})だけにしてください"; status=1
             fi
             # 行末の \ で続く行を 1 行にしてから見る(URL は ADD の次の行に書くことが多い)
-            if sed -e ':a' -e '/\\$/N; s/\\\n//; ta' "$dockerfile" | grep -E '^ADD ' | grep -E 'https?://' | grep -v -E -- '--checksum=sha256:'; then
-              echo "$dockerfile: URL から取得する ADD には --checksum=sha256:... を付けてください"; status=1
+            if sed -e ':a' -e '/\\$/N; s/\\\n//; ta' "$dockerfile" | grep -E 'https?://' | grep -v -E '^\s*#' \
+              | grep -v -E -- '^ADD --checksum=sha256:' \
+              | grep -v -E '^RUN fetch-verified\.sh https?://[^ ]+ \$\{[A-Z0-9_]+_SHA256\} [^ ]+$'; then
+              echo "$dockerfile: URL からの取得は fetch-verified.sh(SHA-256 付き)か ADD --checksum=sha256:... にしてください"; status=1
             fi
           done
           exit $status
