@@ -12,7 +12,7 @@ CLAUDE.md §6 の「設計書と乖離する場合は ADR を書く」に従い�
 |---|---|---|---|
 | Secrets(12.2) | Vault 型の集中管理と自動ローテーション | `platform/security` に `SecretProvider` Port を定義し、ローカルは環境変数と Docker secrets で実装する | Vault / OpenBao / クラウドの Secret Manager の Adapter を追加する |
 | mTLS(12.1) | 内部サービス間・B2B・高機密連携で必須 | `infra/local/certs/` の開発用 CA(スクリプトで生成し、コミットしない)で、**APISIX → サービス**(P05)と **gRPC**(P13)に適用する。Kafka の SSL / ACL は任意の `secure` profile とする | Service Mesh か証明書の自動ローテーション基盤 |
-| ワークフロー(7.2) | DAG オーケストレータ、完了起動、SLA の遅延予測 | `platform/batch` に軽量 DAG ランナーを作る: DAG 定義(Kotlin DSL)、前段の完了イベント・ファイル到着での起動、Checkpoint、SLA 遅延予測のメトリクス | 汎用のワークフロー基盤(ADR で選定) |
+| ワークフロー(7.2) | DAG オーケストレータ、完了起動、SLA の遅延予測 | `platform/batch` に軽量 DAG ランナーを作る(ADR-0030): DAG 定義(Kotlin DSL)、前段の完了イベント・ファイル到着での起動、Checkpoint、SLA 遅延予測のメトリクス | 汎用のワークフロー基盤(ADR で選定) |
 | Audit(14.1) | 改竄不能なストレージに記録 | `platform/audit`: PostgreSQL の追記専用テーブル(UPDATE / DELETE 権限を付けない)に、前のレコードのハッシュを含めるハッシュチェーンで記録する。日次でチェーンの先頭ハッシュを S3 互換ストレージ(SeaweedFS。ADR-0015)の Object Lock(Compliance モード)に保存する | WORM ストレージや監査専用基盤 |
 | B2B Protocol(11.1) | AS2(MDN)を既定、SFTP、OFTP2 | SFTP のみ。受領応答は CONTRL 相当のドキュメントで返す | AS2 / OFTP2 対応の B2B Gateway |
 | 保存データの暗号化(12.2) | Broker・キュー・ステージング・ファイル保管の暗号化、フィールドレベル暗号化 | **範囲外**。ファイルの PGP 暗号化(P09)とマスキングユーティリティのみ実装する | 各基盤の暗号化機能と KMS |
@@ -37,3 +37,4 @@ CLAUDE.md §6 の「設計書と乖離する場合は ADR を書く」に従い�
 - 2026-09-27: `SecretProvider` と、環境変数・Docker secrets(`NAME_FILE`)から読む `EnvSecretProvider` を `platform/security` に実装した。規則は ADR-0019 §6(P04a ③)。
 - 2026-09-29: Audit を `platform/audit` に実装した(P04a ④。ADR-0017)。表の「UPDATE / DELETE 権限を付けない」は、アプリ用のロール(`{name}_app`)に INSERT / SELECT だけを付け、加えてトリガーで UPDATE / DELETE / TRUNCATE を拒否する形にした。アンカーは SeaweedFS の Object Lock(COMPLIANCE)に、audit 専用の資格情報で保存する。トリガーを外せるロールによる改竄は防げず、ハッシュチェーンとアンカーとの照合(`make audit-verify`)で検出する。
 - 2026-10-01: P05 ⑤b で、APISIX → サービスの mTLS のうち、サービス側を実装した(ADR-0024 §6)。開発用 CA と証明書は `infra/local/scripts/gen-dev-certs.sh`(`make certs`)が `infra/local/certs/` に作り、`.gitignore` に加えた。`make up` のたびに有効期限を確かめ、残りが 7 日を切ったものを作り直す(docs/runbooks/dev-certificates.md)。
+- 2026-10-14: ワークフローの軽量 DAG ランナーを `platform/batch` に実装した(P08 ②。ADR-0030)。前段の完了は、イベントではなく実行の記録(DB)を見て判定する(ADR-0030 §4)。
