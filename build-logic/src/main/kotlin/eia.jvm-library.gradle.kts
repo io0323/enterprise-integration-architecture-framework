@@ -78,6 +78,10 @@ tasks.register<Test>("integrationTest") {
     testClassesDirs = integrationTest.output.classesDirs
     classpath = integrationTest.runtimeClasspath
     shouldRunAfter(tasks.test)
+    // 統合テストは Gradle の入力に宣言していないファイル(infra/local の topics.conf・コネクタの設定・契約など)と、実際のミドルウェアの
+    // 振る舞いに依存する。結果をビルドキャッシュから取ったり、前回の結果で済ませたりせず、毎回実行する(#24 の後に分かった。#105)
+    outputs.cacheIf("統合テストは宣言していない外部の状態に依存する") { false }
+    outputs.upToDateWhen { false }
 }
 
 // ADR-0016 §5: Testcontainers は compose と同じ infra/local/images.env のイメージを使う(platform/test-support の InfraImages)。
