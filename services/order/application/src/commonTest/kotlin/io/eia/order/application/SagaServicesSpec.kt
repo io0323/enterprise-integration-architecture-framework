@@ -123,6 +123,9 @@ class SagaServicesSpec :
             w.commands.sent.map { it.second } shouldBe
                 listOf(SagaCommand.RESERVE_STOCK, SagaCommand.AUTHORIZE_PAYMENT, SagaCommand.ARRANGE_SHIPMENT)
             w.events.cancelled shouldBe emptyList()
+            // 状態の遷移ごとに sales.order.status-changed.v1(版は遷移ごとに増える。ADR-0031 §2)
+            w.events.statusChanged.map { Triple(it.from, it.to, it.version) } shouldBe
+                listOf(Triple(OrderStatus.PLACED, OrderStatus.CONFIRMED, 1L), Triple(OrderStatus.CONFIRMED, OrderStatus.SHIPPED, 2L))
         }
 
         test("在庫不足: 補償なしで COMPENSATED、注文 CANCELLED と sales.order.cancelled.v1(STOCK_UNAVAILABLE)") {
@@ -133,6 +136,8 @@ class SagaServicesSpec :
             w.saga() shouldBe Saga("saga-1", order, SagaState.COMPENSATED, SagaFailure.STOCK_UNAVAILABLE)
             w.orderStatus(order) shouldBe OrderStatus.CANCELLED
             w.events.cancelled shouldBe listOf(order to SagaFailure.STOCK_UNAVAILABLE)
+            // 取消も状態の遷移として出す(sales.order.cancelled.v1 とは別に)
+            w.events.statusChanged.map { it.from to it.to } shouldBe listOf(OrderStatus.PLACED to OrderStatus.CANCELLED)
         }
 
         test("決済の失敗: 在庫を解放してから COMPENSATED。補償の段の期限は送り直しの間隔") {
@@ -227,6 +232,8 @@ class SagaServicesSpec :
 
             w.saga().state shouldBe SagaState.AUTHORIZING_PAYMENT
             w.orderStatus(order) shouldBe OrderStatus.PLACED
+            // 遷移のイベントも書かれていない(業務の更新と同じトランザクション)
+            w.events.statusChanged shouldBe emptyList()
         }
 
         test("期限切れの処理は、上限の件数ずつ、期限を過ぎた Saga がなくなるまで繰り返す") {

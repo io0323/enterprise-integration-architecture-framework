@@ -81,3 +81,18 @@ public data class OrderCancelledV1(
     val cancelledAt: kotlin.time.Instant,
     val reason: String,
 )
+
+/**
+ * `sales.order.status-changed.v1`(受け付けの後の状態の遷移。P08。ADR-0031 §2)。
+ *
+ * @property version 遷移の後の注文の版(受信側は版の大きいほうを今の状態とする)
+ */
+@Serializable
+@SerialName("io.eia.events.sales.OrderStatusChanged")
+public data class OrderStatusChangedV1(
+    val orderId: String,
+    val status: OrderStatusV1,
+    val previousStatus: OrderStatusV1,
+    val version: Long,
+    val changedAt: kotlin.time.Instant,
+)

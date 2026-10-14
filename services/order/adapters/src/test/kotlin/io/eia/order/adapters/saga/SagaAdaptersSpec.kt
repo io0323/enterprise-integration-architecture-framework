@@ -21,6 +21,8 @@ import io.eia.order.adapters.out.outbox.AddressV1
 import io.eia.order.adapters.out.outbox.MoneyV1
 import io.eia.order.adapters.out.outbox.OrderCancelledV1
 import io.eia.order.adapters.out.outbox.OrderEventSchemas
+import io.eia.order.adapters.out.outbox.OrderStatusChangedV1
+import io.eia.order.adapters.out.outbox.OrderStatusV1
 import io.eia.order.adapters.out.saga.ArrangeShipmentV1
 import io.eia.order.adapters.out.saga.AuthorizePaymentV1
 import io.eia.order.adapters.out.saga.CancelShipmentV1
@@ -157,7 +159,9 @@ class SagaAdaptersSpec :
                 )
             SagaSchemas.reserveStock.schema shouldBe contract("inventory/ReserveStock.avsc")
             SagaSchemas.arrangeShipment.schema shouldBe contract("shipping/ArrangeShipment.avsc")
-            OrderEventSchemas.subjects.map { it.topic } shouldBe listOf("sales.order.created.v1", "sales.order.cancelled.v1")
+            OrderEventSchemas.subjects.map { it.topic } shouldBe
+                listOf("sales.order.created.v1", "sales.order.cancelled.v1", "sales.order.status-changed.v1")
+            OrderEventSchemas.orderStatusChanged.schema shouldBe contract("sales/OrderStatusChanged.avsc")
 
             val commands =
                 listOf(
@@ -179,6 +183,17 @@ class SagaAdaptersSpec :
                         ArrangeShipmentV1("s", "o", AddressV1("JP", "100-0001", "千代田区", "千代田 1-1"), listOf(ShipmentLineV1(1, "SKU-1", 2))),
                     ),
                     Triple(SagaSchemas.cancelShipment.schema, CancelShipmentV1.serializer(), CancelShipmentV1("s", "o")),
+                    Triple(
+                        OrderEventSchemas.orderStatusChanged.schema,
+                        OrderStatusChangedV1.serializer(),
+                        OrderStatusChangedV1(
+                            "o",
+                            OrderStatusV1.SHIPPED,
+                            OrderStatusV1.CONFIRMED,
+                            2,
+                            Instant.parse("2026-10-14T00:00:00.123456Z"),
+                        ),
+                    ),
                     Triple(
                         OrderEventSchemas.orderCancelled.schema,
                         OrderCancelledV1.serializer(),

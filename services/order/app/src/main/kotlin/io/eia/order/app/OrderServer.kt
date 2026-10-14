@@ -3,6 +3,7 @@ package io.eia.order.app
 import com.zaxxer.hikari.HikariDataSource
 import io.eia.order.adapters.inbound.rest.OrderProblems
 import io.eia.order.adapters.inbound.rest.orderRoutes
+import io.eia.order.adapters.inbound.rest.orderSummaryRoutes
 import io.eia.order.application.port.inbound.TimeoutSagasUseCase
 import io.eia.platform.api.deadline.installRequestDeadline
 import io.eia.platform.api.idempotency.IdempotencyStore
@@ -234,7 +235,12 @@ internal class OrderServer private constructor(
             }
             routing {
                 overPlaintext { healthRoutes(koin.get(), koin.get(), koin.get()) }
-                overTls { authenticate { orderRoutes(koin.get()) } }
+                overTls {
+                    authenticate {
+                        orderRoutes(koin.get())
+                        orderSummaryRoutes(koin.get())
+                    }
+                }
             }
             launchPurgeJob(koin.get(), koin.get(), config)
             launchSagaTimeoutJob(koin.get(), config)

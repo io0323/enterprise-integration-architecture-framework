@@ -70,11 +70,12 @@ services/order/
   domain/src/commonMain/kotlin/io/eia/order/domain/          # package io.eia.order.domain
     Order.kt, OrderLine.kt, OrderStatus.kt, Identifiers.kt, ShippingAddress.kt   # 状態遷移は docs/architecture/order-state-machine.md
     OrderSaga.kt(Saga の状態・受け取るもの・遷移表 OrderSagaRules。純粋な関数。docs/architecture/order-saga.md・ADR-0029)
+    BusinessDay.kt(業務の 1 日 = 日本時間の区切りと、日次の集計のハッシュの行の形式 DailyOrderDigest。ADR-0031 §1・§3)
   application/src/commonMain/kotlin/io/eia/order/application/ # package io.eia.order.application
     port/inbound/PlaceOrderUseCase.kt, HandleSagaReplyUseCase.kt, TimeoutSagasUseCase.kt   # `in` は Kotlin の予約語のため inbound / outbound とする
     port/outbound/OrderRepository.kt(楽観的ロック), TransactionRunner.kt, OrderIdGenerator.kt, OrderAuditTrail.kt, OrderEventOutbox.kt(P06。Outbox でイベントを書く)   # IdempotencyStore は platform/api(ADR-0022 §1)
     port/outbound/SagaPorts.kt(P07。SagaStore(期限は DB の時計)・SagaCommandOutbox・ProcessedReplies・SagaIdGenerator・SagaObserver)
-    usecase/PlaceOrderService.kt, GetOrderService.kt
+    usecase/PlaceOrderService.kt, GetOrderService.kt, GetDailyOrderSummaryService.kt(日次の集計。Port は port/outbound/OrderSummaries.kt)
     usecase/SagaCoordinator.kt(遷移表の判定を、注文・Saga・コマンド・イベントの書き込みにする。SagaTimeouts), HandleSagaReplyService.kt, TimeoutSagasService.kt   # ADR-0029
   adapters/src/main/kotlin/io/eia/order/adapters/             # package io.eia.order.adapters
     inbound/rest/OrderRoutes.kt, OrderDtos.kt, OrderDtoMapper.kt, OrderProblems.kt   # `in` は予約語(ktlint はバッククォートのパッケージ名を許さない)

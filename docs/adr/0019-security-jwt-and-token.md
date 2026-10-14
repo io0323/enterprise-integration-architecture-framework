@@ -202,4 +202,4 @@ P04a ③ で `platform/security` を作る。Framework 12.1 は、受信側で�
   - 一度取得した後は、IdP が止まっても ready のまま(§3 のキャッシュと `outageTolerant` で検証を続け、取得できないときの 503 はリクエストごと)。readiness を IdP の状態に連動させると、IdP の障害で全部のインスタンスがトラフィックから外れるため。
   - 読み取りのタイムアウト(2 秒)は変えない。リクエストの中で JWKS を取得するのは、未知の `kid`(鍵のローテーション)のときだけになる。
   - 確かめること: `JwksPrefetchSpec`、`OrderAppIT` の「IdP の応答が遅く JWKS を取得できない間は /health/ready が 503…」。
-
+- 2026-10-14: P08 ①で、realm にクライアントスコープ `sales.order:report`(注文の日次の集計の参照。ADR-0031 §3)を足し、`eiaf-e2e`・`eiaf-e2e-b` の optional のスコープに加えた。§8 のとおり optional(要求したときだけ入る)。分析(batch-etl)のクライアントは、照合を入れる P08 ④で足す。realm の取り込みは realm がないときだけ行われるので、前に作ったローカルのボリュームでは `make clean` が要る。

@@ -7,6 +7,7 @@ import io.eia.order.adapters.out.outbox.OrderCreatedV1
 import io.eia.order.adapters.out.outbox.OrderEventSchemas
 import io.eia.order.adapters.out.outbox.OutboxOrderEvents
 import io.eia.order.adapters.out.persistence.ExposedOrderRepository
+import io.eia.order.adapters.out.persistence.ExposedOrderSummaries
 import io.eia.order.adapters.out.persistence.ExposedTransactionBoundary
 import io.eia.order.adapters.out.persistence.ExposedTransactionRunner
 import io.eia.order.adapters.out.persistence.OrderDatabase
@@ -17,9 +18,11 @@ import io.eia.order.adapters.out.saga.ExposedSagaStore
 import io.eia.order.adapters.out.saga.OutboxSagaCommands
 import io.eia.order.adapters.out.saga.SagaSchemas
 import io.eia.order.adapters.out.saga.UuidV7SagaIds
+import io.eia.order.application.usecase.GetDailyOrderSummaryService
 import io.eia.order.application.usecase.GetOrderService
 import io.eia.order.application.usecase.PlaceOrderService
 import io.eia.order.application.usecase.SagaCoordinator
+import io.eia.order.domain.BusinessDay
 import io.eia.platform.api.idempotency.CanonicalBody
 import io.eia.platform.api.idempotency.IDEMPOTENCY_KEY_HEADER
 import io.eia.platform.api.idempotency.IDEMPOTENT_REPLAYED_HEADER
@@ -144,8 +147,7 @@ private fun ApplicationTestBuilder.orderService(
             db.database,
             Outbox(),
             outboxEvents,
-            OrderEventSchemas.orderCreatedSerializer(book),
-            OrderEventSchemas.orderCancelledSerializer(book),
+            OrderEventSchemas.serializers(book),
         )
     val api =
         OrderApi(
@@ -178,7 +180,12 @@ private fun ApplicationTestBuilder.orderService(
                 realm = "eiaf"
             }
         }
-        routing { authenticate { orderRoutes(api) } }
+        routing {
+            authenticate {
+                orderRoutes(api)
+                orderSummaryRoutes(GetDailyOrderSummaryService(ExposedOrderSummaries(db.database)))
+            }
+        }
     }
 }
 
@@ -433,6 +440,55 @@ class OrderRoutesIT :
                     client
                         .get("/v1/orders/ord-1") { header(HttpHeaders.Authorization, "Bearer ${idp.token(scopes = SCOPE_WRITE)}") }
                         .status shouldBe HttpStatusCode.Forbidden
+                }
+            }
+        }
+
+        context("GET /v1/order-summaries/daily/{date}(ADR-0031 §3)") {
+            test("集計のスコープ(sales.order:report)で、契約の DailyOrderSummary の形で返す。区切りは日本時間") {
+                val db = environment.newDatabase()
+                testApplication {
+                    orderService(db, idp)
+                    place(idp.token(scopes = SCOPE_WRITE)).status shouldBe HttpStatusCode.Created
+                    val today =
+                        BusinessDay.of(
+                            kotlin.time.Clock.System
+                                .now(),
+                        )
+                    val response =
+                        client.get("/v1/order-summaries/daily/$today") {
+                            header(HttpHeaders.Authorization, "Bearer ${idp.token(scopes = SCOPE_REPORT)}")
+                        }
+                    response.status shouldBe HttpStatusCode.OK
+                    val body = response.bodyAsText()
+                    ContractSchemas.violations("DailyOrderSummary", body).shouldBeEmpty()
+                    body shouldContain "\"date\":\"$today\""
+                    body shouldContain "\"timeZone\":\"Asia/Tokyo\""
+                    body shouldContain "\"orderCount\":1"
+                    body shouldContain "\"from\":\"${today.start}\""
+                }
+            }
+
+            test("認証は必須(なければ 401)。読み取り・書き込みのスコープでは読めない(403)。日付の形式の誤りは 400") {
+                val db = environment.newDatabase()
+                testApplication {
+                    orderService(db, idp)
+                    client.get("/v1/order-summaries/daily/2026-10-14").status shouldBe HttpStatusCode.Unauthorized
+                    listOf(SCOPE_READ, SCOPE_WRITE).forEach { scope ->
+                        client
+                            .get(
+                                "/v1/order-summaries/daily/2026-10-14",
+                            ) { header(HttpHeaders.Authorization, "Bearer ${idp.token(scopes = scope)}") }
+                            .status shouldBe HttpStatusCode.Forbidden
+                    }
+                    listOf("2026-02-30", "20261014", "today").forEach { date ->
+                        val response =
+                            client.get("/v1/order-summaries/daily/$date") {
+                                header(HttpHeaders.Authorization, "Bearer ${idp.token(scopes = SCOPE_REPORT)}")
+                            }
+                        response.status shouldBe HttpStatusCode.BadRequest
+                        response.problemType() shouldBe "https://eiaf.example/problems/bad-request"
+                    }
                 }
             }
         }

@@ -19,6 +19,12 @@
       "attributes": { "include.in.token.scope": "true", "display.on.consent.screen": "false" }
     },
     {
+      "name": "sales.order:report",
+      "description": "注文の日次の集計の参照(件数とハッシュだけ。分析の照合用。P08。ADR-0031 §3。contracts/openapi/order-api.v1.yaml)",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "true", "display.on.consent.screen": "false" }
+    },
+    {
       "name": "order-api-audience",
       "description": "aud に order-api を入れる(CLAUDE.md §5: JWT は aud を検証する)",
       "protocol": "openid-connect",
@@ -53,7 +59,7 @@
       "implicitFlowEnabled": false,
       "fullScopeAllowed": false,
       "defaultClientScopes": ["order-api-audience"],
-      "optionalClientScopes": ["sales.order:read", "sales.order:write"]
+      "optionalClientScopes": ["sales.order:read", "sales.order:write", "sales.order:report"]
     },
     {
       "clientId": "eiaf-e2e-b",
@@ -69,7 +75,7 @@
       "implicitFlowEnabled": false,
       "fullScopeAllowed": false,
       "defaultClientScopes": ["order-api-audience"],
-      "optionalClientScopes": ["sales.order:read", "sales.order:write"]
+      "optionalClientScopes": ["sales.order:read", "sales.order:write", "sales.order:report"]
     }
   ]
 }

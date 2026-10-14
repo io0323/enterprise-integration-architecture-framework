@@ -119,8 +119,16 @@ public class SagaCoordinator(
         if (status == null) return ok(order)
         return order.transitionTo(status).flatMap { transition ->
             when (transition) {
-                is Order.Transition.Applied -> orders.update(transition.order)
-                is Order.Transition.NoOp -> ok(transition.order)
+                // 状態の遷移と、その遷移のイベントを同じトランザクションで書く(ADR-0007。分析が今の状態を持つため。ADR-0031 §2)
+                is Order.Transition.Applied -> {
+                    orders.update(transition.order).flatMap { updated ->
+                        events.orderStatusChanged(updated, transition.from).map { updated }
+                    }
+                }
+
+                is Order.Transition.NoOp -> {
+                    ok(transition.order)
+                }
             }
         }
     }
