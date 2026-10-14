@@ -264,11 +264,11 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           docker system prune --all --force >/dev/null
       # order と cdc(レガシーの CDC と ACL。P06 ⑤。LegacyOrderAclE2E)と saga(注文 Saga の参加者。P07 ⑥。SagaE2E)
-      - name: Up (core + order + cdc + saga)
+      - name: Up (core + order + cdc + saga + batch)
         id: up
         run: |
           start=$(date +%s)
-          make up PROFILE="order cdc saga"
+          make up PROFILE="order cdc saga batch"
           echo "seconds=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
       - name: E2E
         id: e2e
@@ -284,7 +284,7 @@ jobs:
             echo
             echo "| 段階 | 秒 |"
             echo "|---|---|"
-            echo "| 基盤の起動(make up PROFILE=\"order cdc saga\") | ${{ steps.up.outputs.seconds }} |"
+            echo "| 基盤の起動(make up PROFILE=\"order cdc saga batch\") | ${{ steps.up.outputs.seconds }} |"
             echo "| E2E(make e2e) | ${{ steps.e2e.outputs.seconds }} |"
             echo
             python3 scripts/ci/test-summary.py
