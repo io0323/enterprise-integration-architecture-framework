@@ -56,7 +56,7 @@ client_token() {
 header_value() { awk -v name="$(tr '[:upper:]' '[:lower:]' <<<"$1")" -F': ' 'tolower($1) == name { sub(/\r$/, "", $2); print $2; exit }'; }
 
 # 1 回だけ動いて終わるコンテナ(終了コード 0 で終わっていれば正常)
-oneshot_services=" order-migrate schema-publish legacy-migrate kafka-topics inventory-migrate payment-migrate shipping-migrate "
+oneshot_services=" order-migrate schema-publish legacy-migrate kafka-topics inventory-migrate payment-migrate shipping-migrate batch-etl-migrate "
 
 # ------------------------------------------------------------------ 共通: healthy
 verify_health() {
@@ -1101,6 +1101,76 @@ verify_saga() {
     }
     check "${topic%%.*}-service: ヘッダのないコマンドを DLQ($topic.dlq)に隔離した" retry 12 5 topic_dlq_has_key
   done
+}
+
+# ------------------------------------------------------------------ batch(P08。注文の分析のバッチ。ADR-0030・ADR-0031)
+# 日次の DAG の自動の起動・運用者の実行(run)・トピックの保持期間・メトリクス・ダッシュボードを確かめる。
+# 取り込み・置換・遅れたデータ・照合の中身は統合テスト(BatchEtlIT・BatchEtlAppIT)と E2E(P08 ⑥)で確かめる
+verify_batch() {
+  current="batch"
+  local yesterday day_before
+  yesterday="$(TZ=Asia/Tokyo date -v-1d +%F 2>/dev/null || TZ=Asia/Tokyo date -d yesterday +%F)"
+  day_before="$(TZ=Asia/Tokyo date -v-2d +%F 2>/dev/null || TZ=Asia/Tokyo date -d '2 days ago' +%F)"
+  batch_sql() { "${compose[@]}" exec -T postgres psql -U postgres -d batch_etl -tAc "$1"; }
+  run_status() { batch_sql "select status from batch.batch_run where dag_id = 'batch-etl.order-daily' and partition_key = '$1'"; }
+
+  # serve は起動すると、直近の起動の時刻(01:00 JST)の分 = 前日の分を実行する(ADR-0030 §4)
+  check "batch-etl: 起動すると前日($yesterday)の日次の DAG を実行して成功する" retry 24 5 equals SUCCEEDED run_status "$yesterday"
+  check "batch-etl: 前日のパーティションを作った(mart.partition_build)" \
+    equals 1 batch_sql "select count(*) from mart.partition_build where business_date = '$yesterday'"
+  # 運用者の実行(Runbook)。同じイメージ・同じ環境で 1 回だけ動かす
+  check "batch-etl: run $day_before(運用者の実行)が終了コード 0 で終わる" \
+    "${compose[@]}" run --rm --no-deps batch-etl run "$day_before"
+  check "batch-etl: run で実行した日も成功の記録がある" equals SUCCEEDED run_status "$day_before"
+
+  check "PostgreSQL: batch_etl_app は分析の表を読み書きできる" \
+    equals t batch_sql "select has_table_privilege('batch_etl_app', 'raw.order_placed', 'INSERT')"
+  check "PostgreSQL: batch_etl_app は表を作れない(DDL は所有者のマイグレーションだけ)" \
+    equals f batch_sql "select has_schema_privilege('batch_etl_app', 'mart', 'CREATE')"
+  check "PostgreSQL: 分析の DB に住所の列がない(市区町村・番地はロードの前に落とす。ADR-0031 §4)" \
+    equals 0 batch_sql "select count(*) from information_schema.columns where table_schema in ('raw','mart') and column_name in ('city','line1','line2')"
+
+  topic_retention() {
+    kafka_cli /opt/kafka/bin/kafka-configs.sh --bootstrap-server kafka:9092 --describe --entity-type topics --entity-name "$1" 2>/dev/null |
+      grep -o 'retention.ms=[0-9]*' | head -1
+  }
+  local topic
+  for topic in sales.order.created.v1 sales.order.cancelled.v1 sales.order.status-changed.v1; do
+    check "Kafka: $topic の保持期間は 14 日(ADR-0031 §7)" equals retention.ms=1209600000 topic_retention "$topic"
+  done
+
+  # 取り込みの遅れのメトリクス(保持期間に対するアラートの元。prometheus/rules/batch.rules.yml)
+  prom_value() {
+    curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode "query=$1" |
+      python3 -c 'import json,sys; r=json.load(sys.stdin)["data"]["result"]; print(r[0]["value"][1] if r else "")'
+  }
+  check "Prometheus: batch-etl がトピックの保持期間(14 日 = 1209600 秒)を出す" \
+    retry 18 10 equals 1209600 prom_value 'max(eia_batch_etl_ingest_retention_seconds{job="batch-etl"})'
+  check "Prometheus: batch-etl が消えたイベントの件数(0)を出す" \
+    retry 6 10 equals 0 prom_value 'max(eia_batch_etl_ingest_lost_events{job="batch-etl"})'
+  check "Prometheus: バッチのアラートのルールを読み込んでいる" \
+    bash -c "curl -fsS http://localhost:19090/api/v1/rules | python3 -c 'import json,sys; n={r[\"name\"] for g in json.load(sys.stdin)[\"data\"][\"groups\"] for r in g[\"rules\"]}; sys.exit(0 if {\"BatchSlaAtRisk\",\"BatchEtlIngestLagNearRetention\",\"BatchEtlEventsLost\",\"BatchEtlIngestStale\",\"BatchEtlReconcileDrift\"} <= n else 1)'"
+
+  local dash result
+  dash="$(curl -fsS -u "admin:$GRAFANA_ADMIN_PASSWORD" http://localhost:19300/api/dashboards/uid/eiaf-batch || true)"
+  if [[ "$(json 'd["meta"]["folderTitle"] + "/" + d["dashboard"]["title"]' <<<"$dash" 2>/dev/null)" == "EIAF/Batch — Order analytics" ]]; then
+    pass "Grafana: ダッシュボード Batch — Order analytics(フォルダ EIAF)を provisioning で読み込んでいる"
+    # SLA の予測は実行中・前段待ちの実行があるときだけ、照合のずれは照合の後だけ、アラートは平常時は空でよい
+    result="$(dashboard_panels_return_data "$dash" "SLA の余裕の予測" "自動では作り直さない古い日・照合のずれ" "バッチのアラート(firing / pending)")"
+    if [[ "$result" == ok ]]; then pass "Grafana: バッチのダッシュボードの全パネルの式が、Prometheus でデータを返す"; else fail "Grafana: バッチのパネルの式が想定外: $result"; fi
+  else
+    fail "Grafana: ダッシュボード eiaf-batch を読み込めない"
+  fi
+
+  # 週次の照合は Gateway 経由で order-service を読むので、order profile と一緒のときだけ確かめる
+  if [[ " ${profiles[*]} " == *" order "* ]]; then
+    local today
+    today="$(TZ=Asia/Tokyo date +%F)"
+    check "batch-etl: reconcile $today が Gateway 経由で日次の集計と比べ、一致する(終了コード 0)" \
+      "${compose[@]}" run --rm --no-deps batch-etl reconcile "$today"
+    check "batch-etl: 照合の結果を記録した(前日は MATCH)" \
+      equals MATCH batch_sql "select outcome from mart.reconciliation where run_date = '$today' and business_date = '$yesterday'"
+  fi
 }
 
 verify_health

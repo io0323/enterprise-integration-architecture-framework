@@ -9,7 +9,7 @@ ROADMAP P08 は、受注のデータを分析の DB(PostgreSQL を DWH と見立
 - 「1 日」の区切り(分析の日次のパーティションと、照合の元の日次の集計がずれないように)。
 - 照合の元と、比べる値。
 
-このフェーズの残りの決定のうち、取り込みと変換の方式(§4)と遅れて届いたデータ(§5)は P08 ③、週次の照合(§6)は ④ で足した。Kafka の保持期間は ⑤ で足す。DAG の実行の部品(`platform/batch`)は ADR-0030。
+取り込みと変換の方式(§4)と遅れて届いたデータ(§5)は P08 ③、週次の照合(§6)は ④、Kafka の保持期間と回復(§7)は ⑤ で足した。DAG の実行の部品(`platform/batch`)は ADR-0030。
 
 ## Decision
 ### 1. 1 日の区切りは日本時間(Asia/Tokyo)
@@ -80,6 +80,29 @@ ROADMAP P08 は、受注のデータを分析の DB(PostgreSQL を DWH と見立
   - 応答の `timeZone` が分析の区切り(Asia/Tokyo。§1)と違えば、比べずに失敗にする(区切りのずれた集計を比べない)。
 - 分析の側のハッシュも §3 と同じ作り方(`ORDER BY order_id COLLATE "C"`。統合テストは ICU の言語的な並びの DB で確かめ、`COLLATE "C"` を外すと失敗することを確かめた)。
 
+### 7. Kafka の保持期間と、保持期間を超えた回復
+- 注文のイベントのトピック(`sales.order.created.v1`・`cancelled.v1`・`status-changed.v1` と DLQ)の保持期間は **14 日**(`infra/local/kafka/topics.conf`。ほかのイベント・コマンドの既定の 7 日より長い)。
+- **14 日にした理由**: 次の両方より長くする。
+  1. **batch-etl が止まりうる最も長い期間**: 連休(年末年始・大型連休で最大 9 日)の間、障害に気づいても直せないことがある。9 日に余裕を足す。
+  2. **週次の照合の間隔(7 日)**: 照合でずれを見つけてから原因を調べる間に、取り込み残し・DLQ のイベントが消えないようにする。
+  - これらのトピックを読むのは batch-etl だけ(INT-SALES-002 の consumers)。冪等消費の記録(processed_message)の保持期間には影響しない(batch-etl は自然なキーで冪等にしている)。
+- **保持期間に近づいたら知らせる**: Prometheus の保持期間(ローカルは 3 日)は Kafka の保持期間より短く、Kafka のオフセットの変化からは数日前からの遅れを判定できない。そこで batch-etl が 5 分ごとに Kafka を見て、次のメトリクスを出す(`KafkaIngestPositions`)。
+  - 取り込み残しの最も古いイベントの経過時間(`eia_batch_etl_ingest_lag_age_seconds`)。
+  - トピックの保持期間(`eia_batch_etl_ingest_retention_seconds`)。
+  - 消えた件数(`eia_batch_etl_ingest_lost_events`)。
+
+  アラートの閾値は保持期間に対する割合にする(50% で warning・75% で critical。保持期間を変えると閾値も追従する。`prometheus/rules/batch.rules.yml` と promtool のテスト)。batch-etl が止まっていると上のメトリクスが出ないので、Kafka 側からも見る(取り込み残しがあるのに、Consumer Group のオフセットが 2 日進まない。`BatchEtlIngestStale`)。
+  - batch-etl の Consumer Group(`batch-etl.order-ingest`)は 1 日 1 回だけコミットする。そのため、常駐の Consumer の停滞・遅れのアラート(`consumer.rules.yml`)の対象から除く。
+- **保持期間を超えたら**:
+  - 取り込みは黙って先に進まずに失敗する(§4)。
+  - 運用者は消えた件数を確かめ、消えた範囲を飛ばして再開する(`batch-etl skip-lost-events --confirm`)。
+  - 影響した日は週次の照合で DRIFT として見つける(docs/runbooks/batch-rerun.md の「保持期間を超えた回復」)。
+- **消えたイベントを埋め戻す手段は、今はない**(Issue #116)。
+  - order-service はイベントを再発行できない(Outbox は発行の後に消える)。
+  - 分析は order-service の DB を読まない。
+  - 日次の集計の API は件数とハッシュだけを返す。
+  - 影響した日は、手段ができるまで DRIFT のまま残る。
+
 ## Alternatives Considered
 - **UTC で区切る**: 実装は単純だが、日本の業務の日とずれる(§1)。不採用。
 - **区切りを利用者・テナントごとに設定する**: このリポジトリの業務は日本だけで、要件がない。不採用(必要になったら、集計の API に `timeZone` の引数を足す)。
@@ -93,6 +116,8 @@ ROADMAP P08 は、受注のデータを分析の DB(PostgreSQL を DWH と見立
 - **照合で order-service を直接(Gateway を通さずに)呼ぶ**: サービスは APISIX からの mTLS だけを受ける(ADR-0024 §6)。分析のための別の入口とクライアント証明書が要る。Gateway 経由にした(JWT の検証・Rate Limit・ログが一か所にそろう)。
 - **DRIFT の日を自動で作り直す**: raw にないデータ(取りこぼし)は作り直しでは戻らず、ずれが隠れる。31 日以内の日は比べ直しの前に作り直すので、作り直しで直るずれは DRIFT にならない。残った DRIFT は運用者が原因を調べる。
 - **照合で問い合わせられない日を一致とみなす(Fallback で成功にする)**: 照合の意味がなくなる。UNVERIFIED にして再実行で比べ直す。
+- **保持期間を無期限・長期(例 90 日)にする**: 取りこぼしは起きにくくなるが、個人情報(届け先の住所)を含むイベントを長く残すことになる。止まりうる期間と照合の間隔から決めた 14 日にし、超えたときの検知と回復の手順を用意する。
+- **取り込みの遅れを Kafka のオフセットの変化(kafka-exporter)だけで見る**: Prometheus の保持期間が短く、保持期間(14 日)に近い遅れを判定できない。batch-etl が Kafka から最も古い取り込み残しの時刻を読む。batch-etl の停止は Kafka 側(2 日の停滞)でも見る。
 
 ## Consequences(トレードオフ)
 - order-service のイベントが 1 種類増える(状態の遷移ごとに Outbox の行が 1 つ増える)。
@@ -104,4 +129,4 @@ ROADMAP P08 は、受注のデータを分析の DB(PostgreSQL を DWH と見立
 
 ## 改訂履歴
 - 2026-10-14: P08 ③で §4(取り込みと変換の方式)・§5(遅れて届いたデータ)を足した。③b で §4 に起動と SLA(`serve`・`run`)を足した。
-- 2026-10-15: P08 ④で §6(週次の Full 照合)を足した。
+- 2026-10-15: P08 ④で §6(週次の Full 照合)を足した。⑤で §7(Kafka の保持期間と回復)を足した。

@@ -1,10 +1,10 @@
 # EIAF ローカル開発用コマンド(CLAUDE.md §7)
 GRADLE := ./gradlew
 
-.PHONY: help setup build check arch-test contract-check schemas alerts-test integration-test format env not-root certs order-dist legacy-dist saga-dist up down logs ps verify stats clean e2e audit-verify legacy-simulate dlq-replay
+.PHONY: help setup build check arch-test contract-check schemas alerts-test integration-test format env not-root certs order-dist legacy-dist saga-dist batch-dist up down logs ps verify stats clean e2e audit-verify legacy-simulate dlq-replay batch-etl
 
 # ローカル基盤(infra/local。ADR-0016)
-# PROFILE: core / cdc / iot / file / b2b / chaos / order / saga。core は常に含まれる(積み上げ方式)。空白区切りで複数指定できる。
+# PROFILE: core / cdc / iot / file / b2b / chaos / order / saga / batch。core は常に含まれる(積み上げ方式)。空白区切りで複数指定できる。
 PROFILE ?= core
 INFRA := infra/local
 COMPOSE := docker compose -f $(INFRA)/docker-compose.yml --env-file $(INFRA)/images.env --env-file $(INFRA)/.env
@@ -76,7 +76,10 @@ legacy-dist: ## legacy-sim(レガシー基幹の模擬)・legacy-order-acl・sch
 saga-dist: ## 注文 Saga の参加者(inventory・payment・shipping)と schema-publish のイメージの中身(installDist)を作る(ADR-0029)
 	$(GRADLE) :services:inventory:app:installDist :services:payment:app:installDist :services:shipping:app:installDist :tools:schema-publish:installDist
 
-up: not-root env certs $(if $(filter order,$(PROFILE)),order-dist) $(if $(filter cdc,$(PROFILE)),legacy-dist) $(if $(filter saga,$(PROFILE)),saga-dist) ## ローカル基盤を起動し、全コンテナが healthy になるまで待つ(例: make up PROFILE=cdc)
+batch-dist: ## 分析のバッチ(batch-etl)と schema-publish のイメージの中身(installDist)を作る(ADR-0031)
+	$(GRADLE) :services:batch-etl:app:installDist :tools:schema-publish:installDist
+
+up: not-root env certs $(if $(filter order,$(PROFILE)),order-dist) $(if $(filter cdc,$(PROFILE)),legacy-dist) $(if $(filter saga,$(PROFILE)),saga-dist) $(if $(filter batch,$(PROFILE)),batch-dist) ## ローカル基盤を起動し、全コンテナが healthy になるまで待つ(例: make up PROFILE=cdc)
 	@if [ -f $(INFRA)/certs/.renewed ]; then \
 		$(COMPOSE) --profile '*' rm --stop --force $(CERT_CONSUMERS) >/dev/null 2>&1 || true; \
 		rm -f $(INFRA)/certs/.renewed; \
@@ -106,6 +109,9 @@ ps: env ## コンテナの状態を表示する
 ARGS ?=
 legacy-simulate: env legacy-dist ## レガシーの受注表を書き換える(例: make legacy-simulate ARGS="seed 10"。ADR-0026)
 	@$(COMPOSE) --profile legacy-sim-cli run --rm --build --no-deps legacy-sim simulate $(ARGS)
+
+batch-etl: env batch-dist ## 分析のバッチのコマンドを 1 回だけ実行する(例: make batch-etl ARGS="run 2026-10-13 --restart"。make up PROFILE="order batch" の後。docs/runbooks/batch-rerun.md)
+	@$(COMPOSE) --profile batch run --rm --build --no-deps batch-etl $(ARGS)
 
 verify: ## profile ごとの検証(healthy・機能の疎通。例: make verify PROFILE=file)
 	@$(INFRA)/scripts/verify.sh $(PROFILE)

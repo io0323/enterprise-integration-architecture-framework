@@ -157,3 +157,20 @@ tests:
             exp_annotations:
               summary: "order.saga の処理が遅れている(lag が 1,000 件を超えた状態が続く)"
               runbook: docs/runbooks/event-dlq-replay.md#consumer-が進まないとき
+
+  - name: 分析のバッチ(batch-etl.order-ingest)は 1 日 1 回だけ読むので、lag があってオフセットが進まなくても停滞・遅れにしない(batch.rules.yml が見る)
+    interval: 1m
+    input_series:
+      - series: 'up{instance="ke:9308",job="kafka-exporter"}'
+        values: "1x30"
+      - series: 'kafka_consumergroup_lag_sum{instance="ke:9308",job="kafka-exporter",consumergroup="batch-etl.order-ingest",topic="sales.order.created.v1"}'
+        values: "5000x30"
+      - series: 'kafka_consumergroup_current_offset_sum{instance="ke:9308",job="kafka-exporter",consumergroup="batch-etl.order-ingest",topic="sales.order.created.v1"}'
+        values: "10x30"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: EventConsumerStalled
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: EventConsumerLagHigh
+        exp_alerts: []

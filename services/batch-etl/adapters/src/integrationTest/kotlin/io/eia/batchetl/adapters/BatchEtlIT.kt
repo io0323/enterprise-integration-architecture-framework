@@ -2,6 +2,7 @@
 
 package io.eia.batchetl.adapters
 
+import io.eia.batchetl.adapters.kafka.KafkaIngestPositions
 import io.eia.batchetl.adapters.kafka.KafkaOrderEventSource
 import io.eia.batchetl.adapters.kafka.OrderCancelledV1
 import io.eia.batchetl.adapters.kafka.OrderCreatedV1
@@ -80,6 +81,7 @@ import java.security.SecureRandom
 import java.time.Duration
 import java.util.HexFormat
 import kotlin.io.path.readText
+import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
@@ -493,6 +495,44 @@ class BatchEtlIT :
 
             error.shouldBeInstanceOf<UnexpectedError>().message.startsWith("取り込んだ位置のイベントが保持期間を過ぎて消えています") shouldBe true
             env.query("SELECT count(*) FROM raw.order_placed") shouldBe listOf(listOf("1"))
+
+            // 監視: 消えた件数と保持期間が分かる。回復: 消えた範囲を飛ばすと、その後に届いた分から取り込みを続けられる
+            Admin.create(mapOf("bootstrap.servers" to kafka.bootstrapServers)).use { admin ->
+                val positions =
+                    KafkaIngestPositions({ KafkaConsumer(KafkaOrderEventSource.consumerProperties(kafka.bootstrapServers)) }, admin)
+                val stored = env.raw.position().ok()
+                val lag =
+                    positions
+                        .lag(
+                            stored,
+                            kotlin.time.Clock.System
+                                .now(),
+                        ).ok()
+                lag.lost.values.sum() shouldBe 2
+                lag.retention shouldBe 7.days
+                lag.oldestPendingAge shouldBe kotlin.time.Duration.ZERO
+
+                placed("r-4", "2026-10-13T04:00:00Z")
+                positions
+                    .lag(
+                        stored,
+                        kotlin.time.Clock.System
+                            .now(),
+                    ).ok()
+                    .oldestPendingAge
+                    .isPositive() shouldBe true
+                val (next, lost) = positions.skipLost(stored).ok()
+                lost shouldBe lag.lost
+                env.batch
+                    .writeCheckpoint(
+                        JdbcRawOrderStore.WATERMARK,
+                        next.value,
+                        kotlin.time.Clock.System
+                            .now(),
+                    ).ok()
+            }
+            env.ingest().ok().loaded shouldBe 1
+            env.query("SELECT order_id FROM raw.order_placed ORDER BY order_id") shouldBe listOf(listOf("r-1"), listOf("r-4"))
         }
     })
 

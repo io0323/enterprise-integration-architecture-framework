@@ -270,6 +270,12 @@ class BatchEtlAppIT :
             }
         }
 
+        test("skip-lost-events: 消えたイベントがなければ何もしない(既定は表示だけ)。引数の誤りは 2") {
+            BatchEtlCommands.run(listOf("skip-lost-events"), appEnv()) shouldBe BatchEtlCommands.OK
+            BatchEtlCommands.run(listOf("skip-lost-events", "--confirm"), appEnv()) shouldBe BatchEtlCommands.OK
+            BatchEtlCommands.run(listOf("skip-lost-events", "--force"), appEnv()) shouldBe BatchEtlCommands.USAGE
+        }
+
         test("serve: 直近の起動の時刻の分(前日)を自動で実行し、ready になる") {
             val yesterday = BusinessDay.of(Clock.System.now()).minusDays(1).toString()
             val server = (BatchEtlServer.start(appEnv() + (BatchEtlConfig.DAILY_AT to "00:00")) as? Result.Ok)?.value ?: fail("起動できません")

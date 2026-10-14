@@ -2,7 +2,10 @@ package io.eia.batchetl.app
 
 import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
+import io.eia.batchetl.adapters.kafka.KafkaIngestPositions
 import io.eia.batchetl.adapters.persistence.BatchEtlSchema
+import io.eia.batchetl.adapters.persistence.JdbcRawOrderStore
+import io.eia.batchetl.application.port.outbound.SourcePosition
 import io.eia.batchetl.domain.BusinessDay
 import io.eia.batchetl.domain.ReconcileOutcome
 import io.eia.platform.batch.BatchRunner
@@ -10,6 +13,7 @@ import io.eia.platform.batch.DagDefinition
 import io.eia.platform.batch.PartitionKey
 import io.eia.platform.batch.RunMode
 import io.eia.platform.batch.RunOutcome
+import io.eia.platform.batch.jdbc.JdbcBatchStore
 import io.eia.platform.security.secret.EnvSecretProvider
 import io.eia.platform.security.secret.Secret
 import io.eia.platform.security.secret.SecretName
@@ -20,6 +24,7 @@ import io.eia.shared.kernel.flatMap
 import io.eia.shared.kernel.ok
 import kotlinx.coroutines.runBlocking
 import org.slf4j.LoggerFactory
+import kotlin.time.Clock
 
 /** サブコマンドの振り分けと終了コード(0: 成功 / 1: 実行の失敗 / 2: 使い方・設定の誤り)。 */
 internal object BatchEtlCommands {
@@ -30,7 +35,8 @@ internal object BatchEtlCommands {
     /** `reconcile` で、比べ直しても一致しない日があった。 */
     const val DRIFT = 3
     private const val MIGRATE_POOL_SIZE = 3
-    private const val USAGE_TEXT = "使い方: batch-etl migrate | serve | run <yyyy-MM-dd> [--restart] | reconcile <yyyy-MM-dd> [--restart]"
+    private const val USAGE_TEXT =
+        "使い方: batch-etl migrate | serve | run <yyyy-MM-dd> [--restart] | reconcile <yyyy-MM-dd> [--restart] | skip-lost-events [--confirm]"
 
     /** serve・run の環境にあってはならない変数(所有者のパスワード。ADR-0024 §2)。 */
     val FORBIDDEN_FOR_APP: List<String> =
@@ -47,6 +53,7 @@ internal object BatchEtlCommands {
             "serve" -> withoutOwnerPassword(env) { serve(env) }
             "run" -> withoutOwnerPassword(env) { runOnce(args.drop(1), env, reconcile = false) }
             "reconcile" -> withoutOwnerPassword(env) { runOnce(args.drop(1), env, reconcile = true) }
+            "skip-lost-events" -> withoutOwnerPassword(env) { skipLostCommand(args.drop(1), env) }
             else -> USAGE.also { logger.error(USAGE_TEXT) }
         }
 
@@ -118,6 +125,29 @@ internal object BatchEtlCommands {
                         ?.any { it.outcome == ReconcileOutcome.DRIFT } == true
                 if (drift) DRIFT else OK
             }
+        }
+    }
+
+    /**
+     * 保持期間を過ぎて消えたイベントを飛ばし、取り込みを再開できるようにする(docs/runbooks/batch-rerun.md の「保持期間を超えた回復」)。
+     * 既定は表示だけ。`--confirm` で取り込みの位置を書き換える。飛ばしたイベントの日は、週次の照合で DRIFT として見つかる。
+     */
+    @Suppress("ReturnCount") // 引数・設定の誤りは、実行の前に返す
+    private fun skipLostCommand(
+        args: List<String>,
+        env: Map<String, String>,
+    ): Int {
+        if (args.isNotEmpty() && args != listOf("--confirm")) return USAGE.also { logger.error(USAGE_TEXT) }
+        val wired =
+            when (val result = BatchEtlServer.wire(env)) {
+                is Result.Err -> return USAGE.also { logger.error("設定が不正です: {}", result.error.message) }
+                is Result.Ok -> result.value
+            }
+        val (koin, runtime) = wired.second
+        try {
+            return SkipLostEvents.run(koin, confirm = args.isNotEmpty())
+        } finally {
+            BatchEtlServer.close(koin, runtime)
         }
     }
 

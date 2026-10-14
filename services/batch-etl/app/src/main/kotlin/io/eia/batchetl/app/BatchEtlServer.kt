@@ -1,7 +1,11 @@
 package io.eia.batchetl.app
 
 import com.zaxxer.hikari.HikariDataSource
+import io.eia.batchetl.adapters.kafka.KafkaIngestPositions
+import io.eia.batchetl.adapters.persistence.JdbcRawOrderStore
+import io.eia.batchetl.application.port.outbound.SourcePosition
 import io.eia.platform.batch.BatchScheduler
+import io.eia.platform.batch.jdbc.JdbcBatchStore
 import io.eia.platform.observability.Observability
 import io.eia.platform.observability.ObservabilityConfig
 import io.eia.platform.observability.ObservabilityRuntime
@@ -11,6 +15,7 @@ import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.ValidationError
 import io.eia.shared.kernel.err
 import io.eia.shared.kernel.flatMap
+import io.eia.shared.kernel.getOrNull
 import io.eia.shared.kernel.map
 import io.eia.shared.kernel.ok
 import io.ktor.client.HttpClient
@@ -29,14 +34,20 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import org.apache.kafka.clients.admin.Admin
 import org.apache.kafka.clients.producer.Producer
 import org.koin.core.Koin
 import org.koin.dsl.koinApplication
 import org.slf4j.LoggerFactory
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.time.Clock
 
 /**
  * batch-etl の常駐のプロセス(ADR-0031)。日次の DAG を [BatchScheduler] で起動し、SLA の予測を更新する(ADR-0030 §4・§6)。
@@ -120,6 +131,7 @@ internal class BatchEtlServer private constructor(
             runtime: ObservabilityRuntime,
         ) {
             koin.get<Producer<ByteArray, ByteArray>>().close()
+            koin.get<Admin>().close()
             koin.get<HttpClient>().close()
             koin.getOrNull<HttpClient>(RECONCILE)?.close()
             koin.get<HikariDataSource>().close()
@@ -138,6 +150,7 @@ internal class BatchEtlServer private constructor(
                     polling.set(true)
                     scheduler.run()
                 }
+                scope.launch { probeLag(koin, config) }
                 val server =
                     embeddedServer(Netty, configure = { connector { port = config.healthPort } }) {
                         routing {
@@ -159,6 +172,24 @@ internal class BatchEtlServer private constructor(
                 logger.info("batch-etl を起動しました")
                 BatchEtlServer(server, koin, runtime, scope)
             }
+
+        /** 取り込みの遅れ(保持期間に対して)を定期的に確かめ、メトリクスに出す(ADR-0031 §7)。 */
+        private suspend fun probeLag(
+            koin: Koin,
+            config: BatchEtlConfig,
+        ) {
+            val positions = koin.get<KafkaIngestPositions>()
+            val store = koin.get<JdbcBatchStore>()
+            val metrics = koin.get<BatchEtlMetrics>()
+            while (currentCoroutineContext().isActive) {
+                val stored = withContext(Dispatchers.IO) { store.readCheckpoint(JdbcRawOrderStore.WATERMARK) }.getOrNull()
+                when (val lag = positions.lag(stored?.let(::SourcePosition), Clock.System.now())) {
+                    is Result.Ok -> metrics.lag(lag.value)
+                    is Result.Err -> logger.warn("取り込みの遅れを確かめられません({})", lag.error.code)
+                }
+                delay(config.lagProbeInterval)
+            }
+        }
 
         @Suppress("TooGenericExceptionCaught") // 接続の失敗はどの種類でも DOWN にする
         private fun databaseReachable(dataSource: HikariDataSource): Boolean =
