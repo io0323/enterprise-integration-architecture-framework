@@ -109,17 +109,21 @@ class EventConsumerIT :
         fun dataSource(
             user: String,
             password: String,
+            stoppable: Boolean = false,
         ) = PGSimpleDataSource().apply {
             setURL("jdbc:postgresql://${postgres.host}:${postgres.firstMappedPort}/${postgres.databaseName}")
             this.user = user
             this.password = password
-            // DB を止めたときに、接続の待ちが長引かないようにする
-            connectTimeout = 2
-            socketTimeout = 5
-            loginTimeout = 2
+            if (stoppable) {
+                // 処理の接続だけ: DB を止めたときに、接続の待ちが長引かないようにする。
+                // 準備(ロール・表の作成)の接続には付けない(混んだ CI のランナーで、2 秒のログインのタイムアウトで準備が失敗した。#24)
+                connectTimeout = 2
+                socketTimeout = 5
+                loginTimeout = 2
+            }
         }
         val superuser = dataSource(postgres.username, postgres.password)
-        val app = dataSource(APP_ROLE, appPassword)
+        val app = dataSource(APP_ROLE, appPassword, stoppable = true)
 
         superuser.connection.use { connection ->
             connection.createStatement().use { statement ->
