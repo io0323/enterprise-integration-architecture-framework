@@ -4,7 +4,7 @@ info:
   version: 1.0.0
   summary: 受注 API(INT-SALES-001)
   description: |
-    注文の登録と参照。Gateway 公開パスは `/sales/v1/...`、サービス内部パスは `/v1/...`(ADR-0005)。
+    注文の登録と参照と、日次の集計(分析の照合用。P08。ADR-0031)。Gateway 公開パスは `/sales/v1/...`、サービス内部パスは `/v1/...`(ADR-0005)。
     エラーは RFC 9457 Problem Details(`application/problem+json`)で返す。`type` の一覧は INTEGRATION_STANDARDS §6(ADR-0022 §2)。
     金額はすべて税抜(ADR-0011 §4)。税は請求(billing)で計算する。
     Rate Limit は Client ID 単位の Token Bucket(internal: 1000 rps)。超過時は `429` と `Retry-After` を返す(Framework 5.6)。
@@ -17,6 +17,7 @@ security:
   - oauth2: [sales.order:read]
 tags:
   - name: orders
+  - name: summaries
 paths:
   /v1/orders:
     post:
@@ -118,6 +119,57 @@ paths:
           $ref: "#/components/responses/ServiceUnavailable"
         "504":
           $ref: "#/components/responses/GatewayTimeout"
+  /v1/order-summaries/daily/{date}:
+    get:
+      tags: [summaries]
+      operationId: getDailyOrderSummary
+      summary: 1 日の注文の件数とハッシュを返す(分析の週次の照合用。ADR-0031)
+      description: |
+        `date` の 1 日(**日本時間 Asia/Tokyo の 00:00 から翌日の 00:00 まで**。ADR-0031)に受け付けた注文(`orderedAt`)の件数と、
+        内容のハッシュを返す。分析(batch-etl)の日次のパーティションと同じ区切り。個々の注文の内容は返さない(集計の値だけ)。
+
+        ハッシュ(`digest`)の作り方(分析の側も同じ作り方で計算して比べる):
+        - その日の注文ごとに、`{orderId}\t{status}\t{totalAmount.minorUnits}\t{totalAmount.currency}` の 1 行を作る(`status` は今の状態)。
+        - 行を `orderId` の **バイト順(UTF-8)** の昇順に並べ、`\n` でつなぐ(最後の行の後には付けない)。
+        - その UTF-8 のバイト列の SHA-256 を、小文字の 16 進で返す。注文がなければ空のバイト列の SHA-256。
+
+        今日と未来の日付も受け付ける(その時点の値。今日の値は後で変わる)。
+      security:
+        - oauth2: [sales.order:report]
+      parameters:
+        - name: date
+          in: path
+          required: true
+          description: 日本時間の日付(`YYYY-MM-DD`)
+          schema:
+            type: string
+            format: date
+        - $ref: "#/components/parameters/Traceparent"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: 1 日の集計
+          headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/CorrelationId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DailyOrderSummary"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
 components:
   securitySchemes:
     oauth2:
@@ -129,6 +181,7 @@ components:
           scopes:
             sales.order:read: 注文の参照
             sales.order:write: 注文の登録
+            sales.order:report: 注文の日次の集計の参照(件数とハッシュだけ。個々の注文は読めない。分析の照合用)
   parameters:
     IdempotencyKey:
       name: Idempotency-Key
@@ -262,6 +315,34 @@ components:
           schema:
             $ref: "#/components/schemas/Problem"
   schemas:
+    DailyOrderSummary:
+      type: object
+      required: [date, timeZone, from, until, orderCount, digest]
+      properties:
+        date:
+          type: string
+          format: date
+          description: 日本時間の日付
+        timeZone:
+          type: string
+          enum: [Asia/Tokyo]
+          description: 日の区切りのタイムゾーン(ADR-0031)
+        from:
+          type: string
+          format: date-time
+          description: 区間の始まり(含む。UTC の RFC 3339)
+        until:
+          type: string
+          format: date-time
+          description: 区間の終わり(含まない。UTC の RFC 3339)
+        orderCount:
+          type: integer
+          format: int64
+          minimum: 0
+        digest:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          description: 内容のハッシュ(SHA-256。作り方は getDailyOrderSummary の説明)
     Problem:
       description: RFC 9457 Problem Details
       type: object

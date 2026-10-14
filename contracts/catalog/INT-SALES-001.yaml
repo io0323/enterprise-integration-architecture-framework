@@ -6,6 +6,8 @@ pattern: request-reply
 provider: { owner: team-order, system: order-service }
 consumers:
   - { owner: team-storefront, system: bff-graphql }
+  # 日次の集計(GET /v1/order-summaries/daily/{date}。sales.order:report)を、分析の週次の照合で読む(P08。ADR-0031)
+  - { owner: team-analytics, system: batch-etl }
 contract: contracts/openapi/order-api.v1.yaml
 tier: 1
 dataClassification: confidential
