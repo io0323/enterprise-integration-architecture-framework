@@ -12,6 +12,9 @@ private const val ORDER_CANCELLED = "contracts/avro/sales/OrderCancelled.avsc"
 private const val CATALOG_API = "contracts/catalog/INT-SALES-001.yaml"
 private const val CATALOG_EVENTS = "contracts/catalog/INT-SALES-002.yaml"
 private const val MANIFEST = "contracts/files/manifest.v1.schema.json"
+private const val FILE_SPEC = "contracts/files/sales_daily.v1.yaml"
+private const val FILE_SPEC_SCHEMA = "contracts/files/file-spec.v1.schema.json"
+private const val CATALOG_FILE = "contracts/catalog/INT-SALES-004.yaml"
 private const val COMMAND_CONTRACT = "contracts/asyncapi/inventory-commands.v1.yaml"
 private const val COMMAND_CATALOG = "contracts/catalog/INT-INVENTORY-001.yaml"
 private const val REASON_FIELD =
@@ -151,6 +154,28 @@ private val cases =
         Case("manifest の必須項目から traceparent を外した", setOf("CC-FILE-001")) {
             replace(MANIFEST, "\"createdAt\", \"traceparent\", \"correlationId\"]", "\"createdAt\", \"correlationId\"]")
         },
+        Case("ファイルの仕様: 個人情報の有無がなく、列の型が不明", setOf("CC-FILE-002")) {
+            replace(FILE_SPEC, "containsPersonalData: false\n", "")
+                .replace(FILE_SPEC, "    type: int64\n", "    type: long\n")
+        },
+        Case("ファイルの仕様: CSV の区切りの指定がない", setOf("CC-FILE-002")) {
+            replace(FILE_SPEC, "    delimiter: \",\"\n", "")
+        },
+        Case("ファイルの仕様: 列の名前の重複と、key が存在しない列を指す", setOf("CC-FILE-002")) {
+            replace(FILE_SPEC, "  - name: ship_region\n", "  - name: ship_country\n")
+                .replace(FILE_SPEC, "key: [order_id]", "key: [order_no]")
+        },
+        Case("ファイルの仕様のスキーマがメタスキーマに違反", setOf("CC-STRUCT-005", "CC-FILE-002")) {
+            replace(
+                FILE_SPEC_SCHEMA,
+                "\"type\": \"object\",\n  \"additionalProperties\"",
+                "\"type\": \"objekt\",\n  \"additionalProperties\"",
+            )
+        },
+        Case("ファイルの仕様: 中の dataset と版がファイル名と異なる", setOf("CC-FILE-003")) {
+            replace(FILE_SPEC, "dataset: daily", "dataset: monthly").replace(FILE_SPEC, "version: 1", "version: 2")
+        },
+        Case("ファイルの仕様がカタログに登録されていない", setOf("CC-FILE-004")) { delete(CATALOG_FILE) },
         // --- 互換性(main との差分) ---
         Case("Avro: default のない必須フィールドの追加", setOf("CC-COMPAT-001"), withBaseline = true) {
             replace(
@@ -188,6 +213,31 @@ private val cases =
                 "required: [id, customerId, status, orderedAt, lines, totalAmount, shippingAddress]",
                 "required: [id, customerId, status, orderedAt, lines, shippingAddress]",
             )
+        },
+        Case("ファイルの仕様: 列の削除と型の変更", setOf("CC-COMPAT-003"), withBaseline = true) {
+            replace(FILE_SPEC, "  - name: ordered_at\n    type: timestamp\n", "  - name: ordered_at\n    type: string\n")
+                .replace(
+                    FILE_SPEC,
+                    "  - name: ship_region\n    type: string\n    nullable: true\n    description: 届け先の都道府県(ない注文は null)\n",
+                    "",
+                )
+        },
+        Case("ファイルの仕様: 列の並べ替えと、必須の列の追加と、enum の値の追加", setOf("CC-COMPAT-003"), withBaseline = true) {
+            replace(
+                FILE_SPEC,
+                "enum: [PLACED, CONFIRMED, SHIPPED, DELIVERED, CANCELLED]",
+                "enum: [PLACED, CONFIRMED, SHIPPED, DELIVERED, CANCELLED, RETURNED]",
+            ).replace(FILE_SPEC, "  - name: currency\n", "  - name: currency_code\n")
+                .replace(
+                    FILE_SPEC,
+                    "    description: 届け先の都道府県(ない注文は null)\n",
+                    "    description: 届け先の都道府県(ない注文は null)\n" +
+                        "  - name: channel\n    type: string\n    nullable: false\n    description: 受付の経路\n",
+                )
+        },
+        Case("ファイルの仕様: 形式の削除と、CSV の改行の変更", setOf("CC-COMPAT-003"), withBaseline = true) {
+            replace(FILE_SPEC, "  - type: parquet\n    extension: parquet\n    compression: zstd\n", "")
+                .replace(FILE_SPEC, "    lineSeparator: \"\\r\\n\"", "    lineSeparator: \"\\n\"")
         },
         // --- Canonical ⇔ Avro(ADR-0012) ---
         Case("Canonical と Avro: 型の不一致(Int ⇔ long)", setOf("CC-CANON-001")) {
@@ -231,7 +281,7 @@ class ContractCheckSpec :
             result.baselineUsed shouldBe true
         }
 
-        test("互換な変更(default 付きのフィールド追加・任意項目の追加)は違反にならない") {
+        test("互換な変更(default 付きのフィールド追加・任意項目の追加・ファイルの末尾の任意の列と新しい形式)は違反にならない") {
             val workspace =
                 Workspace
                     .ofRepositoryContracts()
@@ -245,6 +295,15 @@ class ContractCheckSpec :
                         OPENAPI,
                         "        correlationId:\n          type: string\n        errors:",
                         "        correlationId:\n          type: string\n        retryable:\n          type: boolean\n        errors:",
+                    ).replace(
+                        FILE_SPEC,
+                        "    description: 届け先の都道府県(ない注文は null)\n",
+                        "    description: 届け先の都道府県(ない注文は null)\n  - name: channel\n    type: string\n    nullable: true\n" +
+                            "    description: 受付の経路(末尾に足した任意の列)\n",
+                    ).replace(
+                        FILE_SPEC,
+                        "recordCount:",
+                        "  - type: jsonl\n    extension: jsonl.gz\n    compression: gzip\n    encoding: UTF-8\nrecordCount:",
                     )
 
             workspace.check(baseline = Workspace.ofRepositoryContracts()).violations.shouldBeEmpty()

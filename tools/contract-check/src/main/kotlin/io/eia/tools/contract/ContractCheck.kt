@@ -6,6 +6,7 @@ import io.eia.tools.contract.canonical.CanonicalBindings
 import io.eia.tools.contract.rules.AsyncApiRules
 import io.eia.tools.contract.rules.AvroRules
 import io.eia.tools.contract.rules.CatalogRules
+import io.eia.tools.contract.rules.FileCompatibility
 import io.eia.tools.contract.rules.FileRules
 import io.eia.tools.contract.rules.OpenApiCompatibility
 import io.eia.tools.contract.rules.OpenApiRules
@@ -48,7 +49,9 @@ class ContractCheck(
         val compatibility =
             baseline
                 ?.let {
-                    AvroRules.checkFullCompatibility(contracts, it) + OpenApiCompatibility(oasdiff).check(contracts, it)
+                    AvroRules.checkFullCompatibility(contracts, it) +
+                        OpenApiCompatibility(oasdiff).check(contracts, it) +
+                        FileCompatibility.check(contracts, it)
                 }.orEmpty()
         val (waivers, waiverViolations) = Waivers.load(root)
         val waived = Waivers.apply(compatibility, waivers, today)

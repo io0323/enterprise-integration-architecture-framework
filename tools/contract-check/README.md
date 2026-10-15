@@ -49,12 +49,12 @@ ID は `CC-{区分}-{連番}`。定義は `src/main/kotlin/io/eia/tools/contract
 | `CC-STRUCT-002` | OpenAPI として正しいこと(swagger-parser の検証) | 5, 15.2 | OpenAPI 3.1 の仕様に合わせて記述を直す |
 | `CC-STRUCT-003` | AsyncAPI 3.0 の公式 JSON Schema に適合すること | 6.3, 15.2 | AsyncAPI 3.0 の仕様に合わせて記述を直す |
 | `CC-STRUCT-004` | Avro スキーマとして読めること | 6.3 | Avro 1.12 の仕様に合わせて直す(default の型、名前の参照順など) |
-| `CC-STRUCT-005` | JSON Schema(manifest・カタログ)がメタスキーマに適合すること | 9, 16.1 | JSON Schema 2020-12 の仕様に合わせて直す |
+| `CC-STRUCT-005` | JSON Schema(manifest・カタログ・ファイルの仕様)がメタスキーマに適合すること | 9, 16.1 | JSON Schema 2020-12 の仕様に合わせて直す |
 | `CC-NAMING-001` | Topic は {domain}.{entity}.{event}.v{n} | 6.2, 16.1 | 小文字・kebab-case の 4 セグメントに直す(例 sales.order.created.v1)。DLQ は {topic}.dlq |
 | `CC-NAMING-002` | Command Topic の event セグメントは cmd-{command} | 6.2, ADR-0006 | event セグメントを cmd-{command}(kebab-case)にする(例 inventory.stock.cmd-reserve.v1) |
 | `CC-NAMING-003` | OpenAPI の servers[*].url は /{domain} で終わる | 5.2, ADR-0005 | servers には Gateway 公開 URL を /{domain} まで書く(例 http://localhost:19080/sales) |
 | `CC-NAMING-004` | OpenAPI の paths は /v{n}/{resource}(kebab-case) | 5.3, ADR-0005 | paths を /v{n}/ で始め、リソース名を小文字の kebab-case にする(例 /v1/orders/{orderId}) |
-| `CC-NAMING-005` | contracts/files のファイル名 | 9, 16.1 | {system}_{dataset}.v{n}.yaml、manifest.v{n}.schema.json、edi/{name}.v{n}.yaml のいずれかにする |
+| `CC-NAMING-005` | contracts/files のファイル名 | 9, 16.1 | {system}_{dataset}.v{n}.yaml、manifest.v{n}.schema.json、file-spec.v{n}.schema.json、edi/{name}.v{n}.yaml のいずれかにする |
 | `CC-NAMING-006` | 連携 ID は INT-{DOMAIN}-{NNN} で、カタログのファイル名は {id}.yaml | 16.1 | id を INT-{DOMAIN}-{NNN} にし、ファイル名を id と一致させる |
 | `CC-NAMING-007` | Consumer Group は {service}.{purpose} | 6.4 | 小文字・kebab-case の 2 セグメントにする(例 inventory.reservation) |
 | `CC-NAMING-008` | Avro の namespace は io.eia.events.{domain}、record は PascalCase、ファイル名は {Record}.avsc | 6.3, INTEGRATION_STANDARDS §1 | contracts/avro/{domain}/{Record}.avsc に置き、namespace と名前を合わせる(共通型は io.eia.events.common) |
@@ -74,8 +74,12 @@ ID は `CC-{区分}-{連番}`。定義は `src/main/kotlin/io/eia/tools/contract
 | `CC-COMMAND-001` | Command Topic の購読者は受信サービスの 1 Consumer Group({service}.command)だけ | 6.2, ADR-0006 | 購読を 1 つにする。複数の系が知るべき事実なら Domain Event として別トピックで発行する |
 | `CC-COMMAND-002` | Command Topic は pattern: queue、pattern: queue は Command Topic のみ | 6.7, ADR-0006 | cmd- トピックを含む連携は pattern: queue にし、イベントトピックとは別の連携として登録する |
 | `CC-FILE-001` | manifest スキーマが標準の必須項目を required に含む | 9, INTEGRATION_STANDARDS §2 | required に file, recordCount, sha256, schemaVersion, createdAt, traceparent, correlationId を含める |
+| `CC-FILE-002` | ファイルの仕様がファイルの仕様のスキーマに適合する(形式・列・機密区分・個人情報の有無など) | 9, 12.2 | contracts/files/file-spec.v{n}.schema.json の必須項目と値を満たす |
+| `CC-FILE-003` | ファイルの仕様のファイル名と、中の system・dataset・version が一致する | 9, INTEGRATION_STANDARDS §1 | ファイル名を {system}_{dataset}.v{version}.yaml にする(manifest の schemaVersion は {system}_{dataset}.v{version}) |
+| `CC-FILE-004` | ファイルの仕様はカタログに登録されている | 16.1 | contracts/catalog/{id}.yaml(style: file)を追加し、contract にこの仕様を指定する |
 | `CC-COMPAT-001` | Avro スキーマが main の版に対して FULL 互換(BACKWARD かつ FORWARD) | 6.3, 13, 15.3, ADR-0014 | 追加・削除できるのは default 付きの項目だけ。必須項目の追加・削除、型変更、リネーム、enum 値の増減は新しいバージョンのトピック(.v{n+1})で行う |
 | `CC-COMPAT-002` | OpenAPI に main の版からの破壊的変更がない(oasdiff) | 5.3 | 互換な変更(任意項目の追加など)にするか、/v{n+1} を新設して並行提供する |
+| `CC-COMPAT-003` | ファイルの仕様が main の版に対して互換(列の削除・型や必須性の変更・並べ替え・enum の変更・形式の変更がない) | 9, 15.3 | 足してよいのは、末尾の任意(nullable: true)の列と、新しい形式だけ。ほかの変更は新しい版のファイル({system}_{dataset}.v{n+1}.yaml)で行う |
 | `CC-WAIVER-001` | 互換性検査の例外リストの形式が正しい | 16.1, ADR-0013 | 各例外に rule(CC-COMPAT-*)・file・contains・reason・issue・expires(YYYY-MM-DD)を書く |
 | `CC-WAIVER-002` | 期限切れの互換性検査の例外が残っていない | 16.1, ADR-0013 | 例外が不要になっていれば削除する。まだ必要なら理由を Issue に残して expires を延ばす |
 | `CC-CANON-001` | Canonical Model(Kotlin)と Avro スキーマの項目が一致する | 15.1, ADR-0012 | ADR-0012 の変換規則に従って、項目名・必須性・型を Canonical Model と揃える |

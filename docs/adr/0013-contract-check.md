@@ -83,3 +83,8 @@ INTEGRATION_STANDARDS §5 のカタログに次の項目を追加し、`contract
 
 ## 改訂履歴
 - 2026-09-26: §6「互換性検査の例外」を追加した(#25)。
+- 2026-10-15: P09 ①でファイル連携の契約の検査を足した。ファイルの仕様の形式 `contracts/files/file-spec.v1.schema.json`(命名の規則 `CC-NAMING-005` に追加)を基に、次を検査する。
+  - `CC-FILE-002`: スキーマへの適合、列の名前の重複、`orderBy` / `key` の参照。
+  - `CC-FILE-003`: ファイル名と中の system・dataset・version の一致。
+  - `CC-FILE-004`: カタログへの登録。
+  - `CC-COMPAT-003`: main の版に対する互換性。足してよいのは、末尾の任意の列と新しい形式だけ。CSV は列の位置で読まれ、受ける側は型・必須性・enum の値で検査するため。
