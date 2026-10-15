@@ -33,6 +33,14 @@ internal object LibraryDeclarationRules {
             "platform/file-transfer と tools/parquet-bench(計測)だけ。ADR-0033 §3",
         )
 
+    private val TRANSFER_SECURITY =
+        Library(
+            "SFTP・PGP の依存の宣言",
+            listOf("libs.sshj", "libs.bouncycastle.pg", "\"com.hierynomus:sshj", "\"org.bouncycastle:bcpg"),
+            listOf(Regex("""^platform/file-transfer/"""), Regex("""^platform/test-support/""")),
+            "platform/file-transfer と platform/test-support だけ。ADR-0032 §8",
+        )
+
     private val HADOOP_MARKERS = listOf("libs.hadoop.", "\"org.apache.hadoop:")
     private val HADOOP_RUNTIME_CHECKED = listOf(Regex("""^platform/"""), Regex("""^services/"""))
 
@@ -42,6 +50,7 @@ internal object LibraryDeclarationRules {
                 listOfNotNull(
                     outsideAllowed(AWS_SDK, path, declaration),
                     outsideAllowed(PARQUET, path, declaration),
+                    outsideAllowed(TRANSFER_SECURITY, path, declaration),
                     hadoopAtRuntime(path, configuration, declaration),
                 )
             }

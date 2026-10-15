@@ -2,6 +2,7 @@
 dependencies {
     implementation(libs.aws.sdk.s3)
     implementation(libs.parquet.hadoop)
+    implementation(libs.sshj)
     // テストの依存は対象外
     testImplementation(libs.aws.sdk.s3)
 }
