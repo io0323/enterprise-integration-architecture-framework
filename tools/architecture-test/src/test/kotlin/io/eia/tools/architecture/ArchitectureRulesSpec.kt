@@ -122,6 +122,26 @@ class ArchitectureRulesSpec :
                     listOf("UsesKafka.kt", "UsesAvro4kQualified.kt", "UsesAvro.kt", "UsesApicurio.kt", "UsesFrameworks.kt")
             }
 
+            test("AWS SDK を platform/file-transfer と audit のアンカー以外の本番コードで使う") {
+                ArchitectureRules.awsSdkOnlyInAllowedModules(violations).fileNames() shouldContainExactlyInAnyOrder
+                    listOf("UsesAwsSdk.kt", "UsesAwsSdkOutsideAnchor.kt")
+            }
+
+            test("Parquet・Hadoop を platform/file-transfer 以外の本番コードで使う") {
+                ArchitectureRules.parquetOnlyInFileTransfer(violations).fileNames() shouldContainExactlyInAnyOrder
+                    listOf("UsesParquet.kt", "UsesParquet.kt")
+            }
+
+            test("AWS SDK・Parquet の依存を許可したモジュールの外で宣言する・Hadoop を実行時の依存にする(テストの依存は除く)") {
+                val found = LibraryDeclarationRules.violations(violations)
+                found.map { it.path to it.rule } shouldContainExactlyInAnyOrder
+                    listOf(
+                        "platform/reliability/build.gradle.kts" to "AWS SDK の依存の宣言",
+                        "platform/reliability/build.gradle.kts" to "Parquet・Hadoop の依存の宣言",
+                        "platform/file-transfer/build.gradle.kts" to "Hadoop は compileOnly だけ",
+                    )
+            }
+
             test("services の本番コードで Resilience(...) を直接作る(完全修飾名を含む)") {
                 ArchitectureRules.resilienceOnlyThroughMetrics(violations).fileNames() shouldContainExactlyInAnyOrder
                     listOf("CreatesResilience.kt", "CreatesResilienceQualified.kt")
@@ -172,6 +192,9 @@ class ArchitectureRulesSpec :
                 ArchitectureRules.canonicalModelOutsideDomainAndApplication(compliant).shouldBeEmpty()
                 ArchitectureRules.resilienceOnlyThroughMetrics(compliant).shouldBeEmpty()
                 ArchitectureRules.messagingLibrariesOnlyInAllowedModules(compliant).shouldBeEmpty()
+                ArchitectureRules.awsSdkOnlyInAllowedModules(compliant).shouldBeEmpty()
+                ArchitectureRules.parquetOnlyInFileTransfer(compliant).shouldBeEmpty()
+                LibraryDeclarationRules.violations(compliant).shouldBeEmpty()
             }
 
             test("platform 間の依存は許可した一覧だけで、循環がない(テストの依存とコメントは数えない)") {

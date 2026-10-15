@@ -285,6 +285,35 @@ internal object ArchitectureRules {
             ) +
             packageOnlyInAllowedPaths(codeBase, APICURIO_PACKAGE, emptyList(), APICURIO_RULE, "相互運用の検査のテストだけ。ADR-0025 §1")
 
+    private val AWS_SDK_ALLOWED_PATHS =
+        listOf(Regex("""^platform/file-transfer/"""), Regex("""^platform/audit/src/main/kotlin/io/eia/platform/audit/anchor/"""))
+
+    /**
+     * ADR-0032 §6(#12 のコメント): AWS SDK(`software.amazon.awssdk`)を本番コードで使ってよいのは、platform/file-transfer と
+     * platform/audit のアンカー(Object Lock。ADR-0017)だけ。ほかは platform/file-transfer の置き場(`ObjectStore`)を使う。
+     * テストのソースセット(バケットの作成など)は除く。依存の宣言は [LibraryDeclarationRules] で検査する。
+     */
+    fun awsSdkOnlyInAllowedModules(codeBase: CodeBase): List<Violation> =
+        packageOnlyInAllowedPaths(
+            codeBase,
+            "software.amazon.awssdk",
+            AWS_SDK_ALLOWED_PATHS,
+            "AWS SDK の配置",
+            "platform/file-transfer と platform/audit の anchor だけ。ADR-0032 §6",
+        )
+
+    private val PARQUET_ALLOWED_PATHS = listOf(Regex("""^platform/file-transfer/"""), Regex("""^tools/parquet-bench/"""))
+    private const val PARQUET_RULE = "Parquet・Hadoop の配置"
+    private const val PARQUET_ALLOWED = "platform/file-transfer と tools/parquet-bench だけ。ADR-0033 §3"
+
+    /**
+     * ADR-0033 §3: Parquet(`org.apache.parquet`)と Hadoop(`org.apache.hadoop`。Parquet の書き手の抽象メソッドの型だけ)を使ってよいのは、
+     * platform/file-transfer と、計測の tools/parquet-bench だけ。ほかは platform/file-transfer の書き出しと検査を使う。
+     */
+    fun parquetOnlyInFileTransfer(codeBase: CodeBase): List<Violation> =
+        packageOnlyInAllowedPaths(codeBase, "org.apache.parquet", PARQUET_ALLOWED_PATHS, PARQUET_RULE, PARQUET_ALLOWED) +
+            packageOnlyInAllowedPaths(codeBase, "org.apache.hadoop", PARQUET_ALLOWED_PATHS, PARQUET_RULE, PARQUET_ALLOWED)
+
     /** [packageName] を、[allowedPaths] 以外の本番コードから import または完全修飾名で参照していれば違反にする。 */
     private fun packageOnlyInAllowedPaths(
         codeBase: CodeBase,
