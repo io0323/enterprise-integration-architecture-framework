@@ -52,6 +52,14 @@ postgresql = "42.7.13"
 aws-sdk = "2.55.6"
 # 統合テストの計測(並列の追記)でだけ使うコネクションプール
 hikaricp = "7.1.0"
+# P09 ③a ファイル連携(確認日: 2026-10-15。ADR-0033)。parquet-java を実行時に Hadoop なしで使う。
+# parquet-jackson が Jackson を shade して持つ(1.18.1 は Jackson 2.22.2。GHSA-cxp5-3px4-pw24 などが 2.22.3 で修正)。
+# shade した jar は依存の検査で見えないので、parquet を上げるときに中の Jackson の版を確かめる(ADR-0033 Consequences)
+parquet = "1.18.1"
+# WriteSupport・ParquetWriter.Builder の抽象メソッドの引数の型(Hadoop の Configuration)のためだけに、コンパイルに使う(compileOnly)
+hadoop = "3.5.0"
+# 統合テストだけ: platform/file-transfer が書いた Parquet を、別の実装(DuckDB)で読み直す(ADR-0033 §4)
+duckdb = "1.5.6.0"
 # P06 ① Kafka の Producer と Avro(確認日: 2026-10-02。ADR-0025)
 # kafka-clients はブローカー(images.env の apache/kafka:4.3.1)と同じ版にする
 kafka = "4.3.1"
@@ -92,6 +100,9 @@ aws-sdk-bom = { module = "software.amazon.awssdk:bom", version.ref = "aws-sdk" }
 aws-sdk-s3 = { module = "software.amazon.awssdk:s3" }
 aws-sdk-url-connection-client = { module = "software.amazon.awssdk:url-connection-client" }
 hikaricp = { module = "com.zaxxer:HikariCP", version.ref = "hikaricp" }
+parquet-hadoop = { module = "org.apache.parquet:parquet-hadoop", version.ref = "parquet" }
+hadoop-client-api = { module = "org.apache.hadoop:hadoop-client-api", version.ref = "hadoop" }
+duckdb-jdbc = { module = "org.duckdb:duckdb_jdbc", version.ref = "duckdb" }
 testcontainers-kafka = { module = "org.testcontainers:testcontainers-kafka", version.ref = "testcontainers" }
 testcontainers-postgresql = { module = "org.testcontainers:testcontainers-postgresql", version.ref = "testcontainers" }
 mockk = { module = "io.mockk:mockk", version.ref = "mockk" }

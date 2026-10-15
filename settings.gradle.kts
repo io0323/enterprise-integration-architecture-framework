@@ -26,6 +26,7 @@ include(
     ":platform:api",
     ":platform:audit",
     ":platform:batch",
+    ":platform:file-transfer",
     ":platform:inbox",
     ":platform:messaging-kafka",
     ":platform:observability",

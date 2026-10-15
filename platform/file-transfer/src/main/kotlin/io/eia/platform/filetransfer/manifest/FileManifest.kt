@@ -1,4 +1,4 @@
-package io.eia.platform.batch.file
+package io.eia.platform.filetransfer.manifest
 
 import io.eia.shared.kernel.FieldViolation
 import io.eia.shared.kernel.Result
@@ -13,7 +13,8 @@ import kotlin.time.Instant
 /**
  * ファイルのマニフェスト(`.manifest.json`。`contracts/files/manifest.v1.schema.json`。Framework 9.2・INTEGRATION_STANDARDS §2)。
  *
- * ここでは形式だけを確かめる。件数と SHA-256 の照合は、データファイルを読むステップが行う(P09 の取り込み)。
+ * [parse] は形式だけを確かめる。件数と SHA-256 の照合は [io.eia.platform.filetransfer.verify.FileVerifier] が行う(ADR-0032 §3)。
+ * 書き出しの側は [toJson] で作る(データファイルの後に、最後に置く。ADR-0032 §2)。
  */
 public data class FileManifest(
     val file: String,
@@ -25,12 +26,25 @@ public data class FileManifest(
     val correlationId: String,
     val sizeBytes: Long?,
 ) {
+    /** 契約(manifest.v1)の形の JSON。[parse] で読み直せる。 */
+    public fun toJson(): ByteArray =
+        json
+            .encodeToString(
+                ManifestJson.serializer(),
+                ManifestJson(file, recordCount, sha256, schemaVersion, createdAt.toString(), traceparent, correlationId, sizeBytes),
+            ).encodeToByteArray()
+
     public companion object {
         /** マニフェストの大きさの上限(これより大きいものは読まない)。 */
         public const val MAX_BYTES: Int = 64 * 1024
         public const val SUFFIX: String = ".manifest.json"
 
-        private val json = Json { ignoreUnknownKeys = true }
+        private val json =
+            Json {
+                ignoreUnknownKeys = true
+                // sizeBytes がないときは項目を出さない(契約では任意)
+                explicitNulls = false
+            }
         private val FILE = Regex("^[a-z][a-z0-9-]*_[a-z][a-z0-9-]*_[0-9]{14}_[0-9]{3,}\\.[a-z0-9]+(\\.[a-z0-9]+)?$")
         private val SHA256 = Regex("^[0-9a-f]{64}$")
         private val SCHEMA_VERSION = Regex("^[a-z][a-z0-9-]*_[a-z][a-z0-9-]*\\.v[1-9][0-9]*$")

@@ -8,8 +8,8 @@ plugins {
 // 起動(時刻・前段の DAG の完了・ファイルの到着)、SLA の遅延の予測のメトリクス。
 dependencies {
     api(project(":shared:kernel"))
-    // ファイルの到着の監視の S3 の資格情報は SecretProvider から取る(ADR-0019 §6)
-    api(project(":platform:security"))
+    // ファイルの到着の監視の置き場(S3)とマニフェストは platform/file-transfer のもの(ADR-0032 §1)
+    api(project(":platform:file-transfer"))
     // 実行・ステップの span と、traceparent の引き継ぎ(ADR-0018 §2)
     api(project(":platform:observability"))
     api(libs.opentelemetry.api)
@@ -21,13 +21,6 @@ dependencies {
     implementation(libs.flyway.core)
     runtimeOnly(libs.flyway.database.postgresql)
     runtimeOnly(libs.postgresql)
-    implementation(platform(libs.aws.sdk.bom))
-    implementation(libs.aws.sdk.s3) {
-        // HTTP の実装は url-connection-client だけにする(ADR-0017)
-        exclude(group = "software.amazon.awssdk", module = "netty-nio-client")
-        exclude(group = "software.amazon.awssdk", module = "apache-client")
-    }
-    implementation(libs.aws.sdk.url.connection.client)
 
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.opentelemetry.sdk.testing)
@@ -35,4 +28,8 @@ dependencies {
     integrationTestImplementation(project(":platform:test-support"))
     integrationTestImplementation(libs.testcontainers.postgresql)
     integrationTestImplementation(libs.postgresql)
+    // ファイルの到着の統合テストで、バケットを作り、ファイルを置く(管理の identity)
+    integrationTestImplementation(platform(libs.aws.sdk.bom))
+    integrationTestImplementation(libs.aws.sdk.s3)
+    integrationTestImplementation(libs.aws.sdk.url.connection.client)
 }

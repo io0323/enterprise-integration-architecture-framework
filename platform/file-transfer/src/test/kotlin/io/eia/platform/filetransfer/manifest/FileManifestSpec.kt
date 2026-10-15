@@ -1,7 +1,7 @@
-package io.eia.platform.batch.file
+package io.eia.platform.filetransfer.manifest
 
-import io.eia.platform.batch.err
-import io.eia.platform.batch.ok
+import io.eia.platform.filetransfer.err
+import io.eia.platform.filetransfer.ok
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.shouldBe
@@ -36,6 +36,15 @@ class FileManifestSpec :
             manifest.traceparent shouldBe traceparent
             manifest.sizeBytes shouldBe 120
             FileManifest.parse(json()).ok().sizeBytes shouldBe null
+        }
+
+        test("toJson は契約の形で書き、parse で同じ値に読み直せる。sizeBytes がなければ項目を出さない") {
+            val manifest = FileManifest.parse(json(sizeBytes = ""","sizeBytes":120""")).ok()
+
+            FileManifest.parse(manifest.toJson()).ok() shouldBe manifest
+            val withoutSize = manifest.copy(sizeBytes = null)
+            withoutSize.toJson().decodeToString().contains("sizeBytes") shouldBe false
+            FileManifest.parse(withoutSize.toJson()).ok() shouldBe withoutSize
         }
 
         test("項目の形式の誤りは、項目の名前ごとに返す(値は入れない)") {
