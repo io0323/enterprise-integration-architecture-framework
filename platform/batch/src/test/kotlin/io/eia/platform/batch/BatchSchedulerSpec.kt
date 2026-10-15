@@ -1,8 +1,10 @@
 package io.eia.platform.batch
 
-import io.eia.platform.batch.file.ObjectSource
-import io.eia.platform.batch.file.StoredObject
 import io.eia.platform.batch.sla.SlaMonitor
+import io.eia.platform.filetransfer.FileTransferError
+import io.eia.platform.filetransfer.StoreUnavailable
+import io.eia.platform.filetransfer.store.ObjectReader
+import io.eia.platform.filetransfer.store.StoredObject
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.err
 import io.eia.shared.kernel.ok
@@ -25,19 +27,19 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /** テスト用の置き場。 */
-private class FakeObjectSource : ObjectSource {
+private class FakeObjectSource : ObjectReader {
     val objects = sortedMapOf<String, ByteArray>()
     val reads = mutableListOf<String>()
-    var failing: BatchError? = null
+    var failing: FileTransferError? = null
 
-    override fun list(prefix: String): Result<List<StoredObject>, BatchError> =
+    override fun list(prefix: String): Result<List<StoredObject>, FileTransferError> =
         failing?.let { err(it) }
             ?: ok(objects.filterKeys { it.startsWith(prefix) }.map { (key, body) -> StoredObject(key, body.size.toLong()) })
 
     override fun read(
         key: String,
         maxBytes: Int,
-    ): Result<ByteArray?, BatchError> {
+    ): Result<ByteArray?, FileTransferError> {
         reads += key
         return ok(objects[key]?.let { it.copyOf(minOf(it.size, maxBytes + 1)) })
     }
@@ -171,7 +173,7 @@ class BatchSchedulerSpec :
             // 2 回目もログを繰り返さずに同じ判定
             scheduler.due().shouldBeEmpty()
 
-            source.failing = BatchSourceUnavailable("SlowDown")
+            source.failing = StoreUnavailable("SlowDown")
             scheduler.due().shouldBeEmpty()
         }
 

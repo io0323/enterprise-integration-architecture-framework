@@ -1,7 +1,11 @@
 package io.eia.platform.batch
 
-import io.eia.platform.batch.file.FileManifest
 import io.eia.platform.batch.sla.SlaMonitor
+import io.eia.platform.filetransfer.FileTransferError
+import io.eia.platform.filetransfer.StoreRejected
+import io.eia.platform.filetransfer.StoreUnavailable
+import io.eia.platform.filetransfer.manifest.FileManifest
+import io.eia.shared.kernel.DomainError
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.ok
 import kotlinx.coroutines.Dispatchers
@@ -208,7 +212,7 @@ public class BatchScheduler(
         trigger: Trigger.FileArrival,
     ): Result<List<DueRun>, BatchError> {
         val objects =
-            when (val listed = trigger.source.list(trigger.prefix)) {
+            when (val listed = trigger.source.list(trigger.prefix).asBatchError()) {
                 is Result.Err -> return listed
                 is Result.Ok -> listed.value
             }
@@ -254,7 +258,7 @@ public class BatchScheduler(
         sizes: Map<String, Long>,
     ): Result<RunTrigger?, BatchError> {
         val bytes =
-            when (val read = trigger.source.read(manifestKey, FileManifest.MAX_BYTES)) {
+            when (val read = trigger.source.read(manifestKey, FileManifest.MAX_BYTES).asBatchError()) {
                 is Result.Err -> return read
 
                 // 一覧の後に消された
@@ -319,3 +323,33 @@ public class BatchScheduler(
         private val PARTITION = Regex("^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
     }
 }
+
+/** 置き場(platform/file-transfer)の失敗を、バッチの失敗に写す。一時的な失敗は次の確認でやり直す。 */
+private fun <T> Result<T, FileTransferError>.asBatchError(): Result<T, BatchError> =
+    when (this) {
+        is Result.Ok -> {
+            this
+        }
+
+        is Result.Err -> {
+            Result.Err(
+                when (val error = error) {
+                    is StoreUnavailable -> {
+                        BatchSourceUnavailable(error.reason)
+                    }
+
+                    is StoreRejected -> {
+                        BatchSourceRejected(error.reason)
+                    }
+
+                    else -> {
+                        if (error.asDomainError() is DomainError.Retryable) {
+                            BatchSourceUnavailable(error.code)
+                        } else {
+                            BatchSourceRejected(error.code)
+                        }
+                    }
+                },
+            )
+        }
+    }

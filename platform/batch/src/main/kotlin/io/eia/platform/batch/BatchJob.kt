@@ -1,6 +1,6 @@
 package io.eia.platform.batch
 
-import io.eia.platform.batch.file.ObjectSource
+import io.eia.platform.filetransfer.store.ObjectReader
 
 /**
  * DAG の起動の条件(Framework 7.2: 時刻より、前段の完了・ファイルの到着での起動を優先する)。
@@ -21,10 +21,11 @@ public sealed interface Trigger {
 
     /**
      * [source] の [prefix] の下に `.manifest.json` が届いたら起動する(Framework 9.2: マニフェストの到着を完了の合図にする)。
+     * [source] は platform/file-transfer の置き場(読み取りの権限だけを持つ identity で作る。ADR-0032 §1)。
      * パーティションはマニフェストの名前から `.manifest.json` を除いたもの(データファイルの拡張子を除いた名前と同じ)。
      */
     public data class FileArrival(
-        val source: ObjectSource,
+        val source: ObjectReader,
         val prefix: String,
     ) : Trigger {
         init {

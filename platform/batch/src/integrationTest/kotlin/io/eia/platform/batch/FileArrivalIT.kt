@@ -2,10 +2,8 @@
 
 package io.eia.platform.batch
 
-import io.eia.platform.batch.file.FileManifest
-import io.eia.platform.batch.file.S3ObjectSource
-import io.eia.platform.batch.file.S3ObjectSourceConfig
-import io.eia.platform.batch.file.StoredObject
+import io.eia.platform.filetransfer.store.S3ObjectStore
+import io.eia.platform.filetransfer.store.S3StoreConfig
 import io.eia.platform.observability.Observability
 import io.eia.platform.observability.ObservabilityConfig
 import io.eia.platform.observability.TelemetrySinks
@@ -17,9 +15,7 @@ import io.eia.shared.kernel.getOrNull
 import io.eia.shared.kernel.ok
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
-import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.types.shouldBeInstanceOf
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider
 import software.amazon.awssdk.core.checksums.RequestChecksumCalculation
@@ -53,10 +49,10 @@ class FileArrivalIT :
         val secretKey = SecretName("IT_BATCH_S3_SECRET_KEY")
         val traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 
-        fun source(identity: String): S3ObjectSource {
+        fun source(identity: String): S3ObjectStore {
             val credentials = seaweed.credentials.getValue(identity)
-            return S3ObjectSource(
-                S3ObjectSourceConfig(URI(seaweed.endpoint), bucket, accessKey, secretKey),
+            return S3ObjectStore(
+                S3StoreConfig(URI(seaweed.endpoint), bucket, accessKey, secretKey),
                 EnvSecretProvider(mapOf(accessKey.value to credentials.accessKey, secretKey.value to credentials.secretKey)),
             )
         }
@@ -123,29 +119,6 @@ class FileArrivalIT :
 
             store.runs[due.key] = RunRecord(due.key, RunStatus.SUCCEEDED, 1, due.trigger, null, Instant.DISTANT_PAST, Instant.DISTANT_PAST)
             scheduler.due().shouldBeEmpty()
-        }
-
-        test("置き場: 一覧はキーの順。ないキーは null。大きすぎるオブジェクトは上限 + 1 バイトまで読む") {
-            val reader = source("eiaf-batch-reader")
-            put("list/b.txt", "b".toByteArray())
-            put("list/a.txt", ByteArray(FileManifest.MAX_BYTES + 10))
-
-            reader.list("list/").getOrNull() shouldBe
-                listOf(StoredObject("list/a.txt", FileManifest.MAX_BYTES + 10L), StoredObject("list/b.txt", 1))
-            reader.read("list/none.txt", 10).getOrNull().shouldBeNull()
-            reader.read("list/a.txt", FileManifest.MAX_BYTES).getOrNull()!!.size shouldBe FileManifest.MAX_BYTES + 1
-        }
-
-        test("権限のない identity は拒否(リトライしない)、資格情報がなければ一時的な失敗") {
-            source("eiaf-other").list("").shouldBeInstanceOf<Result.Err<BatchError>>().error shouldBe BatchSourceRejected("AccessDenied")
-            val missing =
-                S3ObjectSource(S3ObjectSourceConfig(URI(seaweed.endpoint), bucket, accessKey, secretKey), EnvSecretProvider(emptyMap()))
-            missing
-                .list("")
-                .shouldBeInstanceOf<Result.Err<BatchError>>()
-                .error
-                .shouldBeInstanceOf<BatchSourceUnavailable>()
-            missing.close()
         }
     })
 

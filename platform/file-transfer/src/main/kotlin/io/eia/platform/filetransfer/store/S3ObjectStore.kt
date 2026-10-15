@@ -1,8 +1,8 @@
-package io.eia.platform.batch.file
+package io.eia.platform.filetransfer.store
 
-import io.eia.platform.batch.BatchError
-import io.eia.platform.batch.BatchSourceRejected
-import io.eia.platform.batch.BatchSourceUnavailable
+import io.eia.platform.filetransfer.FileTransferError
+import io.eia.platform.filetransfer.StoreRejected
+import io.eia.platform.filetransfer.StoreUnavailable
 import io.eia.platform.security.secret.SecretName
 import io.eia.platform.security.secret.SecretProvider
 import io.eia.shared.kernel.Result
@@ -14,27 +14,35 @@ import software.amazon.awssdk.core.checksums.RequestChecksumCalculation
 import software.amazon.awssdk.core.checksums.ResponseChecksumValidation
 import software.amazon.awssdk.core.exception.SdkClientException
 import software.amazon.awssdk.core.exception.SdkException
+import software.amazon.awssdk.core.sync.RequestBody
 import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.s3.S3Client
+import software.amazon.awssdk.services.s3.model.CopyObjectRequest
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest
 import software.amazon.awssdk.services.s3.model.GetObjectRequest
+import software.amazon.awssdk.services.s3.model.HeadObjectRequest
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException
+import software.amazon.awssdk.services.s3.model.PutObjectRequest
 import software.amazon.awssdk.services.s3.model.S3Exception
 import java.io.IOException
 import java.net.URI
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.time.Duration
 
 /**
- * S3 互換ストレージ(SeaweedFS。ADR-0015)の置き場。ファイルの到着の監視に使う(ADR-0030 §4)。
+ * S3 互換ストレージ(SeaweedFS。ADR-0015)の置き場(ADR-0032 §1)。ファイルの到着の監視(platform/batch。ADR-0030 §4)と、
+ * ファイルの書き出し・検査・移動に使う。
  *
- * 読むだけなので、読み取りの権限だけを持つ identity の資格情報を渡す。資格情報は呼び出しのたびに [SecretProvider] から取る。
- * P09 のファイル連携(`platform/file-transfer`)ができたら、S3 の接続はそちらに寄せる。
+ * 資格情報は呼び出しのたびに [SecretProvider] から取る。用途ごとに権限を絞った identity の名前を渡す(監視は読み取りだけ、など)。
  */
-public class S3ObjectSource(
-    private val config: S3ObjectSourceConfig,
+public class S3ObjectStore(
+    private val config: S3StoreConfig,
     secrets: SecretProvider,
-) : ObjectSource,
+) : ObjectStore,
     AutoCloseable {
     private val client: S3Client =
         S3Client
@@ -54,7 +62,7 @@ public class S3ObjectSource(
             .overrideConfiguration { it.apiCallTimeout(config.apiCallTimeout) }
             .build()
 
-    override fun list(prefix: String): Result<List<StoredObject>, BatchError> =
+    override fun list(prefix: String): Result<List<StoredObject>, FileTransferError> =
         s3Catching {
             val objects = mutableListOf<StoredObject>()
             var token: String? = null
@@ -79,49 +87,148 @@ public class S3ObjectSource(
     override fun read(
         key: String,
         maxBytes: Int,
-    ): Result<ByteArray?, BatchError> =
+    ): Result<ByteArray?, FileTransferError> =
         s3Catching {
             try {
-                client
-                    .getObject(
-                        GetObjectRequest
+                client.getObject(get(key)).use { ok(it.readNBytes(maxBytes + 1)) }
+            } catch (_: NoSuchKeyException) {
+                ok(null)
+            }
+        }
+
+    override fun head(key: String): Result<StoredObject?, FileTransferError> =
+        s3Catching {
+            try {
+                val head =
+                    client.headObject(
+                        HeadObjectRequest
                             .builder()
                             .bucket(config.bucket)
                             .key(key)
                             .build(),
-                    ).use { ok(it.readNBytes(maxBytes + 1)) }
+                    )
+                ok(StoredObject(key, head.contentLength()))
             } catch (_: NoSuchKeyException) {
                 ok(null)
-            } catch (e: IOException) {
-                err(BatchSourceUnavailable(e::class.simpleName ?: "IOException"))
+            } catch (e: S3Exception) {
+                // HEAD の 404 は本文がないので、互換ストレージによっては NoSuchKeyException にならない
+                if (e.statusCode() == NOT_FOUND) ok(null) else throw e
             }
+        }
+
+    override fun download(
+        key: String,
+        target: Path,
+    ): Result<Boolean, FileTransferError> =
+        s3Catching {
+            try {
+                client.getObject(get(key)).use { Files.copy(it, target, StandardCopyOption.REPLACE_EXISTING) }
+                ok(true)
+            } catch (_: NoSuchKeyException) {
+                ok(false)
+            }
+        }
+
+    override fun upload(
+        key: String,
+        source: Path,
+    ): Result<Unit, FileTransferError> =
+        s3Catching {
+            client.putObject(
+                PutObjectRequest
+                    .builder()
+                    .bucket(config.bucket)
+                    .key(key)
+                    .build(),
+                RequestBody.fromFile(source),
+            )
+            ok(Unit)
+        }
+
+    override fun put(
+        key: String,
+        bytes: ByteArray,
+    ): Result<Unit, FileTransferError> =
+        s3Catching {
+            client.putObject(
+                PutObjectRequest
+                    .builder()
+                    .bucket(config.bucket)
+                    .key(key)
+                    .build(),
+                RequestBody.fromBytes(bytes),
+            )
+            ok(Unit)
+        }
+
+    override fun copy(
+        sourceKey: String,
+        targetKey: String,
+    ): Result<Boolean, FileTransferError> =
+        s3Catching {
+            try {
+                client.copyObject(
+                    CopyObjectRequest
+                        .builder()
+                        .sourceBucket(config.bucket)
+                        .sourceKey(sourceKey)
+                        .destinationBucket(config.bucket)
+                        .destinationKey(targetKey)
+                        .build(),
+                )
+                ok(true)
+            } catch (_: NoSuchKeyException) {
+                ok(false)
+            }
+        }
+
+    override fun delete(key: String): Result<Unit, FileTransferError> =
+        s3Catching {
+            client.deleteObject(
+                DeleteObjectRequest
+                    .builder()
+                    .bucket(config.bucket)
+                    .key(key)
+                    .build(),
+            )
+            ok(Unit)
         }
 
     override fun close() {
         client.close()
     }
 
+    private fun get(key: String): GetObjectRequest =
+        GetObjectRequest
+            .builder()
+            .bucket(config.bucket)
+            .key(key)
+            .build()
+
     private companion object {
         const val FORBIDDEN = 403
+        const val NOT_FOUND = 404
         const val TOO_MANY_REQUESTS = 429
         const val SERVER_ERROR = 500
 
-        /** 例外を [BatchError] に変換する。理由にはエラーコードだけを入れる(資格情報や応答の本文を入れない)。 */
-        inline fun <T> s3Catching(block: () -> Result<T, BatchError>): Result<T, BatchError> =
+        /** 例外を [FileTransferError] に変換する。理由にはエラーコードだけを入れる(資格情報や応答の本文を入れない)。 */
+        inline fun <T> s3Catching(block: () -> Result<T, FileTransferError>): Result<T, FileTransferError> =
             try {
                 block()
             } catch (e: S3Exception) {
                 val status = e.statusCode()
                 val code = e.awsErrorDetails()?.errorCode() ?: "HTTP $status"
                 when {
-                    status >= SERVER_ERROR || status == TOO_MANY_REQUESTS -> err(BatchSourceUnavailable(code))
-                    status == FORBIDDEN -> err(BatchSourceRejected("AccessDenied"))
-                    else -> err(BatchSourceRejected(code))
+                    status >= SERVER_ERROR || status == TOO_MANY_REQUESTS -> err(StoreUnavailable(code))
+                    status == FORBIDDEN -> err(StoreRejected("AccessDenied"))
+                    else -> err(StoreRejected(code))
                 }
             } catch (e: SdkClientException) {
-                err(BatchSourceUnavailable(e::class.simpleName ?: "SdkClientException"))
+                err(StoreUnavailable(e::class.simpleName ?: "SdkClientException"))
             } catch (e: SdkException) {
-                err(BatchSourceUnavailable(e::class.simpleName ?: "SdkException"))
+                err(StoreUnavailable(e::class.simpleName ?: "SdkException"))
+            } catch (e: IOException) {
+                err(StoreUnavailable(e::class.simpleName ?: "IOException"))
             }
     }
 }
@@ -129,9 +236,9 @@ public class S3ObjectSource(
 /**
  * @property endpoint S3 のエンドポイント(ローカルは `http://localhost:19333`)
  * @property pathStyle true なら `{endpoint}/{bucket}/{key}`(ADR-0015 §2)
- * @property accessKeyName / secretKeyName [SecretProvider] で取得する名前。読み取り専用の identity の名前を渡す
+ * @property accessKeyName / secretKeyName [SecretProvider] で取得する名前。用途ごとに権限を絞った identity の名前を渡す
  */
-public data class S3ObjectSourceConfig(
+public data class S3StoreConfig(
     val endpoint: URI,
     val bucket: String,
     val accessKeyName: SecretName,
