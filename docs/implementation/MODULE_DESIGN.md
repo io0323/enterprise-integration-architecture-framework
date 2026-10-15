@@ -169,3 +169,4 @@ services/legacy-sim/app/
 - 理由: adapters の本当の検証は、実際のミドルウェアでの統合テスト(Testcontainers)である。単体テストだけで測ると、閾値を満たすために SQL の呼び出しをモックで模しただけのテストが要り、価値が低い割に保守が増える(P05 ④a-1・#55 の経緯)。一方で、`build` で統合テストを毎回動かすと、Docker が要り、build が遅くなる。
 - adapters の単体テストは、統合テストで再現できない分岐(並行の削除との競合など)と、DB を使わない純粋な処理(SQL のエラーの分類・ID の採番など)だけに使う。
 - `integration` ジョブは、統合テストに関係する変更(ci.yml の paths-filter)があるときだけ動く。動かない PR では、統合テストを持つモジュールの閾値は検証されない(そのモジュールを変えていないため)。
+- Debezium(Kafka Connect)のコンテナを起動する統合テスト(`src/integrationTest` で `KafkaConnectContainer` を使うモジュール。今は order・legacy-sim・legacy-order-acl・inventory・payment・shipping の app と platform/test-support)は、同じ Gradle の実行の中で **1 つずつ** 動かす(build-logic の共有のビルドサービス `CdcContainersGate`。`maxParallelUsages = 1`。該当するかはソースから自動で判定する)。モジュールごとの並列の実行(`org.gradle.parallel`)で、PostgreSQL・Kafka・Kafka Connect のコンテナを同時にいくつも立てると、ランナーの資源を取り合って Debezium の取り込みがテストの待ち時間を超えたため(#126)。CI の matrix の別の項目に分けない理由は、order・legacy-sim・legacy-order-acl の app が全体のカバレッジの集約の対象で、同じ実行で測る必要があるため。
