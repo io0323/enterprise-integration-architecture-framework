@@ -194,7 +194,7 @@ Kafka Connect は公開イメージを使わず、`images/kafka-connect/Dockerfi
 2. SHA-256 を、Maven Central の `.sha256` と、取得したファイルの値の両方で確かめる。
 
    ```bash
-   url=https://repo1.maven.org/maven2/io/debezium/debezium-connector-postgres/3.6.3.Final/debezium-connector-postgres-3.6.3.Final-plugin.tar.gz
+   url=https://repo1.maven.org/maven2/io/debezium/debezium-connector-postgres/3.7.0.Final/debezium-connector-postgres-3.7.0.Final-plugin.tar.gz
    curl -fsS "$url.sha256"; echo
    curl -fsSL "$url" | shasum -a 256
    ```

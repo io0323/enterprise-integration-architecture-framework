@@ -177,7 +177,7 @@ class LegacyOrderAclIT :
                     put(
                         "source",
                         GenericData.Record(envelopeSchema.getField("source").schema()).apply {
-                            put("version", "3.6.3.Final")
+                            put("version", "3.7.0.Final")
                             put("connector", "postgresql")
                             put("name", "_cdc.legacy")
                             put("ts_ms", 1_791_454_000_123L)

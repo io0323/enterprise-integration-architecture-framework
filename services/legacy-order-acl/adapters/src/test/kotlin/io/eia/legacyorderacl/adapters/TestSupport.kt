@@ -113,7 +113,7 @@ internal object TestRows {
             put(
                 "source",
                 GenericData.Record(ENVELOPE_SCHEMA.getField("source").schema()).apply {
-                    put("version", "3.6.3.Final")
+                    put("version", "3.7.0.Final")
                     put("connector", "postgresql")
                     put("name", "_cdc.legacy")
                     put("ts_ms", 1_791_454_000_123L)
