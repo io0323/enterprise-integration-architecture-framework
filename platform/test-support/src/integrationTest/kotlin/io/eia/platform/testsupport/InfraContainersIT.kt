@@ -29,6 +29,23 @@ class InfraContainersIT :
             }
         }
 
+        test("SFTP: 公開鍵の利用者と送り先のディレクトリを作り、ホスト鍵を known_hosts の形で返す。sshd の設定を足せる") {
+            val key = TestKeys.ssh()
+            SftpServerContainer("eiaf-file", key.publicKey, extraSshdConfig = "MaxAuthTries 3\nLoginGraceTime 30").use { sftp ->
+                sftp.start()
+
+                sftp.knownHostsLine() shouldContain "[${sftp.host}]:${sftp.sshPort} ssh-ed25519 "
+                sftp.knownHostsLine("rsa") shouldContain " ssh-rsa "
+                sftp.execInContainer("cat", "/config/.ssh/authorized_keys").stdout shouldContain key.publicKey
+                sftp.execInContainer("sh", "-c", "tail -2 /config/sshd/sshd_config").stdout shouldBe "MaxAuthTries 3\nLoginGraceTime 30\n"
+                sftp.list("/config/outbox") shouldBe emptyList()
+                sftp.execInContainer("sh", "-c", "printf 'hello' > /config/outbox/a.txt")
+                sftp.list("/config/outbox") shouldBe listOf("a.txt")
+                sftp.readFile("/config/outbox/a.txt")!!.decodeToString() shouldBe "hello"
+                sftp.readFile("/config/outbox/none.txt") shouldBe null
+            }
+        }
+
         test("Kafka Connect: compose と同じイメージに、Debezium の Postgres コネクタ・EventRouter・BinaryDataConverter・Filter がある") {
             Network.newNetwork().use { network ->
                 KafkaContainer(InfraImages.get("KAFKA_IMAGE"))
