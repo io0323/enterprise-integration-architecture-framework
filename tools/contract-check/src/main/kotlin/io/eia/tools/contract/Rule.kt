@@ -39,7 +39,7 @@ enum class Rule(
     ),
     STRUCT_JSON_SCHEMA(
         "CC-STRUCT-005",
-        "JSON Schema(manifest・カタログ)がメタスキーマに適合すること",
+        "JSON Schema(manifest・カタログ・ファイルの仕様)がメタスキーマに適合すること",
         "9, 16.1",
         "JSON Schema 2020-12 の仕様に合わせて直す",
     ),
@@ -73,7 +73,7 @@ enum class Rule(
         "CC-NAMING-005",
         "contracts/files のファイル名",
         "9, 16.1",
-        "{system}_{dataset}.v{n}.yaml、manifest.v{n}.schema.json、edi/{name}.v{n}.yaml のいずれかにする",
+        "{system}_{dataset}.v{n}.yaml、manifest.v{n}.schema.json、file-spec.v{n}.schema.json、edi/{name}.v{n}.yaml のいずれかにする",
     ),
     NAMING_INTEGRATION_ID(
         "CC-NAMING-006",
@@ -199,6 +199,24 @@ enum class Rule(
         "9, INTEGRATION_STANDARDS §2",
         "required に file, recordCount, sha256, schemaVersion, createdAt, traceparent, correlationId を含める",
     ),
+    FILE_SPEC(
+        "CC-FILE-002",
+        "ファイルの仕様がファイルの仕様のスキーマに適合する(形式・列・機密区分・個人情報の有無など)",
+        "9, 12.2",
+        "contracts/files/file-spec.v{n}.schema.json の必須項目と値を満たす",
+    ),
+    FILE_SPEC_NAME(
+        "CC-FILE-003",
+        "ファイルの仕様のファイル名と、中の system・dataset・version が一致する",
+        "9, INTEGRATION_STANDARDS §1",
+        "ファイル名を {system}_{dataset}.v{version}.yaml にする(manifest の schemaVersion は {system}_{dataset}.v{version})",
+    ),
+    FILE_SPEC_UNREGISTERED(
+        "CC-FILE-004",
+        "ファイルの仕様はカタログに登録されている",
+        "16.1",
+        "contracts/catalog/{id}.yaml(style: file)を追加し、contract にこの仕様を指定する",
+    ),
 
     // --- 互換性(main との差分) ---
     COMPAT_AVRO(
@@ -212,6 +230,12 @@ enum class Rule(
         "OpenAPI に main の版からの破壊的変更がない(oasdiff)",
         "5.3",
         "互換な変更(任意項目の追加など)にするか、/v{n+1} を新設して並行提供する",
+    ),
+    COMPAT_FILE(
+        "CC-COMPAT-003",
+        "ファイルの仕様が main の版に対して互換(列の削除・型や必須性の変更・並べ替え・enum の変更・形式の変更がない)",
+        "9, 15.3",
+        "足してよいのは、末尾の任意(nullable: true)の列と、新しい形式だけ。ほかの変更は新しい版のファイル({system}_{dataset}.v{n+1}.yaml)で行う",
     ),
 
     // --- 互換性検査の例外(contracts/compat-waivers.yaml) ---

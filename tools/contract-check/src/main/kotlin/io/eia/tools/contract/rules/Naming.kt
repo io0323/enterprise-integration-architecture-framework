@@ -18,8 +18,9 @@ object Naming {
     private val PASCAL_CASE = Regex("^[A-Z][A-Za-z0-9]*$")
     private val FILE_SPEC = Regex("^$SEGMENT(_$SEGMENT)\\.v[1-9][0-9]*\\.yaml$")
     private val MANIFEST_SCHEMA = Regex("^manifest\\.v[1-9][0-9]*\\.schema\\.json$")
+    private val FILE_SPEC_SCHEMA = Regex("^file-spec\\.v[1-9][0-9]*\\.schema\\.json$")
     private val EDI_SPEC = Regex("^edi/$SEGMENT\\.v[1-9][0-9]*\\.yaml$")
-    private val FILE_PATTERNS = listOf(FILE_SPEC, MANIFEST_SCHEMA, EDI_SPEC)
+    private val FILE_PATTERNS = listOf(FILE_SPEC, MANIFEST_SCHEMA, FILE_SPEC_SCHEMA, EDI_SPEC)
     private val FILES_README = setOf("README.md")
 
     /** Topic 名の検査。DLQ(`{topic}.dlq`)は元の Topic 名で検査する。 */
@@ -94,7 +95,8 @@ object Naming {
             null
         } else {
             Rule.NAMING_FILE to
-                "'$relativePath' は {system}_{dataset}.v{n}.yaml / manifest.v{n}.schema.json / edi/{name}.v{n}.yaml のいずれでもありません"
+                "'$relativePath' は {system}_{dataset}.v{n}.yaml / manifest.v{n}.schema.json / file-spec.v{n}.schema.json / " +
+                "edi/{name}.v{n}.yaml のいずれでもありません"
         }
 
     private const val EVENT_GROUP = 3

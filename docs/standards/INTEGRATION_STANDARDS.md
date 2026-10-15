@@ -57,6 +57,18 @@ DLQ のトピックは、元のメッセージと同じ機密区分として扱�
 ### File manifest(`contracts/files/manifest.v1.schema.json`)
 必須項目: `file`, `recordCount`, `sha256`, `schemaVersion`, `createdAt`(UTC), `traceparent`, `correlationId`。
 
+### ファイルの仕様(`contracts/files/{system}_{dataset}.v{n}.yaml`)
+- 形式は `contracts/files/file-spec.v1.schema.json`。主な項目:
+  - 機密区分・個人情報を含むか(`containsPersonalData`)
+  - 1 ファイルの範囲(`granularity`。日の区切りのタイムゾーンを含む)
+  - 出せる形式(`formats`。Parquet・CSV など。CSV は区切り・引用・ヘッダ・改行・null の表し方まで書く)
+  - 件数の数え方(`recordCount`)
+  - 列(名前・論理型・必須性・enum)
+- manifest の `schemaVersion` は `{system}_{dataset}.v{n}` で、この仕様を指す。受ける側は、この仕様で件数・列・値を検査する。
+- 互換でない変更(列の削除・型や必須性の変更・並べ替え・enum の値の増減・形式の設定の変更)は、新しい版のファイル(`v{n+1}`)で行う。足してよいのは、末尾の任意の列と新しい形式だけ。
+- contract-check の `CC-FILE-002`〜`004`・`CC-COMPAT-003` が検査する。
+- ファイルの仕様もカタログ(`style: file`)に登録する。
+
 ## 3. HTTP ステータスとリトライ
 - Retry 対象: 408, 429, 502, 503, 504, 接続エラー。429/503 は `Retry-After` を優先。
 - 既定 RetryPolicy: initial 500ms, multiplier 2.0, max 3 attempts(初回を含む。リトライは 2 回), cap 30s, full jitter(ADR-0011)。

@@ -65,6 +65,8 @@ data class Contracts(
     val catalogSchema: ContractDocument?,
     val manifestSchemas: List<ContractDocument>,
     val fileSpecs: List<String>,
+    val fileSpecDocuments: List<ContractDocument> = emptyList(),
+    val fileSpecSchemas: List<ContractDocument> = emptyList(),
     val loadViolations: List<Violation>,
 ) {
     fun relative(file: Path): String = root.relativize(file).invariantSeparatorsPathString
@@ -119,6 +121,9 @@ data class Contracts(
                         .filter { it.name.startsWith("manifest.") && it.name.endsWith(".schema.json") }
                         .mapNotNull(::readTree),
                 fileSpecs = files(filesDir).map { filesDir.relativize(it).invariantSeparatorsPathString },
+                // ファイルの仕様({system}_{dataset}.v{n}.yaml。edi/ は P12)と、その形式のスキーマ(file-spec.v{n}.schema.json)
+                fileSpecDocuments = fileSpecFiles(filesDir).mapNotNull(::readTree),
+                fileSpecSchemas = files(filesDir).filter(::isFileSpecSchema).mapNotNull(::readTree),
                 loadViolations = violations,
             )
         }
@@ -136,6 +141,11 @@ data class Contracts(
                         .toList()
                 }
             }
+
+        private fun fileSpecFiles(filesDir: Path): List<Path> =
+            files(filesDir).filter { it.parent == filesDir && it.extension == "yaml" && '_' in it.name }
+
+        private fun isFileSpecSchema(file: Path): Boolean = file.name.startsWith("file-spec.") && file.name.endsWith(".schema.json")
 
         private fun isYamlOrJson(file: Path) = file.extension in setOf("yaml", "yml", "json")
 
