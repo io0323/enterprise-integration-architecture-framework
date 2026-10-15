@@ -36,6 +36,8 @@ internal object E2eEnvironment {
     // 下の http などより先に初期化する(object の初期化はファイルの上から順)
     private val CONNECT_TIMEOUT: Duration = Duration.ofSeconds(5)
     private val REQUEST_TIMEOUT: Duration = Duration.ofSeconds(30)
+    private val TOKEN_REFRESH_BEFORE: Duration = Duration.ofSeconds(30)
+    private const val DEFAULT_TOKEN_LIFETIME_SECONDS = 300L
 
     /** client-credentials のクライアント(infra/local/keycloak/realm-eiaf.json)。 */
     enum class Client(
@@ -63,32 +65,44 @@ internal object E2eEnvironment {
         System.getenv(name)?.takeIf { it.isNotBlank() }
             ?: error("$name がありません。make e2e で実行してください(infra/local/.env を読み込みます)")
 
-    private val tokens = mutableMapOf<Client, String>()
+    /** 取ったトークンと、取り直す時刻(期限の [TOKEN_REFRESH_BEFORE] 前)。 */
+    private class CachedToken(
+        val value: String,
+        val refreshAt: Long,
+    )
 
-    /** `sales.order:read` / `sales.order:write` のスコープのアクセストークン(テストの間は使い回す。寿命は 5 分)。 */
+    private val tokens = mutableMapOf<Client, CachedToken>()
+
+    /**
+     * `sales.order:read` / `sales.order:write` のスコープのアクセストークン。期限(realm の 5 分)の 30 秒前まで使い回し、
+     * それを過ぎたら取り直す(E2E 全体は 5 分を超えるため、期限の切れたトークンで 401 にならないように。#120)。
+     */
     @Synchronized
-    fun token(client: Client = Client.A): String =
-        tokens.getOrPut(client) {
-            val form =
-                mapOf(
-                    "grant_type" to "client_credentials",
-                    "client_id" to client.id,
-                    "client_secret" to secret(client.secretVariable),
-                    "scope" to "sales.order:read sales.order:write",
-                ).entries.joinToString("&") { (k, v) -> "$k=${URLEncoder.encode(v, StandardCharsets.UTF_8)}" }
-            val response =
-                send(
-                    HttpRequest
-                        .newBuilder(URI.create("$KEYCLOAK/realms/eiaf/protocol/openid-connect/token"))
-                        .header("Content-Type", "application/x-www-form-urlencoded")
-                        .POST(HttpRequest.BodyPublishers.ofString(form)),
-                )
-            check(response.statusCode() == OK) { "${client.id} のトークンを取れません(${response.statusCode()})" }
-            json(response.body())
-                .jsonObject
-                .getValue("access_token")
-                .jsonPrimitive.content
-        }
+    fun token(client: Client = Client.A): String {
+        tokens[client]?.takeIf { System.nanoTime() < it.refreshAt }?.let { return it.value }
+        val form =
+            mapOf(
+                "grant_type" to "client_credentials",
+                "client_id" to client.id,
+                "client_secret" to secret(client.secretVariable),
+                "scope" to "sales.order:read sales.order:write",
+            ).entries.joinToString("&") { (k, v) -> "$k=${URLEncoder.encode(v, StandardCharsets.UTF_8)}" }
+        val requestedAt = System.nanoTime()
+        val response =
+            send(
+                HttpRequest
+                    .newBuilder(URI.create("$KEYCLOAK/realms/eiaf/protocol/openid-connect/token"))
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .POST(HttpRequest.BodyPublishers.ofString(form)),
+            )
+        check(response.statusCode() == OK) { "${client.id} のトークンを取れません(${response.statusCode()})" }
+        val body = json(response.body()).jsonObject
+        val value = body.getValue("access_token").jsonPrimitive.content
+        val lifetime = Duration.ofSeconds(body["expires_in"]?.jsonPrimitive?.content?.toLongOrNull() ?: DEFAULT_TOKEN_LIFETIME_SECONDS)
+        // 取得を頼んだ時刻から数える(応答までの時間の分だけ、早めに取り直す)
+        tokens[client] = CachedToken(value, requestedAt + lifetime.minus(TOKEN_REFRESH_BEFORE).toNanos())
+        return value
+    }
 
     fun request(
         url: String,
