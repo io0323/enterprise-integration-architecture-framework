@@ -132,12 +132,18 @@ class ArchitectureRulesSpec :
                     listOf("UsesParquet.kt", "UsesParquet.kt")
             }
 
+            test("sshj・OpenPGP を platform/file-transfer 以外の本番コードで使う") {
+                ArchitectureRules.transferSecurityOnlyInFileTransfer(violations).fileNames() shouldContainExactlyInAnyOrder
+                    listOf("UsesSftpAndPgp.kt", "UsesSftpAndPgp.kt")
+            }
+
             test("AWS SDK・Parquet の依存を許可したモジュールの外で宣言する・Hadoop を実行時の依存にする(テストの依存は除く)") {
                 val found = LibraryDeclarationRules.violations(violations)
                 found.map { it.path to it.rule } shouldContainExactlyInAnyOrder
                     listOf(
                         "platform/reliability/build.gradle.kts" to "AWS SDK の依存の宣言",
                         "platform/reliability/build.gradle.kts" to "Parquet・Hadoop の依存の宣言",
+                        "platform/reliability/build.gradle.kts" to "SFTP・PGP の依存の宣言",
                         "platform/file-transfer/build.gradle.kts" to "Hadoop は compileOnly だけ",
                     )
             }
@@ -194,6 +200,7 @@ class ArchitectureRulesSpec :
                 ArchitectureRules.messagingLibrariesOnlyInAllowedModules(compliant).shouldBeEmpty()
                 ArchitectureRules.awsSdkOnlyInAllowedModules(compliant).shouldBeEmpty()
                 ArchitectureRules.parquetOnlyInFileTransfer(compliant).shouldBeEmpty()
+                ArchitectureRules.transferSecurityOnlyInFileTransfer(compliant).shouldBeEmpty()
                 LibraryDeclarationRules.violations(compliant).shouldBeEmpty()
             }
 

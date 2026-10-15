@@ -314,6 +314,20 @@ internal object ArchitectureRules {
         packageOnlyInAllowedPaths(codeBase, "org.apache.parquet", PARQUET_ALLOWED_PATHS, PARQUET_RULE, PARQUET_ALLOWED) +
             packageOnlyInAllowedPaths(codeBase, "org.apache.hadoop", PARQUET_ALLOWED_PATHS, PARQUET_RULE, PARQUET_ALLOWED)
 
+    private val TRANSFER_SECURITY_ALLOWED_PATHS = listOf(Regex("""^platform/file-transfer/"""), Regex("""^platform/test-support/"""))
+    private const val TRANSFER_SECURITY_RULE = "SFTP・PGP のライブラリの配置"
+    private const val TRANSFER_SECURITY_ALLOWED = "platform/file-transfer(とテスト用の鍵の platform/test-support)だけ。ADR-0032 §8"
+
+    /**
+     * ADR-0032 §8: SFTP のクライアント(sshj。`net.schmizz`・`com.hierynomus.sshj`)と OpenPGP(`org.bouncycastle.openpgp`・`org.bouncycastle.bcpg`)を
+     * 本番コードで使ってよいのは platform/file-transfer だけ。暗号の方式の絞り込みとホスト鍵の検証を、各所で書き直させないため。
+     * platform/test-support(テスト用の鍵を作る)は例外。
+     */
+    fun transferSecurityOnlyInFileTransfer(codeBase: CodeBase): List<Violation> =
+        listOf("net.schmizz", "com.hierynomus.sshj", "org.bouncycastle.openpgp", "org.bouncycastle.bcpg").flatMap {
+            packageOnlyInAllowedPaths(codeBase, it, TRANSFER_SECURITY_ALLOWED_PATHS, TRANSFER_SECURITY_RULE, TRANSFER_SECURITY_ALLOWED)
+        }
+
     /** [packageName] を、[allowedPaths] 以外の本番コードから import または完全修飾名で参照していれば違反にする。 */
     private fun packageOnlyInAllowedPaths(
         codeBase: CodeBase,

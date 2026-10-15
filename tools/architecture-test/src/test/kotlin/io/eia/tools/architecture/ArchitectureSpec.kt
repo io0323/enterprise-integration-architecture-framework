@@ -77,7 +77,11 @@ class ArchitectureSpec :
             ArchitectureRules.parquetOnlyInFileTransfer(codeBase).assertNone()
         }
 
-        test("AWS SDK・Parquet・Hadoop の依存の宣言は許可したモジュールだけ。Hadoop は compileOnly だけ(ADR-0032 §6・ADR-0033)") {
+        test("SFTP(sshj)と OpenPGP は platform/file-transfer だけで使う(ADR-0032 §8)") {
+            ArchitectureRules.transferSecurityOnlyInFileTransfer(codeBase).assertNone()
+        }
+
+        test("AWS SDK・Parquet・Hadoop・SFTP・PGP の依存の宣言は許可したモジュールだけ。Hadoop は compileOnly だけ(ADR-0032 §6・§8・ADR-0033)") {
             LibraryDeclarationRules.violations(codeBase).assertNone()
         }
 
