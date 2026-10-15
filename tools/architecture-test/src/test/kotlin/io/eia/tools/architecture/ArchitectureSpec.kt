@@ -69,6 +69,18 @@ class ArchitectureSpec :
             ArchitectureRules.messagingLibrariesOnlyInAllowedModules(codeBase).assertNone()
         }
 
+        test("AWS SDK は platform/file-transfer と platform/audit のアンカーだけで使う(ADR-0032 §6)") {
+            ArchitectureRules.awsSdkOnlyInAllowedModules(codeBase).assertNone()
+        }
+
+        test("Parquet・Hadoop は platform/file-transfer だけで使う(ADR-0033 §3)") {
+            ArchitectureRules.parquetOnlyInFileTransfer(codeBase).assertNone()
+        }
+
+        test("AWS SDK・Parquet・Hadoop の依存の宣言は許可したモジュールだけ。Hadoop は compileOnly だけ(ADR-0032 §6・ADR-0033)") {
+            LibraryDeclarationRules.violations(codeBase).assertNone()
+        }
+
         test("services の本番コードは Resilience(...) を直接作らない(ResilienceMetrics 経由。ADR-0021 §7)") {
             ArchitectureRules.resilienceOnlyThroughMetrics(codeBase).assertNone()
         }

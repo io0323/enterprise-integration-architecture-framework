@@ -61,10 +61,30 @@ internal class CodeBase(
             .filterValues { it.isFile }
             .mapValues { (_, file) -> file.readText() }
 
+    /**
+     * モジュールの `build.gradle.kts`(ルートからの相対パス → 本文)。`{services,shared,platform,tools,tests}` の下の 3 段まで
+     * (例 `platform/batch/build.gradle.kts`・`services/order/app/build.gradle.kts`・`tools/parquet-bench/common/build.gradle.kts`)。
+     * `build/` の下とテストの fixtures(もっと深い)は含めない。
+     */
+    val buildScripts: Map<String, String> =
+        TOP_LEVEL_DIRECTORIES
+            .map { root.resolve(it) }
+            .filter { it.isDirectory }
+            .flatMap { top ->
+                top
+                    .walkTopDown()
+                    .maxDepth(BUILD_SCRIPT_DEPTH)
+                    .onEnter { it.name != "build" && !it.name.startsWith(".") }
+                    .filter { it.isFile && it.name == "build.gradle.kts" }
+                    .toList()
+            }.associate { it.relativeTo(root).invariantSeparatorsPath to it.readText() }
+            .toSortedMap()
+
     fun filesUnder(prefix: String): List<SourceFile> = files.filter { it.path.startsWith(prefix) }
 
     companion object {
         private val TOP_LEVEL_DIRECTORIES = listOf("services", "shared", "platform", "tools", "tests")
+        private const val BUILD_SCRIPT_DEPTH = 3
 
         // <top>/<module>[/<submodule>]/src/<sourceSet>/kotlin/
         private val SOURCE_PATH = Regex("""^(services|shared|platform|tools|tests)/[^/]+(/[^/]+)?/src/[^/]+/kotlin/""")
