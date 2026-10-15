@@ -42,7 +42,7 @@ ADR-0008 は、ワークフロー(Framework 7.2)をローカルでは `platform/
 - 起動するのは、パーティションの実行の記録がないか、RUNNING のまま残っている(落ちた)ときだけ。**FAILED は自動で再実行しない**(運用に引き継ぐ。Framework 7.4。docs/runbooks/batch-rerun.md は P08 ⑤)。
 - 時刻での起動は、止まっていた間の起動のうち **直近の 1 回だけ** を取り戻す。それより前の日は運用者が明示的に実行する(止まっていた間の全部を一度に動かして、下流に負荷をかけないため)。
 - 前段の完了の判定は、メッセージではなく **実行の記録(DB)** を見る。前段と後段が別のプロセスでも、同じ DB を使っていれば後段を起動できる。前段の完了を探すのは既定 7 日前まで。
-- ファイルの到着は、マニフェストの到着を完了の合図にする(Framework 9.2)。マニフェストの形式(`contracts/files/manifest.v1.schema.json`)・データファイルがあること・`sizeBytes` を確かめ、誤りはログに残して起動しない(同じ理由は 1 回だけ)。件数と SHA-256 の照合は、データファイルを読むステップが行う(P09 の取り込み)。置き場は S3 互換ストレージ(`S3ObjectSource`。読み取り専用の identity)。P09 の `platform/file-transfer` ができたら、S3 の接続はそちらに寄せる。
+- ファイルの到着は、マニフェストの到着を完了の合図にする(Framework 9.2)。マニフェストの形式(`contracts/files/manifest.v1.schema.json`)・データファイルがあること・`sizeBytes` を確かめ、誤りはログに残して起動しない(同じ理由は 1 回だけ)。件数と SHA-256 の照合は、データファイルを読むステップが行う(P09 の取り込み)。置き場は S3 互換ストレージ(platform/file-transfer の `ObjectReader`。読み取り専用の identity。ADR-0032 §1)。
 - 複数のインスタンスで動かしても、§2 のロックで同じ実行は 1 つだけになる。
 
 ### 5. トレース
@@ -91,3 +91,4 @@ ADR-0008 は、ワークフロー(Framework 7.2)をローカルでは `platform/
 - P08 ③〜⑥ で最初の利用者(`batch-etl`)・アラート・Runbook・E2E を足す。
 
 ## 改訂履歴
+- 2026-10-15: P09 ③a で、S3 の置き場(`S3ObjectSource` → `S3ObjectStore`)とマニフェスト(`FileManifest`)を platform/file-transfer に移した(§4。ADR-0032 §1)。`Trigger.FileArrival` は file-transfer の `ObjectReader` を受け取り、置き場の失敗を `BatchSourceUnavailable` / `BatchSourceRejected` に写す。platform/batch は AWS SDK に依存しなくなった。
