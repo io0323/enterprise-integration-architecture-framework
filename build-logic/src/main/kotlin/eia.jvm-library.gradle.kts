@@ -1,9 +1,12 @@
+import io.eia.buildlogic.CDC_CONTAINERS_GATE
+import io.eia.buildlogic.CdcContainersGate
 import io.eia.buildlogic.InfraImagesArgument
 import io.eia.buildlogic.JVM_TOOLCHAIN
 import io.eia.buildlogic.TEST_SUPPORT_PROJECT
 import io.eia.buildlogic.findProjectPath
 import io.eia.buildlogic.library
 import io.eia.buildlogic.libs
+import io.eia.buildlogic.usesKafkaConnect
 import org.jetbrains.kotlin.gradle.dsl.KotlinJvmProjectExtension
 
 // platform/*, services/*/adapters, tools/* 用の JVM モジュール。
@@ -72,7 +75,13 @@ if (path != TEST_SUPPORT_PROJECT) {
     tasks.named(LifecycleBasePlugin.CHECK_TASK_NAME) { dependsOn(verifyNoTestSupportInMain) }
 }
 
+// #126: Debezium(Kafka Connect)のコンテナを起動する統合テストは、同じビルドの中で 1 つずつ動かす(コンテナの取り合いで取り込みが遅れるため)
+val cdcContainersGate =
+    gradle.sharedServices.registerIfAbsent(CDC_CONTAINERS_GATE, CdcContainersGate::class) { maxParallelUsages.set(1) }
+val integrationTestUsesKafkaConnect = usesKafkaConnect(layout.projectDirectory.dir("src/integrationTest/kotlin").asFile)
+
 tasks.register<Test>("integrationTest") {
+    if (integrationTestUsesKafkaConnect) usesService(cdcContainersGate)
     description = "Testcontainers などの実ミドルウェアを使う統合テストを実行する。"
     group = LifecycleBasePlugin.VERIFICATION_GROUP
     testClassesDirs = integrationTest.output.classesDirs
