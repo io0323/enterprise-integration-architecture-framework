@@ -22,6 +22,10 @@ public sealed interface FileTransferError {
             is LocalFileFailed -> this
             is MoveIncomplete -> this
             is ObjectMissing -> this
+            is CredentialUnavailable -> this
+            is CredentialRejected -> this
+            is RemoteUnavailable -> this
+            is RemoteRejected -> this
         }
 }
 
@@ -79,4 +83,43 @@ public data class ObjectMissing(
     DomainError.NonRetryable {
     override val code: String get() = "file_object_missing"
     override val message: String get() = "$key がありません"
+}
+
+/** 鍵・資格情報(PGP の鍵・SFTP の鍵・known_hosts)を一時的に読めない(秘密情報のファイルの差し替え中など)。 */
+public data class CredentialUnavailable(
+    public val reason: String,
+) : FileTransferError,
+    DomainError.Retryable {
+    override val code: String get() = "file_credential_unavailable"
+    override val message: String get() = "鍵を読めません($reason)"
+}
+
+/** 鍵・資格情報の設定が誤っている(ない・形式が違う・パスフレーズが違う・用途の鍵がない)。設定を直すまで直らない。 */
+public data class CredentialRejected(
+    public val reason: String,
+) : FileTransferError,
+    DomainError.NonRetryable {
+    override val code: String get() = "file_credential_rejected"
+    override val message: String get() = "鍵の設定が誤っています($reason)"
+}
+
+/** 接続先(SFTP)に一時的に接続できない(接続できない・タイムアウト・切断)。 */
+public data class RemoteUnavailable(
+    public val reason: String,
+) : FileTransferError,
+    DomainError.Retryable {
+    override val code: String get() = "file_remote_unavailable"
+    override val message: String get() = "接続先に接続できません($reason)"
+}
+
+/**
+ * 接続先を拒否した、または拒否された(ホスト鍵が登録と違う・使える暗号の方式がない・認証の失敗・権限がない)。
+ * 設定か接続先を直すまで直らない。ホスト鍵の不一致は、なりすましの可能性があるので運用に引き継ぐ。
+ */
+public data class RemoteRejected(
+    public val reason: String,
+) : FileTransferError,
+    DomainError.NonRetryable {
+    override val code: String get() = "file_remote_rejected"
+    override val message: String get() = "接続先との接続を拒否しました($reason)"
 }
