@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eia.io/contracts/files/file-spec.v1.schema.json",
+  "title": "File specification v1",
+  "description": "ファイル連携のデータファイルの仕様(contracts/files/{system}_{dataset}.v{n}.yaml。Framework 9.1・9.2、INTEGRATION_STANDARDS §1)。送る側と受ける側の両方が従う。manifest(manifest.v1.schema.json)の schemaVersion は `{system}_{dataset}.v{version}` で、この仕様を指す。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["system", "dataset", "version", "description", "owner", "dataClassification", "containsPersonalData", "granularity", "formats", "recordCount", "columns"],
+  "properties": {
+    "system": {
+      "description": "送る側の系(ファイル名の {system})",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+    },
+    "dataset": {
+      "description": "データセット(ファイル名の {dataset})",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+    },
+    "version": {
+      "description": "仕様の版(ファイル名の v{n})。互換でない変更は新しい版のファイルで行う(contract-check の CC-COMPAT-003)",
+      "type": "integer",
+      "minimum": 1
+    },
+    "description": { "type": "string", "minLength": 1 },
+    "owner": {
+      "description": "仕様を持つチーム(個人名は不可。Framework 16.2)",
+      "type": "string",
+      "pattern": "^team-[a-z][a-z0-9-]*$"
+    },
+    "dataClassification": {
+      "description": "機密区分(連携カタログと同じ値)。confidential 以上は、ファイルそのものの暗号化(PGP)が必須(Framework 9.2)",
+      "enum": ["public", "internal", "confidential", "restricted"]
+    },
+    "containsPersonalData": {
+      "description": "個人情報を含むか。含めない列の選び方・伏せ方は description か列の description に書く(Framework 12.2)",
+      "type": "boolean"
+    },
+    "granularity": {
+      "description": "1 ファイルに入る範囲",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unit"],
+      "properties": {
+        "unit": { "enum": ["day", "hour", "event"] },
+        "timeZone": {
+          "description": "日・時の区切りのタイムゾーン(IANA。例 Asia/Tokyo)",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "formats": {
+      "description": "出せる形式。受ける側は manifest の file の拡張子で形式を選ぶ",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/format" }
+    },
+    "recordCount": {
+      "description": "manifest の recordCount の数え方",
+      "type": "string",
+      "minLength": 1
+    },
+    "orderBy": {
+      "description": "行の並び(列の名前)。並びを契約にするときだけ書く",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "key": {
+      "description": "1 ファイルの中で一意な列の組",
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string" }
+    },
+    "columns": {
+      "description": "列(この順で出す。CSV は列の位置で読まれるので、並べ替えは互換でない変更)",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/column" }
+    }
+  },
+  "$defs": {
+    "format": {
+      "type": "object",
+      "required": ["type", "extension", "compression"],
+      "properties": {
+        "type": { "enum": ["parquet", "csv", "jsonl", "avro"] },
+        "extension": {
+          "description": "データファイルの拡張子(ファイル名の {ext}。例 parquet・csv.gz)",
+          "type": "string",
+          "pattern": "^[a-z0-9]+(\\.[a-z0-9]+)?$"
+        },
+        "compression": {
+          "description": "parquet・avro は内蔵の圧縮、csv・jsonl はファイル全体の圧縮(Framework 9.2)",
+          "enum": ["none", "gzip", "zstd", "snappy"]
+        },
+        "encoding": { "const": "UTF-8" },
+        "delimiter": { "type": "string", "minLength": 1, "maxLength": 1 },
+        "quote": { "type": "string", "minLength": 1, "maxLength": 1 },
+        "header": { "type": "boolean" },
+        "lineSeparator": { "enum": ["\r\n", "\n"] },
+        "nullValue": {
+          "description": "CSV の null の表し方",
+          "type": "string"
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "csv" } } },
+          "then": { "required": ["encoding", "delimiter", "quote", "header", "lineSeparator", "nullValue"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "parquet" } } },
+          "then": { "properties": { "compression": { "enum": ["none", "zstd", "snappy"] } } }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "column": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type", "nullable", "description"],
+      "properties": {
+        "name": {
+          "description": "列の名前(snake_case)",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*$"
+        },
+        "type": {
+          "description": "論理型。timestamp は UTC のマイクロ秒(Parquet は TIMESTAMP(MICROS, isAdjustedToUTC=true)、CSV は ISO 8601 の Z 付き)。date は ISO 8601(YYYY-MM-DD)",
+          "enum": ["string", "int32", "int64", "boolean", "date", "timestamp", "decimal"]
+        },
+        "precision": { "type": "integer", "minimum": 1 },
+        "scale": { "type": "integer", "minimum": 0 },
+        "nullable": { "type": "boolean" },
+        "enum": {
+          "description": "取りうる値(string の列)。値を足すのは互換でない変更(受ける側の検査が拒否する)",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string" }
+        },
+        "maxLength": { "type": "integer", "minimum": 1 },
+        "description": { "type": "string", "minLength": 1 }
+      },
+      "if": { "properties": { "type": { "const": "decimal" } } },
+      "then": { "required": ["precision", "scale"] }
+    }
+  }
+}

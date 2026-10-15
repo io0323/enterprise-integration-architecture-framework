@@ -1,0 +1,69 @@
+# 日次の売上ファイル(INT-SALES-004。P09)。分析のバッチ(batch-etl)が、業務の日(日本時間)の日次のパーティションを書き出す。
+# 形式は contracts/files/file-spec.v1.schema.json、manifest は manifest.v1.schema.json(schemaVersion は sales_daily.v1)。
+system: sales
+dataset: daily
+version: 1
+description: >-
+  業務の日(日本時間 00:00〜翌日 00:00。ADR-0031 §1)に受け付けた注文の、その時点の状態と金額。1 ファイル 1 日。
+  個人情報は含めない: 顧客 ID は入れず、届け先は国と都道府県だけ(市区町村・番地は分析の DB にもない。ADR-0031 §4)。
+owner: team-analytics
+dataClassification: internal
+containsPersonalData: false
+granularity:
+  unit: day
+  timeZone: Asia/Tokyo
+formats:
+  # 既定(分析向け。Framework 9.1)。圧縮は Parquet の内蔵の zstd
+  - type: parquet
+    extension: parquet
+    compression: zstd
+  # 表計算・レガシー向け(RFC 4180)。ファイル全体を gzip で圧縮する
+  - type: csv
+    extension: csv.gz
+    compression: gzip
+    encoding: UTF-8
+    delimiter: ","
+    quote: '"'
+    header: true
+    lineSeparator: "\r\n"
+    nullValue: ""
+recordCount: データの行数(注文の件数)。CSV のヘッダ行は数えない。注文のない日は 0 件のファイルを出す
+orderBy: [order_id]
+key: [order_id]
+columns:
+  - name: business_date
+    type: date
+    nullable: false
+    description: 受け付けた業務の日(日本時間)。ファイルの全行で同じ値
+  - name: order_id
+    type: string
+    nullable: false
+    maxLength: 64
+    description: 注文 ID(order-service。行はこの列のバイト順(UTF-8)に並べる)
+  - name: ordered_at
+    type: timestamp
+    nullable: false
+    description: 受け付けた時刻(UTC)
+  - name: status
+    type: string
+    nullable: false
+    enum: [PLACED, CONFIRMED, SHIPPED, DELIVERED, CANCELLED]
+    description: ファイルを作った時点の注文の状態
+  - name: total_minor_units
+    type: int64
+    nullable: false
+    description: 合計金額(通貨の最小単位。JPY なら円)
+  - name: currency
+    type: string
+    nullable: false
+    maxLength: 3
+    description: 通貨(ISO 4217)
+  - name: ship_country
+    type: string
+    nullable: false
+    maxLength: 2
+    description: 届け先の国(ISO 3166-1 alpha-2)
+  - name: ship_region
+    type: string
+    nullable: true
+    description: 届け先の都道府県(ない注文は null)
