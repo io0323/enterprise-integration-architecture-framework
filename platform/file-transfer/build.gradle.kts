@@ -5,7 +5,7 @@ plugins {
 }
 
 // ファイル連携の部品(Framework 9。ADR-0032・ADR-0033): S3 互換ストレージの読み書き、マニフェスト、データファイルの書き出し(Parquet・CSV + gzip)、
-// 受け側の検査(SHA-256・件数・スキーマの版)、archive / quarantine への移動。AWS SDK を使ってよいのは、このモジュールと audit のアンカーだけ(Konsist)。
+// 受け側の検査(SHA-256・件数・スキーマの版)、archive / quarantine への移動、PGP の暗号化と署名、SFTP の送信。AWS SDK を使ってよいのは、このモジュールと audit のアンカーだけ(Konsist)。
 dependencies {
     api(project(":shared:kernel"))
     // S3 の資格情報は SecretProvider から取る(ADR-0019 §6)
@@ -24,9 +24,16 @@ dependencies {
         exclude(group = "io.airlift", module = "aircompressor")
         exclude(group = "commons-pool", module = "commons-pool")
     }
+    // SFTP(ADR-0032 §8)。sshj の Bouncy Castle(1.84)を、bcpg と同じ版(libs の bouncycastle)にそろえる
+    implementation(libs.sshj)
+    implementation(libs.bouncycastle.pkix)
+    // PGP(暗号化と署名。ADR-0032 §8)
+    implementation(libs.bouncycastle.pg)
     // ParquetWriter.Builder・WriteSupport の抽象メソッドの引数の型のためだけ。実行時には入れない(ADR-0033 §1)
     compileOnly(libs.hadoop.client.api) { isTransitive = false }
 
+    // テスト用の鍵(TestKeys)と SFTP のサーバ(SftpServerContainer)
+    testImplementation(project(":platform:test-support"))
     integrationTestImplementation(project(":platform:test-support"))
     // バケットを作る(管理の identity)
     integrationTestImplementation(platform(libs.aws.sdk.bom))

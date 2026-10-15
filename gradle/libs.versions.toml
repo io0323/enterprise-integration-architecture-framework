@@ -58,6 +58,8 @@ hikaricp = "7.1.0"
 parquet = "1.18.1"
 # WriteSupport・ParquetWriter.Builder の抽象メソッドの引数の型(Hadoop の Configuration)のためだけに、コンパイルに使う(compileOnly)
 hadoop = "3.5.0"
+# P09 ③b SFTP のクライアント(確認日: 2026-10-15。ADR-0032 §8)。依存は Bouncy Castle(bcprov・bcpkix。版は bouncycastle にそろえる)
+sshj = "0.41.2"
 # 統合テストだけ: platform/file-transfer が書いた Parquet を、別の実装(DuckDB)で読み直す(ADR-0033 §4)
 duckdb = "1.5.6.0"
 # P06 ① Kafka の Producer と Avro(確認日: 2026-10-02。ADR-0025)
@@ -103,6 +105,9 @@ hikaricp = { module = "com.zaxxer:HikariCP", version.ref = "hikaricp" }
 parquet-hadoop = { module = "org.apache.parquet:parquet-hadoop", version.ref = "parquet" }
 hadoop-client-api = { module = "org.apache.hadoop:hadoop-client-api", version.ref = "hadoop" }
 duckdb-jdbc = { module = "org.duckdb:duckdb_jdbc", version.ref = "duckdb" }
+sshj = { module = "com.hierynomus:sshj", version.ref = "sshj" }
+# OpenPGP(ファイルの暗号化と署名。ADR-0032 §8)
+bouncycastle-pg = { module = "org.bouncycastle:bcpg-jdk18on", version.ref = "bouncycastle" }
 testcontainers-kafka = { module = "org.testcontainers:testcontainers-kafka", version.ref = "testcontainers" }
 testcontainers-postgresql = { module = "org.testcontainers:testcontainers-postgresql", version.ref = "testcontainers" }
 mockk = { module = "io.mockk:mockk", version.ref = "mockk" }
@@ -126,7 +131,7 @@ opentelemetry-exporter-otlp = { module = "io.opentelemetry:opentelemetry-exporte
 # OTLP の送信に JDK の HttpClient を使う(既定の OkHttp の送信部と、それが引き込む Kotlin stdlib の版の衝突を避ける)
 opentelemetry-exporter-sender-jdk = { module = "io.opentelemetry:opentelemetry-exporter-sender-jdk", version.ref = "opentelemetry" }
 nimbus-jose-jwt = { module = "com.nimbusds:nimbus-jose-jwt", version.ref = "nimbus-jose-jwt" }
-# テスト専用(mTLS の統合テストで CA と証明書を作る)
+# mTLS の統合テストで CA と証明書を作る(テスト)。platform/file-transfer では sshj の依存の版をそろえるために宣言する
 bouncycastle-pkix = { module = "org.bouncycastle:bcpkix-jdk18on", version.ref = "bouncycastle" }
 opentelemetry-semconv = { module = "io.opentelemetry.semconv:opentelemetry-semconv", version.ref = "opentelemetry-semconv" }
 
