@@ -178,4 +178,10 @@ Docker のヘルスチェックはコンテナの中で実行されるため、�
 - 2026-10-10: #99 のマージの後の確認(`simulate` の手動の実行を 2 回)で、重複の防止(2 回目は「報告済み」)は確かめられたが、GitHub のランナーから Maven Central の成果物の取得が一時的に HTTPError になり、simulate で書き換えていない成果物にも Issue ができた(#102)。#98 の CI の `digest mismatch` も同じ種類の一時的な失敗と見ている。取得とイメージの問い合わせは、失敗したら待ってやり直し(3 回)、全部が同じく失敗したときだけ異常にした。成果物の SHA-256 が合わない応答もやり直してから判断する。イメージの半分以上でタグを取得できないときは、確認の環境の問題として Issue を作らずに失敗で終わる。
 - 2026-10-11: #35 の続きで、`simulate` を表示だけにした。手動の実行は、既定では作るはずの Issue を表示するだけで、`create_issues`(`--create-issues`)を指定したときだけ本物の Issue を作る。定期の実行は従来どおり作る。#99 のマージの後の確認で、確かめるための Issue(#100〜#102)が本物の Issue の一覧に混ざったため。Issue の作成・コメント・重複の防止は、gh を差し替えた単体テストで確かめる。
 - 2026-10-14: #106 で、Kafka Connect のイメージの成果物の取得を `ADD --checksum` から `fetch-verified.sh`(`RUN`)に変えた(§9)。CI で 2 回(#98・#105)、Maven Central の成果物の代わりに別の応答(2 回とも、2 つの別の成果物とも同じ `sha256:807ceab0…`)を受け取って組み立てが失敗した。`ADD` は 1 回で失敗し、何を受け取ったかも分からなかった。`fetch-verified.sh` は、SHA-256 が合わなければ待ってやり直し(合わせて 4 回。10・30・60 秒)、毎回、受け取った応答の状態・ヘッダ・大きさ・先頭のバイトを組み立てのログに出す(原因を確かめるため。CDN の Cookie は出さない)。すべての試行で合わなければ失敗する。版と SHA-256 の固定、受け取った値に合わせて通さない方針は変えない。定期確認(`check-pins.py`)と `compose-config` の検査は、新しい形を読む。
-
+- 2026-10-15: Kafka Connect のイメージの Debezium の Postgres コネクタを 3.6.3.Final から **3.7.0.Final** に上げた(#87)。
+  - SHA-256 `660673cb…` は、Maven Central の `.sha256` と取得したファイルの値の両方で確かめた(§9)。
+  - リリースノート(3.7.0.Alpha1〜Final)に、使っている機能の互換性のない変更はない(Postgres コネクタ・Outbox の EventRouter・heartbeat・`lsn.flush.mode`・signal と Incremental Snapshot・`message.key.columns`・`decimal.handling.mode`・`time.precision.mode`・`schema.name.adjustment.mode`)。
+  - 3.7.0.Final は Kafka Connect 4.3.1 でビルドされ、ブローカー 4.3.1 で試験されている(images.env と同じ版)。
+  - PostgreSQL 18 の CI の失敗(dbz#2581)は、テストの準備の想定の誤りで、コネクタの不具合ではない。
+  - 生の CDC の Envelope の `source` の項目は、3.6.3 と同じ(両方の jar の `PostgresSourceInfoStructMaker`・`AbstractSourceInfoStructMaker` で比べた)。既にあるローカルの `cdc-raw` のスキーマとの互換性は変わらない。
+  - 確かめたこと: `LegacyCdcIT`(9)・`OrderOutboxCdcIT`(3)・`LegacyOrderAclIT`(5)・`ReconcileIT`(7)・`InfraContainersIT`(2) が成功。Apicurio の Converter(3.3.3)はそのまま。
