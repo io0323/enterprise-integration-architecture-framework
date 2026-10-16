@@ -92,3 +92,4 @@ ADR-0008 は、ワークフロー(Framework 7.2)をローカルでは `platform/
 
 ## 改訂履歴
 - 2026-10-15: P09 ③a で、S3 の置き場(`S3ObjectSource` → `S3ObjectStore`)とマニフェスト(`FileManifest`)を platform/file-transfer に移した(§4。ADR-0032 §1)。`Trigger.FileArrival` は file-transfer の `ObjectReader` を受け取り、置き場の失敗を `BatchSourceUnavailable` / `BatchSourceRejected` に写す。platform/batch は AWS SDK に依存しなくなった。
+- 2026-10-16: P09 ⑤a で、`Trigger.FileArrival` に `requireDataFile`(既定 true)を足した。false なら、データファイルがない・大きさが違うマニフェストでも起動し、判定を DAG に任せる(file-exchange が欠損を検査で不合格にして quarantine に送るため。ADR-0032 §5)。
