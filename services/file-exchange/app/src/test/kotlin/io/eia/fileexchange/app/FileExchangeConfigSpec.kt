@@ -1,11 +1,17 @@
 package io.eia.fileexchange.app
 
 import io.eia.fileexchange.adapters.file.InboxPrefixes
+import io.eia.fileexchange.application.port.inbound.DeliverFileUseCase
+import io.eia.fileexchange.application.port.inbound.DeliveryReport
+import io.eia.fileexchange.application.port.inbound.PartnerDelivery
+import io.eia.fileexchange.application.port.inbound.PartnerFailure
 import io.eia.fileexchange.application.port.inbound.ReceiveFileUseCase
 import io.eia.fileexchange.application.port.inbound.ReceiveOutcome
 import io.eia.fileexchange.application.port.inbound.SweepReport
+import io.eia.fileexchange.domain.DeliveryOutcome
 import io.eia.fileexchange.domain.ExtraArrival
 import io.eia.fileexchange.domain.ExtraArrivalReason
+import io.eia.fileexchange.domain.PartnerId
 import io.eia.fileexchange.domain.ReceiptDestination
 import io.eia.fileexchange.domain.ReceiptState
 import io.eia.fileexchange.domain.ReceivedFile
@@ -13,14 +19,17 @@ import io.eia.platform.batch.StepName
 import io.eia.platform.batch.Trigger
 import io.eia.platform.filetransfer.store.ObjectReader
 import io.eia.shared.kernel.Result
+import io.eia.shared.kernel.UnavailableError
 import io.eia.shared.kernel.ok
 import io.kotest.assertions.fail
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
+import io.opentelemetry.api.common.AttributeKey
 import io.opentelemetry.sdk.metrics.SdkMeterProvider
 import io.opentelemetry.sdk.testing.exporter.InMemoryMetricReader
+import java.nio.file.Files
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
@@ -120,14 +129,90 @@ class FileExchangeConfigSpec :
                             ),
                         )
                 }
-            val dag = ReceiveJob.dag(receive, metrics)
+            val deliver =
+                object : DeliverFileUseCase {
+                    override suspend fun invoke(name: String) = ok(DeliveryReport(name, true, emptyList(), emptyList()))
+                }
+            val dag = ReceiveJob.dag(receive, deliver, metrics)
             dag.id shouldBe ReceiveJob.DAG_ID
             dag.integrationId shouldBe "INT-SALES-004"
-            dag.steps.map { it.name } shouldBe listOf(StepName("receive"))
+            dag.steps.map { it.name } shouldBe listOf(StepName("receive"), StepName("deliver"))
+            dag.step(StepName("deliver")).dependsOn shouldBe listOf(StepName("receive"))
             val source = object : ObjectReader by FakeReader {}
             val trigger = ReceiveJob.job(dag, source, "inbox/sales-daily/").trigger.shouldBeInstanceOf<Trigger.FileArrival>()
             trigger.prefix shouldBe "inbox/sales-daily/"
             trigger.requireDataFile shouldBe false
+        }
+
+        test("取引先の台帳: 設定がなければ取引先なし(配送しない)。ファイルを読めない・形が誤っていれば設定の誤り") {
+            FileExchangeConfig
+                .fromEnvironment(minimal)
+                .ok()
+                .partners()
+                .ok()
+                .partners shouldBe emptyList()
+
+            val dir = Files.createTempDirectory("partners")
+            try {
+                val file = dir.resolve("partners.json")
+                Files.writeString(
+                    file,
+                    """
+                    {"partners": [{"id": "partner01", "datasets": ["sales_daily"],
+                      "sftp": {"host": "sftp-b2b", "port": 2222, "username": "partner01", "directory": "/config/outbox",
+                               "knownHostsSecret": "P_KNOWN_HOSTS", "privateKeySecret": "P_SSH_KEY"},
+                      "pgp": {"publicKeySecret": "P_PGP_PUBLIC_KEY"}}]}
+                    """.trimIndent(),
+                )
+                val config = FileExchangeConfig.fromEnvironment(minimal + (FileExchangeConfig.PARTNERS_FILE to file.toString())).ok()
+                config.partners().ok().recipients("sales_daily") shouldBe listOf(PartnerId("partner01"))
+
+                Files.writeString(file, "{}")
+                config
+                    .partners()
+                    .failure()
+                    .violations
+                    .single()
+                    .field shouldBe "partners"
+                FileExchangeConfig
+                    .fromEnvironment(minimal + (FileExchangeConfig.PARTNERS_FILE to dir.resolve("none.json").toString()))
+                    .ok()
+                    .partners()
+                    .failure()
+                    .violations
+                    .single()
+                    .field shouldBe FileExchangeConfig.PARTNERS_FILE
+            } finally {
+                dir.toFile().deleteRecursively()
+            }
+        }
+
+        test("メトリクス: 取引先への配送の数(取引先と結果ごと。送れなかったものは failed)") {
+            val reader = InMemoryMetricReader.create()
+            val metrics =
+                FileExchangeMetrics(
+                    SdkMeterProvider
+                        .builder()
+                        .registerMetricReader(reader)
+                        .build()
+                        .get("test"),
+                )
+            val a = PartnerId("partner-a")
+            val b = PartnerId("partner-b")
+            metrics.delivered(
+                DeliveryReport(
+                    "a_b_20261014150000_001",
+                    false,
+                    listOf(PartnerDelivery(a, DeliveryOutcome.SENT), PartnerDelivery(b, DeliveryOutcome.ALREADY_PRESENT)),
+                    listOf(PartnerFailure(b, UnavailableError("x"))),
+                ),
+            )
+            reader
+                .collectAllMetrics()
+                .single { it.name == "eia.file_exchange.deliveries" }
+                .longSumData.points
+                .map { it.attributes.get(PARTNER)!! to it.attributes.get(OUTCOME)!! } shouldContainExactlyInAnyOrder
+                listOf("partner-a" to "sent", "partner-b" to "already_present", "partner-b" to "failed")
         }
 
         test("メトリクス: 受け取った数(移動先と理由)・受け取り済みの名前で届いた数・受け口の滞留") {
@@ -188,6 +273,9 @@ class FileExchangeConfigSpec :
                 .value shouldBe 600.0
         }
     })
+
+private val PARTNER: AttributeKey<String> = AttributeKey.stringKey("file_exchange.partner")
+private val OUTCOME: AttributeKey<String> = AttributeKey.stringKey("file_exchange.outcome")
 
 private object FakeReader : ObjectReader {
     override fun list(prefix: String) = ok(emptyList<io.eia.platform.filetransfer.store.StoredObject>())

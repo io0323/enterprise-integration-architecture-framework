@@ -1,14 +1,18 @@
 package io.eia.fileexchange.app
 
 import io.eia.fileexchange.adapters.file.InboxPrefixes
+import io.eia.fileexchange.adapters.partner.PartnerRegistry
 import io.eia.platform.security.secret.SecretName
 import io.eia.shared.kernel.FieldViolation
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.ValidationError
 import io.eia.shared.kernel.err
 import io.eia.shared.kernel.ok
+import java.io.IOException
 import java.net.URI
 import java.net.URISyntaxException
+import java.nio.file.Files
+import java.nio.file.Path
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
@@ -29,6 +33,10 @@ import kotlin.time.Duration.Companion.seconds
  * | `FILE_EXCHANGE_HEALTH_PORT` | 8081 | serve(`/health/live` と `/health/ready` だけ。平文。コンテナの外に公開しない) |
  * | `FILE_EXCHANGE_POLL_INTERVAL` | 30s | serve(ファイルの到着を確かめる間隔) |
  * | `FILE_EXCHANGE_SWEEP_INTERVAL` | 5m | serve(受け口の見回りの間隔) |
+ * | `FILE_EXCHANGE_PARTNERS_FILE` | なし(なければ配送しない) | 取引先の台帳(JSON。ADR-0032 §8)のパス |
+ * | `FILE_EXCHANGE_PGP_SECRET_KEY` / `FILE_EXCHANGE_PGP_PASSPHRASE`(`_FILE` も可) | なし | 自社の PGP の署名の鍵(配送のときに読む) |
+ *
+ * 取引先ごとの SFTP の鍵・ホスト鍵・PGP の公開鍵は、台帳に書いた名前の秘密情報から読む。
  */
 internal data class FileExchangeConfig(
     val dbUrl: String,
@@ -40,12 +48,15 @@ internal data class FileExchangeConfig(
     val healthPort: Int,
     val pollInterval: Duration,
     val sweepInterval: Duration,
+    val partnersFile: Path?,
 ) {
     companion object {
         val OWNER_PASSWORD = SecretName("FILE_EXCHANGE_DB_PASSWORD")
         val APP_PASSWORD = SecretName("FILE_EXCHANGE_APP_DB_PASSWORD")
         val S3_ACCESS_KEY = SecretName("FILE_EXCHANGE_S3_ACCESS_KEY")
         val S3_SECRET_KEY = SecretName("FILE_EXCHANGE_S3_SECRET_KEY")
+        val PGP_SECRET_KEY = SecretName("FILE_EXCHANGE_PGP_SECRET_KEY")
+        val PGP_PASSPHRASE = SecretName("FILE_EXCHANGE_PGP_PASSPHRASE")
         const val DB_URL = "FILE_EXCHANGE_DB_URL"
         const val S3_ENDPOINT = "FILE_EXCHANGE_S3_ENDPOINT"
         const val S3_BUCKET = "FILE_EXCHANGE_S3_BUCKET"
@@ -55,6 +66,7 @@ internal data class FileExchangeConfig(
         const val HEALTH_PORT = "FILE_EXCHANGE_HEALTH_PORT"
         const val POLL_INTERVAL = "FILE_EXCHANGE_POLL_INTERVAL"
         const val SWEEP_INTERVAL = "FILE_EXCHANGE_SWEEP_INTERVAL"
+        const val PARTNERS_FILE = "FILE_EXCHANGE_PARTNERS_FILE"
         private const val MAX_PORT = 65_535
         private const val DEFAULT_HEALTH_PORT = 8081
         private val DEFAULT_POLL_INTERVAL = 30.seconds
@@ -118,11 +130,22 @@ internal data class FileExchangeConfig(
                     healthPort = port,
                     pollInterval = duration(POLL_INTERVAL, DEFAULT_POLL_INTERVAL),
                     sweepInterval = duration(SWEEP_INTERVAL, DEFAULT_SWEEP_INTERVAL),
+                    partnersFile = optional(PARTNERS_FILE)?.let { Path.of(it) },
                 )
             return if (violations.isEmpty()) ok(config) else err(ValidationError(violations))
         }
 
         private val DEFAULT_PREFIXES = InboxPrefixes("inbox/sales-daily/", "archive/sales-daily/", "quarantine/sales-daily/")
+    }
+
+    /** 取引先の台帳を読む。台帳のファイルの設定がなければ、取引先のない台帳(配送しない)。 */
+    fun partners(): Result<PartnerRegistry, ValidationError> {
+        val file = partnersFile ?: return ok(PartnerRegistry(emptyList()))
+        return try {
+            PartnerRegistry.parse(Files.readString(file))
+        } catch (_: IOException) {
+            err(ValidationError.of(PARTNERS_FILE, "取引先の台帳のファイルを読めません"))
+        }
     }
 
     /** serve・receive・sweep に要る S3 のエンドポイント。 */

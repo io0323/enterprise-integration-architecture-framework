@@ -13,6 +13,8 @@ import io.eia.platform.security.secret.EnvSecretProvider
 import io.eia.platform.security.secret.SecretName
 import io.eia.platform.testsupport.InfraImages
 import io.eia.platform.testsupport.SeaweedFsContainer
+import io.eia.platform.testsupport.SftpServerContainer
+import io.eia.platform.testsupport.TestKeys
 import io.eia.shared.kernel.Result
 import io.kotest.assertions.fail
 import io.kotest.core.spec.style.FunSpec
@@ -65,6 +67,11 @@ class FileExchangeAppIT :
         val ktor = HttpClient(CIO)
         val sequence = AtomicInteger()
         val traceId = "4bf92f3577b34da6a3ce929d0e0e4736"
+        // 取引先(partner01)の代わりの SFTP のサーバと、配送の鍵
+        val client = TestKeys.ssh()
+        val sftp = SftpServerContainer("partner01", client.publicKey)
+        val ours = TestKeys.pgp("EIAF <eiaf@example.com>")
+        val partnerPgp = TestKeys.pgp("Partner <partner@example.com>")
 
         fun ownerEnv(): Map<String, String> =
             mapOf(
@@ -140,9 +147,32 @@ class FileExchangeAppIT :
             return name.base
         }
 
+        /** 取引先の台帳と、台帳に書いた名前の秘密情報(配送する受け取りの環境)。 */
+        fun deliveryEnv(): Map<String, String> {
+            val registry = workDir.resolve("partners.json")
+            Files.writeString(
+                registry,
+                """
+                {"partners": [{"id": "partner01", "datasets": ["sales_daily"],
+                  "sftp": {"host": "${sftp.host}", "port": ${sftp.sshPort}, "username": "partner01", "directory": "/config/outbox",
+                           "knownHostsSecret": "P01_KNOWN_HOSTS", "privateKeySecret": "P01_SSH_KEY"},
+                  "pgp": {"publicKeySecret": "P01_PGP_PUBLIC_KEY"}}]}
+                """.trimIndent(),
+            )
+            return mapOf(
+                FileExchangeConfig.PARTNERS_FILE to registry.toString(),
+                "P01_KNOWN_HOSTS" to sftp.knownHostsLine(),
+                "P01_SSH_KEY" to client.privateKey,
+                "P01_PGP_PUBLIC_KEY" to partnerPgp.publicKey,
+                FileExchangeConfig.PGP_SECRET_KEY.value to ours.secretKey,
+                FileExchangeConfig.PGP_PASSPHRASE.value to ours.passphrase,
+            )
+        }
+
         beforeSpec {
             postgres.start()
             seaweed.start()
+            sftp.start()
             PGSimpleDataSource()
                 .apply {
                     setURL(postgres.jdbcUrl)
@@ -174,6 +204,7 @@ class FileExchangeAppIT :
 
         afterSpec {
             ktor.close()
+            sftp.stop()
             seaweed.stop()
             postgres.stop()
             workDir.toFile().deleteRecursively()
@@ -203,6 +234,22 @@ class FileExchangeAppIT :
             FileExchangeCommands.run(listOf("sweep"), appEnv()) shouldBe FileExchangeCommands.OK
             query("SELECT reason FROM exchange.extra_arrival WHERE file_name = '$name'") shouldBe "DUPLICATE"
             keys(inbox).none { it.contains(name) } shouldBe true
+        }
+
+        test("receive(台帳あり): 受け取った後に、取引先に PGP で暗号化して SFTP で送る。台帳の誤りは設定の誤り(2)") {
+            val name = publish()
+            FileExchangeCommands.run(listOf("receive", name), appEnv() + deliveryEnv()) shouldBe FileExchangeCommands.OK
+            sftp.list("/config/outbox").filter { it.startsWith(name) } shouldContainExactly listOf("$name.parquet.pgp")
+            query(
+                "SELECT state || ' ' || already_present FROM exchange.delivery WHERE file_name = '$name' AND partner_id = 'partner01'",
+            ) shouldBe
+                "SENT false"
+
+            val broken = workDir.resolve("broken.json").also { Files.writeString(it, """{"partners": [{"id": "partner01"}]}""") }
+            FileExchangeCommands.run(
+                listOf("receive", name),
+                appEnv() + deliveryEnv() + (FileExchangeConfig.PARTNERS_FILE to broken.toString()),
+            ) shouldBe FileExchangeCommands.USAGE
         }
 
         test("serve: マニフェストの到着で受け取り、ready になる。実行の span はマニフェストの traceparent と同じトレース") {
