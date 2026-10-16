@@ -27,6 +27,12 @@ public sealed interface Trigger {
     public data class FileArrival(
         val source: ObjectReader,
         val prefix: String,
+        /**
+         * true(既定)なら、データファイルがない・大きさが違うマニフェストでは起動せず、ログに残す。
+         * false なら、マニフェストの形式が正しければ起動し、欠損・大きさの違いの判定を DAG に任せる
+         * (受け手が欠損を不合格にして quarantine に送るとき。マニフェストは最後に置く完了の合図なので、データがないのは欠陥。ADR-0032 §3)。
+         */
+        val requireDataFile: Boolean = true,
     ) : Trigger {
         init {
             require(prefix.isEmpty() || prefix.endsWith("/")) { "prefix は空か / で終えてください: $prefix" }

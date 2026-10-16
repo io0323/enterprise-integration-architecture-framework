@@ -274,6 +274,7 @@ public class BatchScheduler(
         val problem =
             when {
                 !manifest.file.startsWith("$name.") -> "データファイルの名前がマニフェストの名前と違います"
+                !trigger.requireDataFile -> null
                 size == null -> "データファイルがありません"
                 manifest.sizeBytes != null && manifest.sizeBytes != size -> "データファイルの大きさがマニフェストと違います"
                 else -> null

@@ -65,4 +65,13 @@ public enum class RejectionReason(
 
     /** 件数がマニフェストと違う */
     RECORD_COUNT_MISMATCH("record_count_mismatch"),
+
+    /**
+     * 受け取り済みのファイルと同じ名前・同じ SHA-256 のファイルがまた届いた(送り直し)。検査では返さない。
+     * 受け手が受け取りの記録と照らして決める(ADR-0032 §5)
+     */
+    DUPLICATE("duplicate"),
+
+    /** 受け取り済みのファイルと同じ名前で、SHA-256 が違うファイルが届いた(名前の使い回し)。検査では返さない(ADR-0032 §5) */
+    NAME_REUSED("name_reused"),
 }
