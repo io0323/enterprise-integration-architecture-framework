@@ -103,6 +103,20 @@ ROADMAP P08 は、受注のデータを分析の DB(PostgreSQL を DWH と見立
   - 日次の集計の API は件数とハッシュだけを返す。
   - 影響した日は、手段ができるまで DRIFT のまま残る。
 
+### 8. 日次の売上ファイル(INT-SALES-004。P09 ④)
+- DAG `batch-etl.sales-file`(ステップ `export`)は、日次の DAG(`batch-etl.order-daily`)の **同じ業務の日が成功したら** 起動する(`Trigger.AfterDag`。ADR-0030 §4)。その日の `mart.order_daily` から、`contracts/files/sales_daily.v1.yaml` の売上ファイルを書いて置く(platform/file-transfer の `FilePublisher`。ADR-0032 §2)。SLA は業務の日の翌日 07:00 JST(日次の SLA の 06:00 の後。`BATCH_ETL_FILE_SLA_AT`)。
+- 行は注文 ID のバイト順(`ORDER BY order_id COLLATE "C"`。照合と同じ)で、読み取り専用のトランザクションのカーソルで読み、そのまま書き出しに渡す(その日の行を全部メモリに載せない)。顧客 ID は書かない(契約の「個人情報なし」)。
+- 形式は既定で Parquet だけ。CSV + gzip は設定(`BATCH_ETL_FILE_FORMATS=parquet,csv`)で足す。形式ごとに mart を読み直す。
+- **ファイルの版(名前)**: `sales_daily_{業務の日の締め(日本時間の翌日 00:00 を UTC で)}_{実行の世代 3 桁}.{ext}`(例 2026-10-14 の 1 世代目は `sales_daily_20261014150000_001.parquet`)。
+  - 名前の時刻を「作った時刻」にしないのは、同じ実行のやり直し(ステップのリトライ・落ちた後の再開)で同じ名前にし、上書きするため(再実行安全。Framework 7.4)。
+  - 日次の DAG を作り直すと(遅れて届いたデータ。§5 の RESTART)、AfterDag でこの DAG もやり直し、世代が増えるので **新しい版の別のファイル** になる。受け手は、同じ日の新しい版として受け取る(ファイル名が違うので、重複(ADR-0032 §5)にはならない)。
+  - 遅れて届いたデータで作り直した **過去の日**(実行の日でない日)は、AfterDag では起動しない(AfterDag は同じパーティションだけ)。必要なら運用者が `batch-etl sales-file <日付> --restart` で新しい版を置く(Runbook は ⑥)。
+- マニフェストの traceparent は、書き出しのステップの span(DAG の実行の span の子)。受け手の実行はこれを親にするので、送り手から受け手までが 1 つのトレースにつながる(ADR-0030 §5)。span の外では書き出さない(traceparent がないため)。
+- パーティションがまだない日(`mart.partition_build` にない)は書かない(`ConflictError`。0 件のファイルと区別するため)。注文のない日は 0 件のファイルを置く(契約)。
+- 置き場は S3 互換ストレージ。受け口の自分の接頭辞(`inbox/sales-daily/`)に書くだけの identity を使う(ADR-0032 §1。`BATCH_ETL_FILE_S3_*`)。`BATCH_ETL_FILE_S3_ENDPOINT` がなければ、この DAG を登録しない(週次の照合と同じ扱い)。compose の設定は P09 ⑥。
+- 手動の実行は `batch-etl sales-file <yyyy-MM-dd> [--restart]`。
+- コードの形(`SalesDailyLayout`)が契約と一致することは単体テスト(`SalesDailyLayoutSpec`)で、書いたファイルが受け側の検査(`FileVerifier`)に通ることは統合テスト(`SalesFileIT`)で確かめる。
+
 ## Alternatives Considered
 - **UTC で区切る**: 実装は単純だが、日本の業務の日とずれる(§1)。不採用。
 - **区切りを利用者・テナントごとに設定する**: このリポジトリの業務は日本だけで、要件がない。不採用(必要になったら、集計の API に `timeZone` の引数を足す)。
@@ -130,3 +144,4 @@ ROADMAP P08 は、受注のデータを分析の DB(PostgreSQL を DWH と見立
 ## 改訂履歴
 - 2026-10-14: P08 ③で §4(取り込みと変換の方式)・§5(遅れて届いたデータ)を足した。③b で §4 に起動と SLA(`serve`・`run`)を足した。
 - 2026-10-15: P08 ④で §6(週次の Full 照合)を足した。⑤で §7(Kafka の保持期間と回復)を足した。
+- 2026-10-16: P09 ④で §8(日次の売上ファイル)を足した。
