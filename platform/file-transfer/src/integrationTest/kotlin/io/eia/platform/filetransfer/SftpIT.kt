@@ -84,6 +84,21 @@ class SftpIT :
             server.list("/config/outbox") shouldContainExactly listOf("a.csv")
         }
 
+        test("正式名のファイルがあるかを確かめる。一時名(.part)だけのものはないと答える。登録と違う鍵のホストには確かめに行かない") {
+            val sftp = sender(server, server.knownHostsLine())
+            sftp.exists("/config/outbox", "e.csv").ok() shouldBe false
+            sftp.send(file("e".toByteArray()), "/config/outbox", "e.csv").ok()
+            sftp.exists("/config/outbox/", "e.csv").ok() shouldBe true
+
+            server.writeFile("/config/outbox/f.csv.part", "partial".toByteArray())
+            sftp.exists("/config/outbox", "f.csv").ok() shouldBe false
+
+            val other = TestKeys.ssh().publicKey.split(" ")[1]
+            sender(server, "[${server.host}]:${server.sshPort} ssh-ed25519 $other")
+                .exists("/config/outbox", "e.csv")
+                .err() shouldBe RemoteRejected("HostKeyMismatch")
+        }
+
         test("登録と違う鍵のホストには接続しない(なりすまし)。登録のないホストにも接続しない。何も書かない") {
             val other = TestKeys.ssh().publicKey.split(" ")[1]
             val wrongKey = "[${server.host}]:${server.sshPort} ssh-ed25519 $other"

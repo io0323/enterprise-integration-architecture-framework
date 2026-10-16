@@ -43,6 +43,8 @@ class InfraContainersIT :
                 sftp.list("/config/outbox") shouldBe listOf("a.txt")
                 sftp.readFile("/config/outbox/a.txt")!!.decodeToString() shouldBe "hello"
                 sftp.readFile("/config/outbox/none.txt") shouldBe null
+                sftp.writeFile("/config/outbox/b.txt", "world".toByteArray())
+                sftp.readFile("/config/outbox/b.txt")!!.decodeToString() shouldBe "world"
             }
         }
 
