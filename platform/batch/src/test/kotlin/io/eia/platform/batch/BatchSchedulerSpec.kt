@@ -11,6 +11,7 @@ import io.eia.shared.kernel.ok
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContainExactly
+import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelAndJoin
@@ -175,6 +176,19 @@ class BatchSchedulerSpec :
 
             source.failing = StoreUnavailable("SlowDown")
             scheduler.due().shouldBeEmpty()
+        }
+
+        test("ファイルの到着(requireDataFile = false): データファイルがない・大きさが違っても起動し、判定を DAG に任せる。名前の誤りは起動しない") {
+            val store = InMemoryBatchStore()
+            val source = FakeObjectSource()
+            val scheduler = scheduler(store, listOf(BatchJob(files, Trigger.FileArrival(source, "", requireDataFile = false))))
+            source.objects["sales_daily_20261014010000_001.manifest.json"] = manifest("sales_daily_20261014010000_001.csv")
+            source.objects["sales_daily_20261014010000_002.csv"] = ByteArray(5)
+            source.objects["sales_daily_20261014010000_002.manifest.json"] = manifest("sales_daily_20261014010000_002.csv", 6)
+            source.objects["sales_daily_20261014010000_003.manifest.json"] = manifest("sales_daily_20261014010000_004.csv")
+
+            scheduler.due().map { it.partition.value } shouldContainExactlyInAnyOrder
+                listOf("sales_daily_20261014010000_001", "sales_daily_20261014010000_002")
         }
 
         test("run は起動の条件を繰り返し確かめて実行し、SLA の予測も更新する。前段の完了で後段が続けて動く") {
