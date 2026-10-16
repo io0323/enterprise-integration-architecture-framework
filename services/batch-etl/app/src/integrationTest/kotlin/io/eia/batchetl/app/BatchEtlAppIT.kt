@@ -3,6 +3,8 @@
 package io.eia.batchetl.app
 
 import io.eia.batchetl.domain.BusinessDay
+import io.eia.platform.filetransfer.store.S3ObjectStore
+import io.eia.platform.filetransfer.store.S3StoreConfig
 import io.eia.platform.messagingkafka.AvroEventSerializer
 import io.eia.platform.messagingkafka.DeadLetterPublisher
 import io.eia.platform.messagingkafka.EventProducer
@@ -15,12 +17,16 @@ import io.eia.platform.schemaregistry.ApicurioRegistryClient
 import io.eia.platform.schemaregistry.SchemaIdBook
 import io.eia.platform.schemaregistry.SchemaRegistryConfig
 import io.eia.platform.schemaregistry.SchemaSubject
+import io.eia.platform.security.secret.EnvSecretProvider
+import io.eia.platform.security.secret.SecretName
 import io.eia.platform.testsupport.ApicurioRegistryContainer
 import io.eia.platform.testsupport.InfraImages
+import io.eia.platform.testsupport.SeaweedFsContainer
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.getOrNull
 import io.kotest.assertions.fail
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.shouldBe
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
@@ -44,6 +50,14 @@ import org.apache.kafka.clients.producer.KafkaProducer
 import org.postgresql.ds.PGSimpleDataSource
 import org.testcontainers.kafka.KafkaContainer
 import org.testcontainers.postgresql.PostgreSQLContainer
+import software.amazon.awssdk.auth.credentials.AwsBasicCredentials
+import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider
+import software.amazon.awssdk.core.checksums.RequestChecksumCalculation
+import software.amazon.awssdk.core.checksums.ResponseChecksumValidation
+import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient
+import software.amazon.awssdk.regions.Region
+import software.amazon.awssdk.services.s3.S3Client
+import java.net.URI
 import java.nio.file.Path
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -67,6 +81,15 @@ class BatchEtlAppIT :
                 .withEnv("KAFKA_AUTO_CREATE_TOPICS_ENABLE", "false")
                 .withEnv("KAFKA_HEAP_OPTS", "-Xms384m -Xmx384m")
                 .withStartupTimeout(Duration.ofMinutes(3))
+        val fileBucket = "eiaf-file-exchange"
+        val filePrefix = "inbox/sales-daily/"
+        val seaweed =
+            SeaweedFsContainer(
+                mapOf(
+                    "eiaf" to listOf("Admin", "Read", "Write", "List"),
+                    "eiaf-file-batch-etl" to listOf("Write:$fileBucket/$filePrefix*"),
+                ),
+            )
         val ownerPassword = randomHex()
         val appPassword = randomHex()
         val ktor = HttpClient(CIO)
@@ -89,6 +112,26 @@ class BatchEtlAppIT :
                 BatchEtlConfig.POLL_INTERVAL to "1s",
                 "EIA_LOG_FORMAT" to "console",
             )
+
+        /** 日次の売上ファイルを書く設定(受け口に書くだけの identity)。 */
+        fun fileEnv(): Map<String, String> {
+            val writer = seaweed.credentials.getValue("eiaf-file-batch-etl")
+            return mapOf(
+                BatchEtlConfig.FILE_S3_ENDPOINT to seaweed.endpoint,
+                BatchEtlConfig.FILE_FORMATS to "parquet,csv",
+                BatchEtlConfig.FILE_S3_ACCESS_KEY.value to writer.accessKey,
+                BatchEtlConfig.FILE_S3_SECRET_KEY.value to writer.secretKey,
+            )
+        }
+
+        /** 置き場の受け口のキー(管理の identity で一覧する)。 */
+        fun fileKeys(): List<String> {
+            val admin = seaweed.credentials.getValue("eiaf")
+            return S3ObjectStore(
+                S3StoreConfig(URI(seaweed.endpoint), fileBucket, SecretName("IT_A"), SecretName("IT_S")),
+                EnvSecretProvider(mapOf("IT_A" to admin.accessKey, "IT_S" to admin.secretKey)),
+            ).use { store -> (store.list(filePrefix) as? Result.Ok)?.value?.map { it.key } ?: fail("一覧できません") }
+        }
 
         fun query(sql: String): String? {
             val dataSource =
@@ -127,6 +170,19 @@ class BatchEtlAppIT :
             postgres.start()
             registry.start()
             kafka.start()
+            seaweed.start()
+            val admin = seaweed.credentials.getValue("eiaf")
+            S3Client
+                .builder()
+                .endpointOverride(URI(seaweed.endpoint))
+                .region(Region.US_EAST_1)
+                .forcePathStyle(true)
+                .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create(admin.accessKey, admin.secretKey)))
+                .httpClient(UrlConnectionHttpClient.create())
+                .requestChecksumCalculation(RequestChecksumCalculation.WHEN_REQUIRED)
+                .responseChecksumValidation(ResponseChecksumValidation.WHEN_REQUIRED)
+                .build()
+                .use { it.createBucket { request -> request.bucket(fileBucket) } }
             PGSimpleDataSource()
                 .apply {
                     setURL(postgres.jdbcUrl)
@@ -170,6 +226,7 @@ class BatchEtlAppIT :
             kafka.stop()
             registry.stop()
             postgres.stop()
+            seaweed.stop()
         }
 
         test("migrate は所有者で、serve・run はアプリのロールだけで動く。使い方の誤りは 2") {
@@ -206,6 +263,26 @@ class BatchEtlAppIT :
             BatchEtlCommands.run(listOf("run", "2026-10-13", "--restart"), appEnv()) shouldBe BatchEtlCommands.OK
             query("SELECT count(*) FROM mart.order_daily WHERE business_date = '2026-10-13'") shouldBe "3"
             query("SELECT generation FROM batch.batch_run WHERE partition_key = '2026-10-13'") shouldBe "2"
+        }
+
+        test("sales-file: 日次のパーティションから売上ファイルを置く。--restart で新しい版。設定がなければ 2、パーティションがなければ失敗") {
+            // run のテストで 2026-10-13 のパーティション(3 件)を作った
+            BatchEtlCommands.run(listOf("sales-file", "2026-10-13"), appEnv()) shouldBe BatchEtlCommands.USAGE
+            BatchEtlCommands.run(listOf("sales-file", "2026-10-13"), appEnv() + fileEnv()) shouldBe BatchEtlCommands.OK
+            fileKeys().filter { it.contains("20261013150000") } shouldContainExactlyInAnyOrder
+                listOf(
+                    "${filePrefix}sales_daily_20261013150000_001.parquet",
+                    "${filePrefix}sales_daily_20261013150000_001.csv.gz",
+                    "${filePrefix}sales_daily_20261013150000_001.manifest.json",
+                )
+            query("SELECT status FROM batch.batch_run WHERE dag_id = 'batch-etl.sales-file' AND partition_key = '2026-10-13'") shouldBe
+                "SUCCEEDED"
+
+            BatchEtlCommands.run(listOf("sales-file", "2026-10-13", "--restart"), appEnv() + fileEnv()) shouldBe BatchEtlCommands.OK
+            fileKeys().filter { it.contains("20261013150000_002") }.size shouldBe 3
+
+            BatchEtlCommands.run(listOf("sales-file", "2020-01-01"), appEnv() + fileEnv()) shouldBe BatchEtlCommands.FAILED
+            fileKeys().none { it.contains("20200101") } shouldBe true
         }
 
         test("reconcile: Gateway 経由で日次の集計と比べる。一致すれば 0、比べ直しても一致しない日があれば 3。結果を記録する") {
@@ -278,7 +355,9 @@ class BatchEtlAppIT :
 
         test("serve: 直近の起動の時刻の分(前日)を自動で実行し、ready になる") {
             val yesterday = BusinessDay.of(Clock.System.now()).minusDays(1).toString()
-            val server = (BatchEtlServer.start(appEnv() + (BatchEtlConfig.DAILY_AT to "00:00")) as? Result.Ok)?.value ?: fail("起動できません")
+            val server =
+                (BatchEtlServer.start(appEnv() + fileEnv() + (BatchEtlConfig.DAILY_AT to "00:00")) as? Result.Ok)?.value
+                    ?: fail("起動できません")
             try {
                 withTimeout(90.seconds) {
                     while (
@@ -293,6 +372,19 @@ class BatchEtlAppIT :
                 ktor.get("http://localhost:${server.healthPort}/health/ready").status shouldBe HttpStatusCode.OK
                 ktor.get("http://localhost:${server.healthPort}/health/live").status shouldBe HttpStatusCode.OK
                 query("SELECT count(*) FROM mart.partition_build WHERE business_date = '$yesterday'") shouldBe "1"
+                // 日次の DAG の完了で、売上ファイルの DAG が同じ日について動く(AfterDag)
+                withTimeout(60.seconds) {
+                    while (
+                        query(
+                            "SELECT status FROM batch.batch_run WHERE dag_id = 'batch-etl.sales-file' AND partition_key = '$yesterday'",
+                        ) !=
+                        "SUCCEEDED"
+                    ) {
+                        delay(500)
+                    }
+                }
+                val compact = yesterday.replace("-", "")
+                fileKeys().any { it.startsWith("${filePrefix}sales_daily_$compact") && it.endsWith(".manifest.json") } shouldBe true
             } finally {
                 server.stop()
             }

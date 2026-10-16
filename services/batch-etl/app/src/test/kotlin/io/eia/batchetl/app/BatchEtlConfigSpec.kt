@@ -1,9 +1,13 @@
 package io.eia.batchetl.app
 
 import io.eia.batchetl.application.port.inbound.BuildDailyOrderMartUseCase
+import io.eia.batchetl.application.port.inbound.ExportDailySalesFileUseCase
+import io.eia.batchetl.application.port.inbound.ExportedSalesFile
 import io.eia.batchetl.application.port.inbound.IngestOrderEventsUseCase
 import io.eia.batchetl.application.port.inbound.IngestReport
 import io.eia.batchetl.application.port.inbound.MartBuildReport
+import io.eia.batchetl.application.port.inbound.SalesFileReport
+import io.eia.batchetl.application.port.outbound.SalesFileFormat
 import io.eia.batchetl.domain.BusinessDay
 import io.eia.platform.batch.StepName
 import io.eia.platform.batch.Trigger
@@ -126,6 +130,85 @@ class BatchEtlConfigSpec :
                 ).failure()
                 .violations
                 .map { it.field } shouldBe listOf(BatchEtlConfig.RECONCILE_ON)
+        }
+
+        test("日次の売上ファイル: S3 のエンドポイントがなければ書かない。既定は Parquet だけ。形式・接頭辞・期限を変えられる") {
+            BatchEtlConfig.fromEnvironment(minimal).ok().salesFile shouldBe null
+            BatchEtlConfig.fromEnvironment(minimal + (BatchEtlConfig.FILE_S3_ENDPOINT to "http://seaweedfs:8333")).ok().salesFile shouldBe
+                SalesFileSettings(
+                    java.net.URI("http://seaweedfs:8333"),
+                    "eiaf-file-exchange",
+                    "inbox/sales-daily/",
+                    listOf(SalesFileFormat.PARQUET),
+                    LocalTime(7, 0),
+                )
+            val custom =
+                BatchEtlConfig
+                    .fromEnvironment(
+                        minimal +
+                            mapOf(
+                                BatchEtlConfig.FILE_S3_ENDPOINT to "http://seaweedfs:8333",
+                                BatchEtlConfig.FILE_S3_BUCKET to "other",
+                                BatchEtlConfig.FILE_PREFIX to "inbox/sales/",
+                                BatchEtlConfig.FILE_FORMATS to "csv, parquet",
+                                BatchEtlConfig.FILE_SLA_AT to "08:00",
+                            ),
+                    ).ok()
+                    .salesFile!!
+            custom.formats shouldBe listOf(SalesFileFormat.CSV_GZIP, SalesFileFormat.PARQUET)
+            custom.prefix shouldBe "inbox/sales/"
+            custom.slaAt shouldBe LocalTime(8, 0)
+            BatchEtlConfig
+                .fromEnvironment(
+                    minimal +
+                        mapOf(
+                            BatchEtlConfig.FILE_S3_ENDPOINT to "seaweedfs:8333",
+                            BatchEtlConfig.FILE_PREFIX to "/inbox",
+                            BatchEtlConfig.FILE_FORMATS to "parquet,xlsx",
+                        ),
+                ).failure()
+                .violations
+                .map { it.field } shouldContainExactlyInAnyOrder
+                listOf(BatchEtlConfig.FILE_S3_ENDPOINT)
+            BatchEtlConfig
+                .fromEnvironment(
+                    minimal +
+                        mapOf(
+                            BatchEtlConfig.FILE_S3_ENDPOINT to "http://seaweedfs:8333",
+                            BatchEtlConfig.FILE_PREFIX to "/inbox",
+                            BatchEtlConfig.FILE_FORMATS to "parquet,parquet",
+                        ),
+                ).failure()
+                .violations
+                .map { it.field } shouldContainExactlyInAnyOrder
+                listOf(BatchEtlConfig.FILE_PREFIX, BatchEtlConfig.FILE_FORMATS)
+        }
+
+        test("売上ファイルの DAG: 日次の DAG の完了で同じ日を起動し、実行の世代を版にして書き出す。SLA は翌日の期限") {
+            val calls = mutableListOf<Pair<BusinessDay, Int>>()
+            val export =
+                object : ExportDailySalesFileUseCase {
+                    override suspend fun invoke(
+                        day: BusinessDay,
+                        revision: Int,
+                    ) = ok(SalesFileReport(listOf(ExportedSalesFile(SalesFileFormat.PARQUET, "f.parquet", 0)))).also {
+                        calls +=
+                            day to revision
+                    }
+                }
+            val dag = SalesFileJob.dag(export, LocalTime(7, 0))
+            dag.id.value shouldBe "batch-etl.sales-file"
+            dag.integrationId shouldBe "INT-SALES-004"
+            dag.steps.map { it.name } shouldBe listOf(StepName("export"))
+            dag.sla!!.deadline.of(
+                io.eia.platform.batch
+                    .PartitionKey("2026-10-13"),
+            ) shouldBe Instant.parse("2026-10-13T22:00:00Z")
+            SalesFileJob
+                .job(dag)
+                .trigger
+                .shouldBeInstanceOf<Trigger.AfterDag>()
+                .upstream.value shouldBe OrderDailyJob.DAG_ID
         }
 
         test("設定を変えられる。serve・run の設定がそろう") {

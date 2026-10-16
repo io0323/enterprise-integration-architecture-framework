@@ -36,7 +36,8 @@ internal object BatchEtlCommands {
     const val DRIFT = 3
     private const val MIGRATE_POOL_SIZE = 3
     private const val USAGE_TEXT =
-        "使い方: batch-etl migrate | serve | run <yyyy-MM-dd> [--restart] | reconcile <yyyy-MM-dd> [--restart] | skip-lost-events [--confirm]"
+        "使い方: batch-etl migrate | serve | run <yyyy-MM-dd> [--restart] | reconcile <yyyy-MM-dd> [--restart] | " +
+            "sales-file <yyyy-MM-dd> [--restart] | skip-lost-events [--confirm]"
 
     /** serve・run の環境にあってはならない変数(所有者のパスワード。ADR-0024 §2)。 */
     val FORBIDDEN_FOR_APP: List<String> =
@@ -51,8 +52,9 @@ internal object BatchEtlCommands {
         when (args.firstOrNull()) {
             "migrate" -> migrate(env)
             "serve" -> withoutOwnerPassword(env) { serve(env) }
-            "run" -> withoutOwnerPassword(env) { runOnce(args.drop(1), env, reconcile = false) }
-            "reconcile" -> withoutOwnerPassword(env) { runOnce(args.drop(1), env, reconcile = true) }
+            "run" -> withoutOwnerPassword(env) { runOnce(args.drop(1), env, RunTarget.DAILY) }
+            "reconcile" -> withoutOwnerPassword(env) { runOnce(args.drop(1), env, RunTarget.RECONCILE) }
+            "sales-file" -> withoutOwnerPassword(env) { runOnce(args.drop(1), env, RunTarget.SALES_FILE) }
             "skip-lost-events" -> withoutOwnerPassword(env) { skipLostCommand(args.drop(1), env) }
             else -> USAGE.also { logger.error(USAGE_TEXT) }
         }
@@ -75,14 +77,15 @@ internal object BatchEtlCommands {
         }
 
     /**
-     * 日次の DAG(`run`)か週次の照合の DAG(`reconcile`)を、そのパーティション(日付)について 1 回だけ実行する。
-     * 成功したパーティションは何もしない(`--restart` なら最初からやり直す)。照合で一致しない日があれば [DRIFT]。
+     * 日次の DAG(`run`)・週次の照合の DAG(`reconcile`)・日次の売上ファイルの DAG(`sales-file`)を、そのパーティション(日付)について
+     * 1 回だけ実行する。成功したパーティションは何もしない(`--restart` なら最初からやり直す)。照合で一致しない日があれば [DRIFT]。
+     * `sales-file` は、その日の日次の DAG が成功した後に実行する(mart がまだなければ失敗する)。
      */
     @Suppress("ReturnCount") // 引数・設定の誤りは、実行の前に返す
     private fun runOnce(
         args: List<String>,
         env: Map<String, String>,
-        reconcile: Boolean,
+        target: RunTarget,
     ): Int {
         val restart = args.drop(1) == listOf("--restart")
         val day = args.firstOrNull()?.let { BusinessDay.parse(it) }
@@ -94,10 +97,8 @@ internal object BatchEtlCommands {
             }
         val (koin, runtime) = wired.second
         try {
-            if (reconcile && wired.first.reconcile == null) {
-                return USAGE.also { logger.error("照合には {} と {} が必要です", BatchEtlConfig.GATEWAY_URL, BatchEtlConfig.TOKEN_URL) }
-            }
-            return execute(koin, day.value, if (restart) RunMode.RESTART else RunMode.RESUME, reconcile)
+            target.missingSettings(wired.first)?.let { return USAGE.also { _ -> logger.error(it) } }
+            return execute(koin, day.value, if (restart) RunMode.RESTART else RunMode.RESUME, target)
         } finally {
             BatchEtlServer.close(koin, runtime)
         }
@@ -107,9 +108,16 @@ internal object BatchEtlCommands {
         koin: org.koin.core.Koin,
         day: BusinessDay,
         mode: RunMode,
-        reconcile: Boolean,
+        target: RunTarget,
     ): Int {
-        val dag = koin.get<DagDefinition>(if (reconcile) RECONCILE else DAILY)
+        val reconcile = target == RunTarget.RECONCILE
+        val qualifier =
+            when (target) {
+                RunTarget.DAILY -> DAILY
+                RunTarget.RECONCILE -> RECONCILE
+                RunTarget.SALES_FILE -> SALES_FILE
+            }
+        val dag = koin.get<DagDefinition>(qualifier)
         return when (val outcome = runBlocking { koin.get<BatchRunner>().run(dag, PartitionKey(day.toString()), mode = mode) }) {
             is Result.Err -> {
                 FAILED.also { logger.error("{} の実行が失敗しました: {}", day, outcome.error.message) }
@@ -198,4 +206,20 @@ internal object BatchEtlCommands {
                 poolName = "batch-etl-migrate"
             },
         )
+}
+
+/** `run`・`reconcile`・`sales-file` が実行する DAG。 */
+private enum class RunTarget {
+    DAILY,
+    RECONCILE,
+    SALES_FILE,
+    ;
+
+    /** この DAG に要る設定がなければ、その説明。 */
+    fun missingSettings(config: BatchEtlConfig): String? =
+        when {
+            this == RECONCILE && config.reconcile == null -> "照合には ${BatchEtlConfig.GATEWAY_URL} と ${BatchEtlConfig.TOKEN_URL} が必要です"
+            this == SALES_FILE && config.salesFile == null -> "売上ファイルには ${BatchEtlConfig.FILE_S3_ENDPOINT} が必要です"
+            else -> null
+        }
 }

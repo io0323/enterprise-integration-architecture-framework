@@ -6,6 +6,7 @@ import io.eia.batchetl.adapters.persistence.JdbcRawOrderStore
 import io.eia.batchetl.application.port.outbound.SourcePosition
 import io.eia.platform.batch.BatchScheduler
 import io.eia.platform.batch.jdbc.JdbcBatchStore
+import io.eia.platform.filetransfer.store.S3ObjectStore
 import io.eia.platform.observability.Observability
 import io.eia.platform.observability.ObservabilityConfig
 import io.eia.platform.observability.ObservabilityRuntime
@@ -134,6 +135,7 @@ internal class BatchEtlServer private constructor(
             koin.get<Admin>().close()
             koin.get<HttpClient>().close()
             koin.getOrNull<HttpClient>(RECONCILE)?.close()
+            koin.getOrNull<S3ObjectStore>()?.close()
             koin.get<HikariDataSource>().close()
             koin.close()
             runtime.close()
