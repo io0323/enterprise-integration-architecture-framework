@@ -1,5 +1,7 @@
 plugins {
     id("eia.jvm-library")
+    // 取引先の台帳(JSON。ADR-0032 §8)
+    id("org.jetbrains.kotlin.plugin.serialization")
 }
 
 dependencies {
@@ -8,7 +10,10 @@ dependencies {
     api(project(":platform:file-transfer"))
     // 受け取りの実行のロック(ファイルの到着の実行と同じ advisory lock。ADR-0030 §2)と、実行の記録のスキーマ
     api(project(":platform:batch"))
+    // 取引先への送信(SFTP)の Timeout・Retry・Circuit Breaker(ADR-0021)。Resilience は app で ResilienceMetrics から作って渡す
+    api(project(":shared:resilience"))
     implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.kotlinx.serialization.json)
     implementation(libs.flyway.core)
     runtimeOnly(libs.flyway.database.postgresql)
     runtimeOnly(libs.postgresql)
@@ -24,6 +29,10 @@ dependencies {
     integrationTestImplementation(platform(libs.aws.sdk.bom))
     integrationTestImplementation(libs.aws.sdk.s3)
     integrationTestImplementation(libs.aws.sdk.url.connection.client)
+    // 取引先の SFTP の不調(Toxiproxy)で、リトライと Circuit Breaker の遷移がメトリクスに出ることを確かめる
+    integrationTestImplementation(project(":platform:reliability"))
+    integrationTestImplementation(libs.testcontainers.toxiproxy)
+    integrationTestImplementation(libs.opentelemetry.sdk.testing)
 }
 
 tasks.named<Test>("test") {

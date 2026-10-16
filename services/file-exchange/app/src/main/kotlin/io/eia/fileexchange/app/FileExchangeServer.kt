@@ -1,6 +1,7 @@
 package io.eia.fileexchange.app
 
 import com.zaxxer.hikari.HikariDataSource
+import io.eia.fileexchange.adapters.partner.PartnerRegistry
 import io.eia.fileexchange.application.port.inbound.SweepInboxUseCase
 import io.eia.platform.batch.BatchScheduler
 import io.eia.platform.filetransfer.store.S3ObjectStore
@@ -8,6 +9,7 @@ import io.eia.platform.observability.Observability
 import io.eia.platform.observability.ObservabilityConfig
 import io.eia.platform.observability.ObservabilityRuntime
 import io.eia.platform.security.secret.EnvSecretProvider
+import io.eia.platform.security.secret.Secret
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.ValidationError
 import io.eia.shared.kernel.err
@@ -37,6 +39,7 @@ import kotlinx.coroutines.runBlocking
 import org.koin.core.Koin
 import org.koin.dsl.koinApplication
 import org.slf4j.LoggerFactory
+import java.net.URI
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -89,20 +92,19 @@ internal class FileExchangeServer private constructor(
             FileExchangeConfig
                 .fromEnvironment(env)
                 .flatMap { config -> config.forRun().map { endpoint -> config to endpoint } }
-                .flatMap { (config, endpoint) ->
+                .flatMap { (config, endpoint) -> config.partners().map { partners -> Triple(config, endpoint, partners) } }
+                .flatMap { (config, endpoint, partners) ->
                     when (val password = EnvSecretProvider(env).get(FileExchangeConfig.APP_PASSWORD)) {
-                        is Result.Ok -> ok(Triple(config, endpoint, password.value))
+                        is Result.Ok -> ok(Inputs(config, endpoint, partners, password.value))
                         is Result.Err -> err(ValidationError.of(FileExchangeConfig.APP_PASSWORD.value, password.error.message))
                     }
                 }.flatMap { inputs ->
                     val observabilityEnv = mapOf(ObservabilityConfig.ENV_SERVICE_NAME to serviceName) + env
                     ObservabilityConfig.fromEnvironment(observabilityEnv).map { observability -> inputs to observability }
                 }.map { (inputs, observability) ->
-                    val (config, endpoint, password) = inputs
                     val runtime = Observability.init(observability)
-                    val koin =
-                        koinApplication { modules(fileExchangeModule(config, endpoint, password, EnvSecretProvider(env), runtime)) }.koin
-                    config to (koin to runtime)
+                    val koin = koinApplication { modules(fileExchangeModule(inputs, EnvSecretProvider(env), runtime)) }.koin
+                    inputs.config to (koin to runtime)
                 }
 
         internal fun close(
@@ -173,3 +175,11 @@ internal class FileExchangeServer private constructor(
             }
     }
 }
+
+/** 配線に渡す、起動の前に確かめた設定。 */
+internal data class Inputs(
+    val config: FileExchangeConfig,
+    val s3Endpoint: URI,
+    val partners: PartnerRegistry,
+    val appPassword: Secret,
+)

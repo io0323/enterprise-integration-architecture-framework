@@ -121,6 +121,7 @@ S3 の部分は P09 ③a、SFTP と PGP(§8)は ③b で決めた。Parquet の�
   - 登録の手順(`ssh-keyscan` で取り、フィンガープリントを相手と別の経路で照合する。開発用の SFTP のホスト鍵の登録)は ⑥ の Runbook に書く。
 - 認証はクライアントの鍵だけ(OpenSSH の形の秘密鍵。パスフレーズは任意で、`SecretProvider` から読む)。パスワードは使わない。
 - 送信は **一時名(`{name}.part`)で書いてから正式名に変える**(Framework 9.2)。正式名がすでにあれば消してから変える(SFTP v3 の rename は上書きできないため。同じファイルの送り直しを想定。消してから変えるまでの間は、相手からは正式名が見えない)。
+- **正式名のファイルがあるかを確かめる**(`exists`。P09 ⑤b): 正式名だけを見る(一時名の `.part` は数えない)。送信を冪等にするため、送る前に呼ぶ(下の「取引先への配送」)。
 - 失敗の分け方: 接続できない・タイムアウト・切断は `RemoteUnavailable`(リトライ)。ホスト鍵の不一致・方式の交渉の失敗(`NoCommonAlgorithm`)・認証の失敗・権限がない・送り先のディレクトリがないは `RemoteRejected`(リトライしない)。鍵・known_hosts の誤りは `CredentialRejected`。
 - 統合テスト(`SftpIT`。images.env の `SFTP_IMAGE` の OpenSSH 10.3):
   - 一時名で書いてから正式名に変わり、送り直しは上書きされ、一時名が残らない。
@@ -141,6 +142,33 @@ S3 の部分は P09 ③a、SFTP と PGP(§8)は ③b で決めた。Parquet の�
   - 理由: PGP でない・自社あてでない・改竄の検知のない古い形式(SED)・署名がない・取引先の鍵でない鍵の署名・署名の不一致・改竄の検知の不一致・形式の誤り。
 - PGP は、取引先への SFTP の経路では必須、社内の S3 の経路では任意(P09 の計画)。どこで使うかは file-exchange(⑤)が決める。
 - 単体テスト(`PgpFilesSpec`): 数 MB の往復、改竄、なりすまし(第三者の署名)、自社あてでない暗号文、署名のない暗号文、改竄の検知のない形式、鍵の誤り。統合テスト(`SftpIT`)で、暗号化と署名をして SFTP で送ったファイルを、取引先の鍵で署名を確かめて復号できること、サーバの上で 1 バイト変えると不合格になることを確かめる。
+
+#### 取引先への配送(file-exchange。P09 ⑤b)
+- **配送のステップ**: 受け取りの DAG `file-exchange.receive` に、`receive` の後のステップ `deliver` を足した。合格(archive)のファイルを、そのデータセット(`{system}_{dataset}`。名前から時刻と連番を除いたもの)を送る取引先ごとに送る。quarantine に移したファイルは送らない。
+  - 1 つの取引先に送れなくても、ほかの取引先には送ってから、ステップを失敗にする(ステップのリトライと、運用者の再実行 `receive <名前>` で、送れなかった取引先だけに送る。受け取りは `STORED` なので何もしない)。
+- **取引先の台帳**(承認の条件 2): JSON のファイル(`FILE_EXCHANGE_PARTNERS_FILE`)に、**取引先の ID ごとに** 送るデータセット・送り先(SFTP のホスト・ポート・利用者・ディレクトリ)・ホスト鍵(known_hosts)・クライアントの鍵・PGP の公開鍵を持つ。P12 の B2B Gateway の取引先の台帳に、この形のまま引き継ぐ。
+  - 台帳には秘密情報の **名前** だけを書く(値は `SecretProvider` から読む)。自社の PGP の署名の鍵(`FILE_EXCHANGE_PGP_SECRET_KEY`・`_PASSPHRASE`)は取引先によらないので台帳に書かない。
+  - 取引先の ID は英小文字・数字・ハイフンの 32 文字まで(メトリクスの属性と Resilience の名前に使う)。台帳の誤り(形・ID の重複・鍵の名前の形)は起動時に設定の誤りにする。台帳がなければ配送しない。
+  - ローカルでは、取引先の代わりに `sftp-b2b`(b2b プロファイル。利用者 `partner01`・`/config/outbox`)に送る(⑥ で compose に登録する)。
+- **配送の記録**: 表 `exchange.delivery`(主キーはファイル名と取引先の ID の組)。状態は `SENDING` → `SENT`。送信済み(`SENT`)の組には何もしない。
+- **送信の冪等**(承認の条件 4): 正式名に変えた後、送信済みを記録する前に落ちると、やり直しで同じファイルを送り直してしまう。そこで、**送る前に取引先の側に同じ正式名のファイルがあるかを確かめ(`exists`)、あれば送らずに送信済みにする**(`already_present = true`)。
+  - 手順: 送信中を記録 → 正式名があるかを確かめる → なければ archive から読み出し、暗号化と署名をして送る(一時名 → 正式名) → 送信済みを記録。
+  - 一時名(`.part`)だけが残っている(書いている途中で落ちた)なら、正式名はないので送り直す(一時名は上書きされ、正式名に変わる)。
+  - 相手の側の正式名は、データファイルの名前に `.pgp` を付けたもの。同じ名前のファイルの中身が同じかは確かめない(暗号文は暗号化のたびに変わるため。名前は時刻と連番で一意)。
+  - 限界: 取引先が、送信済みの記録の前に正式名のファイルを取り込んで消していれば、正式名がないので送り直す。取引先の側でファイル名による重複の検知が要る(取引先との取り決めに書く)。
+- **Timeout・Retry・Circuit Breaker**(承認の条件 3。外への最初の同期の呼び出し): SFTP の呼び出し(確かめる・送る)は、**取引先ごとの `Resilience`(名前 `sftp-{取引先の ID}`)** で包む。app で `ResilienceMetrics.resilience(...)` から作る(Konsist の `resilienceOnlyThroughMetrics`)。
+  - 設定: 試行の上限 2 分(sshj の接続 10 秒・応答の待ち 30 秒に、送る時間を足した)、呼び出し全体の締め切り 5 分。Retry と Circuit Breaker は既定(初回を含めて 3 回、500ms から。直近 10 回のうち 50% の失敗で 30 秒止める)。
+  - リトライするのは `RemoteUnavailable`(接続できない・タイムアウト・切断)だけ。ホスト鍵の不一致・認証の失敗などはリトライせず、Circuit Breaker にも数えない。
+  - archive の読み出しと暗号化は Resilience の外で行う(置き場の不調を、取引先の Circuit Breaker に数えない)。sshj の呼び出しはブロックするので、割り込みできる IO のスレッドで呼ぶ(試行のタイムアウトで止める)。
+  - Fallback は持たない: 送れなければ配送を `SENDING` のまま残してステップを失敗にし、再実行で続ける(送ったことにする代替の動作はない)。
+- **メトリクス**: `eia.file_exchange.deliveries`(属性 `file_exchange.partner`・`file_exchange.outcome` = `sent` / `already_present` / `already_sent` / `failed`)。Resilience のメトリクス(`eia.resilience.*`)は依存先の名前 `sftp-{取引先の ID}` で出る。アラートは ⑥ で足す。
+- **統合テスト**
+  - `DeliveryIT`(PostgreSQL・SeaweedFS・SFTP のサーバの前に Toxiproxy):
+    - 送ったファイルを、取引先の鍵で署名を確かめて復号でき、中身が archive と同じ。やり直しは `already_sent`。
+    - 送信中の記録があり、取引先の側に正式名がある(前の実行の暗号文を置く)なら、送らずに送信済みにし、相手の側のファイルが前の実行のまま変わらない(承認の条件 4)。
+    - 一時名だけが残っていれば、送り直して正式名にする。
+    - Toxiproxy で接続を切ると、リトライして Circuit Breaker が開き、Open の間は接続せずに `circuit_open` を返す。接続を戻すと、Open の期間の後に Half-Open を経て閉じ、送り終える。**`InMemoryMetricReader` で、`eia.resilience.retries` と `eia.resilience.circuit_breaker.transitions`(closed→open・open→half_open・half_open→closed)が依存先の名前 `sftp-partner01` で出ることを確かめた**(P05 の #8-c の持ち越し)。
+  - `FileExchangeAppIT`: 台帳を渡した `receive` で、受け取りの後に取引先の SFTP に `.pgp` が届き、配送の記録が `SENT` になる。台帳の誤りは設定の誤り(終了コード 2)。
 
 #### 配置
 - sshj(`net.schmizz`・`com.hierynomus.sshj`)と OpenPGP(`org.bouncycastle.openpgp`・`org.bouncycastle.bcpg`)を本番コードで使ってよいのは `platform/file-transfer` だけ(テスト用の鍵を作る `platform/test-support` を除く)。方式の絞り込みとホスト鍵の検証を各所で書き直させないため。Konsist(`transferSecurityOnlyInFileTransfer`)と依存の宣言の検査(`LibraryDeclarationRules`)で守る。
@@ -164,8 +192,11 @@ S3 の部分は P09 ③a、SFTP と PGP(§8)は ③b で決めた。Parquet の�
 - 契約(`contracts/files/*.yaml`)と `FileLayout` の一致は、利用者のテストで守る(実行時に契約のファイルを読まない)。
 - AWS SDK の範囲を限ったので、新しいモジュールが S3 を使うときは file-transfer の置き場を使う。audit のアンカーは Object Lock の操作(Legal Hold・保持期間)が要るので、例外として残した。
 - SFTP の暗号の方式を絞ったので、古い方式しか持たない取引先とは接続できない。その取引先と接続するときは、方式を足すのではなく、相手に更新を頼む(足すなら、この ADR を改訂して理由を残す)。
+- 送信の冪等は、取引先の側に正式名のファイルが残っていることに頼る。取引先が受け取ってすぐに消すと、落ちた後のやり直しで送り直すことがある(§8 の限界)。
+- 取引先ごとに Resilience を作るので、取引先の数だけ Resilience のメトリクスの系列が増える(取引先の数は台帳で決まり、少ない)。
 - PGP のテストは送り手・受け手とも Bouncy Castle で行った。形式は標準の OpenPGP(v4 の鍵・SEIPD)なので GnuPG と相互に読めるはずだが、GnuPG との相互運用は、⑥ で開発用の鍵を作るときに確かめる。
 
 ## 改訂履歴
 - 2026-10-15: P09 ③b で、SFTP と PGP(§8)を決めた。③a で書いた方針(sshj・ホスト鍵の固定・古い方式を使わない・暗号化と署名)を、使う暗号の方式の一覧・鍵の扱い・失敗の分け方・統合テストまで具体にした。
 - 2026-10-16: P09 ⑤a で、file-exchange の受け取りの実装(§5: 受け取りの DAG・状態・見回り・見回りと受け取りの排他)を書いた。理由のコードに `duplicate`・`name_reused` を足した。
+- 2026-10-17: P09 ⑤b で、取引先への配送(§8「取引先への配送」: 配送のステップ・取引先の台帳・配送の記録・送る前の正式名の確認による冪等・取引先ごとの Resilience)を書いた。`SftpSender` に正式名の確認(`exists`)を足した。

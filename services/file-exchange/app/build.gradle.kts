@@ -12,6 +12,8 @@ dependencies {
     implementation(project(":platform:batch"))
     implementation(project(":platform:file-transfer"))
     implementation(project(":platform:observability"))
+    // 取引先の SFTP の Resilience を、メトリクスに登録して作る(ADR-0021)
+    implementation(project(":platform:reliability"))
     // DB のパスワードと S3 の資格情報(SecretProvider。ADR-0019 §6)
     implementation(project(":platform:security"))
     implementation(libs.hikaricp)

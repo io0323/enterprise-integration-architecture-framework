@@ -56,6 +56,15 @@ public class SftpServerContainer(
         }
     }
 
+    /** コンテナの中にファイルを置く(相手の側にすでにあるファイルを用意する)。持ち主は SFTP の利用者にする。 */
+    public fun writeFile(
+        path: String,
+        bytes: ByteArray,
+    ) {
+        copyFileToContainer(Transferable.of(bytes), path)
+        execInContainer("chown", "1000:1000", path)
+    }
+
     /** コンテナの中のディレクトリのファイルの名前。 */
     public fun list(directory: String): List<String> = execInContainer("ls", "-1", directory).stdout.lines().filter { it.isNotBlank() }
 

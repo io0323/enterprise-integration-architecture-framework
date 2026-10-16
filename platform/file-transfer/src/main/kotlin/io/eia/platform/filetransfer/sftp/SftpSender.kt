@@ -41,13 +41,37 @@ public class SftpSender(
     private val secrets: SecretProvider,
 ) {
     /** [source] を [remoteDirectory]/[fileName] に送る。 */
-    @Suppress("ReturnCount") // 名前の誤り・鍵の読み込みの失敗で、接続の前に返す
     public fun send(
         source: Path,
         remoteDirectory: String,
         fileName: String,
     ): Result<Unit, FileTransferError> {
         if (!FILE_NAME.matches(fileName)) return err(FileTransferMisuse("送るファイルの名前に使えない文字があります"))
+        val directory = remoteDirectory.trimEnd('/')
+        return withSftp { sftp ->
+            val temp = "$directory/$fileName$PART_SUFFIX"
+            val target = "$directory/$fileName"
+            sftp.put(FileSystemFile(source.toFile()), temp)
+            if (sftp.statExistence(target) != null) sftp.rm(target)
+            sftp.rename(temp, target)
+        }
+    }
+
+    /**
+     * [remoteDirectory]/[fileName] が相手の側にあるかを確かめる(正式名だけ。一時名の `.part` は見ない)。
+     * 送り直しの前に確かめて、送信を冪等にするために使う(ADR-0032 §8)。
+     */
+    public fun exists(
+        remoteDirectory: String,
+        fileName: String,
+    ): Result<Boolean, FileTransferError> {
+        if (!FILE_NAME.matches(fileName)) return err(FileTransferMisuse("確かめるファイルの名前に使えない文字があります"))
+        val target = "${remoteDirectory.trimEnd('/')}/$fileName"
+        return withSftp { sftp -> sftp.statExistence(target) != null }
+    }
+
+    @Suppress("ReturnCount") // 鍵の読み込みの失敗で、接続の前に返す
+    private fun <T> withSftp(block: (SFTPClient) -> T): Result<T, FileTransferError> {
         val knownHostsText =
             when (val read = secret(config.knownHosts)) {
                 is Result.Err -> return read
@@ -73,22 +97,15 @@ public class SftpSender(
                     is Result.Ok -> read.value
                 }
             }
-        val directory = remoteDirectory.trimEnd('/')
-        return withSftp(knownHosts, privateKey, passphrase) { sftp ->
-            val temp = "$directory/$fileName$PART_SUFFIX"
-            val target = "$directory/$fileName"
-            sftp.put(FileSystemFile(source.toFile()), temp)
-            if (sftp.statExistence(target) != null) sftp.rm(target)
-            sftp.rename(temp, target)
-        }
+        return connect(knownHosts, privateKey, passphrase, block)
     }
 
-    private fun withSftp(
+    private fun <T> connect(
         knownHosts: KnownHosts,
         privateKey: Secret,
         passphrase: Secret?,
-        block: (SFTPClient) -> Unit,
-    ): Result<Unit, FileTransferError> =
+        block: (SFTPClient) -> T,
+    ): Result<T, FileTransferError> =
         try {
             SSHClient(SftpAlgorithms.config()).use { ssh ->
                 ssh.connectTimeout = config.connectTimeout.toMillis().toInt()
@@ -102,9 +119,8 @@ public class SftpSender(
                         passphrase?.let { PasswordUtils.createOneOff(it.reveal().toCharArray()) },
                     )
                 ssh.authPublickey(config.username, keys)
-                ssh.newSFTPClient().use(block)
+                ok(ssh.newSFTPClient().use(block))
             }
-            ok(Unit)
         } catch (_: UserAuthException) {
             err(RemoteRejected("AuthenticationFailed"))
         } catch (e: TransportException) {
