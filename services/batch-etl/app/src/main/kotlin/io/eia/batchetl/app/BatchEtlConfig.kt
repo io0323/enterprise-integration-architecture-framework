@@ -1,5 +1,6 @@
 package io.eia.batchetl.app
 
+import io.eia.batchetl.application.port.outbound.SalesFileFormat
 import io.eia.platform.security.secret.SecretName
 import io.eia.shared.kernel.FieldViolation
 import io.eia.shared.kernel.Result
@@ -34,6 +35,11 @@ import kotlin.time.Duration.Companion.seconds
  * | `BATCH_ETL_TOKEN_URL` | なし(`BATCH_ETL_GATEWAY_URL` があれば必須) | serve・reconcile(Keycloak のトークンエンドポイント) |
  * | `BATCH_ETL_CLIENT_ID` / `BATCH_ETL_CLIENT_SECRET`(`_FILE` も可) | `eiaf-batch-etl` / なし | serve・reconcile(スコープ `sales.order:report` だけ) |
  * | `BATCH_ETL_RECONCILE_ON` / `BATCH_ETL_RECONCILE_AT` | `MONDAY` / `07:00` | serve(週次の照合の曜日と日本時間の時刻。日次の SLA の期限の後) |
+ * | `BATCH_ETL_FILE_S3_ENDPOINT` | なし(なければ日次の売上ファイルを書かない) | serve・sales-file(S3 互換ストレージ。例 `http://seaweedfs:8333`。ADR-0031 §8) |
+ * | `BATCH_ETL_FILE_S3_BUCKET` / `BATCH_ETL_FILE_PREFIX` | `eiaf-file-exchange` / `inbox/sales-daily/` | serve・sales-file(置き場。受け口の自分の接頭辞) |
+ * | `BATCH_ETL_FILE_S3_ACCESS_KEY` / `BATCH_ETL_FILE_S3_SECRET_KEY`(`_FILE` も可) | なし | serve・sales-file(受け口に書くだけの identity。ADR-0032 §1) |
+ * | `BATCH_ETL_FILE_FORMATS` | `parquet` | serve・sales-file(`parquet`・`csv` をカンマ区切り。順に書く) |
+ * | `BATCH_ETL_FILE_SLA_AT` | `07:00` | serve・sales-file(前日の分の売上ファイルを置く期限。日本時間の時刻。日次の SLA の後) |
  */
 internal data class BatchEtlConfig(
     val dbUrl: String,
@@ -47,11 +53,19 @@ internal data class BatchEtlConfig(
     val pollInterval: Duration,
     val reconcile: ReconcileSettings? = null,
     val lagProbeInterval: Duration = DEFAULT_LAG_PROBE_INTERVAL,
+    val salesFile: SalesFileSettings? = null,
 ) {
     companion object {
         val OWNER_PASSWORD = SecretName("BATCH_ETL_DB_PASSWORD")
         val APP_PASSWORD = SecretName("BATCH_ETL_APP_DB_PASSWORD")
         val CLIENT_SECRET = SecretName("BATCH_ETL_CLIENT_SECRET")
+        val FILE_S3_ACCESS_KEY = SecretName("BATCH_ETL_FILE_S3_ACCESS_KEY")
+        val FILE_S3_SECRET_KEY = SecretName("BATCH_ETL_FILE_S3_SECRET_KEY")
+        const val FILE_S3_ENDPOINT = "BATCH_ETL_FILE_S3_ENDPOINT"
+        const val FILE_S3_BUCKET = "BATCH_ETL_FILE_S3_BUCKET"
+        const val FILE_PREFIX = "BATCH_ETL_FILE_PREFIX"
+        const val FILE_FORMATS = "BATCH_ETL_FILE_FORMATS"
+        const val FILE_SLA_AT = "BATCH_ETL_FILE_SLA_AT"
         const val GATEWAY_URL = "BATCH_ETL_GATEWAY_URL"
         const val TOKEN_URL = "BATCH_ETL_TOKEN_URL"
         const val CLIENT_ID = "BATCH_ETL_CLIENT_ID"
@@ -86,6 +100,7 @@ internal data class BatchEtlConfig(
                     pollInterval = reader.duration(POLL_INTERVAL) ?: DEFAULT_POLL_INTERVAL,
                     reconcile = reader.reconcile(),
                     lagProbeInterval = reader.duration(LAG_PROBE_INTERVAL) ?: DEFAULT_LAG_PROBE_INTERVAL,
+                    salesFile = reader.salesFile(),
                 )
             return if (reader.violations.isEmpty()) ok(config) else err(ValidationError(reader.violations))
         }
@@ -115,6 +130,20 @@ internal data class ReconcileSettings(
     val clientId: String,
     val weeklyOn: DayOfWeek,
     val at: LocalTime,
+)
+
+/**
+ * 日次の売上ファイル(INT-SALES-004。ADR-0031 §8)の設定。
+ *
+ * @property prefix 置き場のキーの接頭辞(`/` で終わる)
+ * @property formats 書く形式(順に書く。重複なし)
+ */
+internal data class SalesFileSettings(
+    val endpoint: URI,
+    val bucket: String,
+    val prefix: String,
+    val formats: List<SalesFileFormat>,
+    val slaAt: LocalTime,
 )
 
 internal data class RunSettings(
@@ -172,6 +201,20 @@ private class EnvReader(
         return token?.let { ReconcileSettings(gateway, it, optional(BatchEtlConfig.CLIENT_ID) ?: "eiaf-batch-etl", day, at) }
     }
 
+    /** 日次の売上ファイルの設定。`BATCH_ETL_FILE_S3_ENDPOINT` がなければ null(売上ファイルを書かない)。 */
+    fun salesFile(): SalesFileSettings? {
+        val endpoint = url(BatchEtlConfig.FILE_S3_ENDPOINT) ?: return null
+        val bucket = optional(BatchEtlConfig.FILE_S3_BUCKET) ?: "eiaf-file-exchange"
+        val prefix = optional(BatchEtlConfig.FILE_PREFIX) ?: "inbox/sales-daily/"
+        if (!PREFIX.matches(prefix)) violations += FieldViolation(BatchEtlConfig.FILE_PREFIX, "英小文字・数字・- の段を / で区切り、/ で終えてください")
+        val names = (optional(BatchEtlConfig.FILE_FORMATS) ?: "parquet").split(',').map { it.trim() }
+        val formats = names.mapNotNull { FORMATS[it] }
+        if (formats.size != names.size || formats.distinct().size != formats.size) {
+            violations += FieldViolation(BatchEtlConfig.FILE_FORMATS, "parquet・csv をカンマ区切りで、重複なしにしてください")
+        }
+        return SalesFileSettings(endpoint, bucket, prefix, formats.distinct(), time(BatchEtlConfig.FILE_SLA_AT, DEFAULT_FILE_SLA_AT))
+    }
+
     private fun url(name: String): URI? =
         optional(name)?.let { value ->
             val uri =
@@ -190,5 +233,10 @@ private class EnvReader(
         /** 週次の照合の既定の時刻(日本時間)。日次の SLA の期限(06:00)の後。 */
         val DEFAULT_RECONCILE_AT = LocalTime(7, 0)
         val TIME = Regex("^([01][0-9]|2[0-3]):([0-5][0-9])$")
+
+        /** 売上ファイルの既定の期限(日本時間)。日次の SLA の期限(06:00)の後。 */
+        val DEFAULT_FILE_SLA_AT = LocalTime(7, 0)
+        val PREFIX = Regex("^([a-z0-9][a-z0-9-]*/)+$")
+        val FORMATS = mapOf("parquet" to SalesFileFormat.PARQUET, "csv" to SalesFileFormat.CSV_GZIP)
     }
 }

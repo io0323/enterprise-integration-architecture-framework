@@ -34,11 +34,16 @@ internal suspend fun <T> DataSource.transaction(block: (Connection) -> Result<T,
                 }
             }
         } catch (e: SQLException) {
-            val state = e.sqlState.orEmpty()
-            if (state.isEmpty() || state.take(2) in TRANSIENT_CLASSES) {
-                err(UnavailableError("分析の DB を使えません(SQLSTATE ${state.ifEmpty { "なし" }})"))
-            } else {
-                err(UnexpectedError("分析の DB に拒否されました(SQLSTATE $state)"))
-            }
+            err(classify(e))
         }
     }
+
+/** SQL の例外を SQLSTATE で分類する。理由には SQLSTATE だけを入れる。 */
+internal fun classify(e: SQLException): DomainError {
+    val state = e.sqlState.orEmpty()
+    return if (state.isEmpty() || state.take(2) in TRANSIENT_CLASSES) {
+        UnavailableError("分析の DB を使えません(SQLSTATE ${state.ifEmpty { "なし" }})")
+    } else {
+        UnexpectedError("分析の DB に拒否されました(SQLSTATE $state)")
+    }
+}

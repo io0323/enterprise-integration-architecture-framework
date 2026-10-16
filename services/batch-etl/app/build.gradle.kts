@@ -12,6 +12,8 @@ application {
 dependencies {
     implementation(project(":services:batch-etl:adapters"))
     implementation(project(":platform:batch"))
+    // 日次の売上ファイルの置き場(S3 互換ストレージ。ADR-0032)
+    implementation(project(":platform:file-transfer"))
     implementation(project(":platform:observability"))
     implementation(project(":platform:schema-registry"))
     // DB のパスワード(SecretProvider。ADR-0019 §6)
@@ -32,6 +34,10 @@ dependencies {
     integrationTestImplementation(libs.testcontainers.postgresql)
     integrationTestImplementation(libs.kotlinx.coroutines.core)
     integrationTestImplementation(libs.ktor.client.cio)
+    // 日次の売上ファイルの置き場(SeaweedFS)のバケットを作る
+    integrationTestImplementation(platform(libs.aws.sdk.bom))
+    integrationTestImplementation(libs.aws.sdk.s3)
+    integrationTestImplementation(libs.aws.sdk.url.connection.client)
 }
 
 tasks.named<Test>("integrationTest") {

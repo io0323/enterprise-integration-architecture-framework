@@ -2,16 +2,20 @@ package io.eia.batchetl.app
 
 import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
+import io.eia.batchetl.adapters.file.S3SalesFileStore
 import io.eia.batchetl.adapters.http.HttpOrderSummarySource
 import io.eia.batchetl.adapters.kafka.KafkaIngestPositions
 import io.eia.batchetl.adapters.kafka.KafkaOrderEventSource
+import io.eia.batchetl.adapters.persistence.JdbcDailySalesLines
 import io.eia.batchetl.adapters.persistence.JdbcMartSummaries
 import io.eia.batchetl.adapters.persistence.JdbcOrderMart
 import io.eia.batchetl.adapters.persistence.JdbcRawOrderStore
 import io.eia.batchetl.application.port.inbound.BuildDailyOrderMartUseCase
+import io.eia.batchetl.application.port.inbound.ExportDailySalesFileUseCase
 import io.eia.batchetl.application.port.inbound.IngestOrderEventsUseCase
 import io.eia.batchetl.application.port.inbound.ReconcileOrderMartUseCase
 import io.eia.batchetl.application.usecase.BuildDailyOrderMartService
+import io.eia.batchetl.application.usecase.ExportDailySalesFileService
 import io.eia.batchetl.application.usecase.IngestOrderEventsService
 import io.eia.batchetl.application.usecase.ReconcileOrderMartService
 import io.eia.platform.batch.BatchMetrics
@@ -19,6 +23,9 @@ import io.eia.platform.batch.BatchRunner
 import io.eia.platform.batch.BatchScheduler
 import io.eia.platform.batch.jdbc.JdbcBatchStore
 import io.eia.platform.batch.sla.SlaMonitor
+import io.eia.platform.filetransfer.store.S3ObjectStore
+import io.eia.platform.filetransfer.store.S3StoreConfig
+import io.eia.platform.filetransfer.write.FilePublisher
 import io.eia.platform.messagingkafka.DeadLetterPublisher
 import io.eia.platform.messagingkafka.KafkaProducerSettings
 import io.eia.platform.observability.ObservabilityRuntime
@@ -89,6 +96,7 @@ internal fun batchEtlModule(
     single<BuildDailyOrderMartUseCase> { BuildDailyOrderMartService(JdbcOrderMart(get<HikariDataSource>())) }
     single { BatchEtlMetrics(runtime.meter) }
     config.reconcile?.let { includes(reconcileModule(it, secrets, runtime)) }
+    config.salesFile?.let { includes(salesFileModule(it, secrets)) }
     single(DAILY) { OrderDailyJob.dag(get(), get(), get(), config.slaAt) }
     single { BatchRunner(get<JdbcBatchStore>(), runtime, listener = BatchMetrics(runtime.meter)) }
     single {
@@ -96,6 +104,7 @@ internal fun batchEtlModule(
             listOfNotNull(
                 OrderDailyJob.job(get(DAILY), config.dailyAt),
                 config.reconcile?.let { OrderReconcileJob.job(get(RECONCILE), it.weeklyOn, it.at) },
+                config.salesFile?.let { SalesFileJob.job(get(SALES_FILE)) },
             )
         val store = get<JdbcBatchStore>()
         BatchScheduler(
@@ -163,6 +172,31 @@ internal fun reconcileModule(
     single(RECONCILE) { OrderReconcileJob.dag(get(), get()) }
 }
 
+/**
+ * 日次の売上ファイル(INT-SALES-004。ADR-0031 §8)の配線。置き場は受け口に書くだけの identity で使う(ADR-0032 §1)。
+ * 一時ファイルは java.io.tmpdir(distroless では /tmp)に書く。
+ */
+internal fun salesFileModule(
+    settings: SalesFileSettings,
+    secrets: SecretProvider,
+) = module {
+    single {
+        S3ObjectStore(
+            S3StoreConfig(settings.endpoint, settings.bucket, BatchEtlConfig.FILE_S3_ACCESS_KEY, BatchEtlConfig.FILE_S3_SECRET_KEY),
+            secrets,
+        )
+    }
+    single<ExportDailySalesFileUseCase> {
+        ExportDailySalesFileService(
+            lines = JdbcDailySalesLines(get<HikariDataSource>()),
+            store = S3SalesFileStore(FilePublisher(get<S3ObjectStore>()), settings.prefix),
+            formats = settings.formats,
+        )
+    }
+    single(SALES_FILE) { SalesFileJob.dag(get(), settings.slaAt) }
+}
+
 internal val DAILY = named("daily")
 internal val RECONCILE = named("reconcile")
+internal val SALES_FILE = named("sales-file")
 private const val POOL_SIZE = 5
