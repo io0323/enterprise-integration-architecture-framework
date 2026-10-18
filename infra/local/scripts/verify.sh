@@ -582,7 +582,8 @@ EOF
   if [[ -s "$work/$name.csv.gz.pgp" ]]; then
     docker build -q -t eiaf-gnupg:local --build-arg DEBIAN_IMAGE="$DEBIAN_IMAGE" "$here/images/gnupg" >/dev/null
     # 取引先の秘密鍵と、EIAF の公開鍵だけを入れた一時の鍵束で、復号と署名の検証をする(status は GnuPG の機械向けの出力)
-    status="$(docker run --rm -i -v "$here/secrets/pgp-partner01.sec.asc:/keys/partner.sec.asc:ro" \
+    # 鍵(0600)と作業のディレクトリ(mktemp。0700)を読み書きできるよう、ホストの利用者の uid で動かす(Linux ではイメージの uid 1000 では読めない)
+    status="$(docker run --rm -i --user "$(id -u):$(id -g)" -v "$here/secrets/pgp-partner01.sec.asc:/keys/partner.sec.asc:ro" \
       -v "$here/secrets/pgp-eiaf.pub.asc:/keys/eiaf.pub.asc:ro" -v "$work:/work" --entrypoint bash eiaf-gnupg:local -c '
         set -euo pipefail
         mkdir -m 700 -p "$GNUPGHOME"
@@ -590,7 +591,7 @@ EOF
         gpg --batch --quiet --import /keys/eiaf.pub.asc 2>/dev/null
         gpg --batch --quiet --pinentry-mode loopback --passphrase-fd 3 --import /keys/partner.sec.asc 3<<<"$passphrase" 2>/dev/null
         gpg --batch --quiet --pinentry-mode loopback --passphrase-fd 3 --status-fd 1 --output /work/decrypted \
-          --decrypt "/work/'"$name"'.csv.gz.pgp" 3<<<"$passphrase" 2>/dev/null
+          --decrypt "/work/'"$name"'.csv.gz.pgp" 3<<<"$passphrase"
       ' <"$here/secrets/pgp-partner01.passphrase" || true)"
   fi
   local eiaf_fpr

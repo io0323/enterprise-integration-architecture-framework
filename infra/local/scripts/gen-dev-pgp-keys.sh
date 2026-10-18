@@ -47,7 +47,7 @@ for name in "${missing[@]}"; do
   rm -f "$dir/pgp-$name".{pub.asc,sec.asc,passphrase}
   LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32 >"$dir/pgp-$name.passphrase" || true
   # 鍵束はコンテナの中の一時ディレクトリ(コンテナを消せば消える)。パスフレーズは標準入力で渡す(コマンドの引数に出さない)
-  docker run --rm -i --entrypoint bash -e UID_TEXT="$(user_id "$name")" "$image" -c '
+  docker run --rm -i --user "$(id -u):$(id -g)" --entrypoint bash -e UID_TEXT="$(user_id "$name")" "$image" -c '
     set -euo pipefail
     mkdir -m 700 -p "$GNUPGHOME"
     read -r passphrase || true # パスフレーズのファイルは改行で終わらない
