@@ -1,7 +1,7 @@
 # EIAF ローカル開発用コマンド(CLAUDE.md §7)
 GRADLE := ./gradlew
 
-.PHONY: help setup build check arch-test contract-check schemas alerts-test integration-test format env not-root certs order-dist legacy-dist saga-dist batch-dist up down logs ps verify stats clean e2e audit-verify legacy-simulate dlq-replay batch-etl
+.PHONY: help setup build check arch-test contract-check schemas alerts-test integration-test format env not-root certs pgp-keys order-dist legacy-dist saga-dist batch-dist file-dist up down logs ps verify stats clean e2e audit-verify legacy-simulate dlq-replay batch-etl file-exchange
 
 # ローカル基盤(infra/local。ADR-0016)
 # PROFILE: core / cdc / iot / file / b2b / chaos / order / saga / batch。core は常に含まれる(積み上げ方式)。空白区切りで複数指定できる。
@@ -65,6 +65,9 @@ not-root:
 certs: not-root ## 開発用の CA と mTLS の証明書を作る。残りが 7 日を切っていれば作り直す(docs/runbooks/dev-certificates.md)
 	@$(INFRA)/scripts/gen-dev-certs.sh
 
+pgp-keys: not-root ## 開発用の PGP の鍵(自社 eiaf と取引先 partner01)を GnuPG で作る。既にあれば何もしない(docs/runbooks/file-exchange.md)
+	@$(INFRA)/scripts/gen-dev-pgp-keys.sh
+
 order-dist: ## order-service と schema-publish(契約のスキーマの登録)のイメージの中身(installDist)を作る
 	$(GRADLE) :services:order:app:installDist :tools:schema-publish:installDist
 
@@ -79,7 +82,10 @@ saga-dist: ## 注文 Saga の参加者(inventory・payment・shipping)と schema
 batch-dist: ## 分析のバッチ(batch-etl)と schema-publish のイメージの中身(installDist)を作る(ADR-0031)
 	$(GRADLE) :services:batch-etl:app:installDist :tools:schema-publish:installDist
 
-up: not-root env certs $(if $(filter order,$(PROFILE)),order-dist) $(if $(filter cdc,$(PROFILE)),legacy-dist) $(if $(filter saga,$(PROFILE)),saga-dist) $(if $(filter batch,$(PROFILE)),batch-dist) ## ローカル基盤を起動し、全コンテナが healthy になるまで待つ(例: make up PROFILE=cdc)
+file-dist: ## ファイル授受(file-exchange)のイメージの中身(installDist)を作る(ADR-0032)
+	$(GRADLE) :services:file-exchange:app:installDist
+
+up: not-root env certs $(if $(filter order,$(PROFILE)),order-dist) $(if $(filter cdc,$(PROFILE)),legacy-dist) $(if $(filter saga,$(PROFILE)),saga-dist) $(if $(filter batch,$(PROFILE)),batch-dist) $(if $(filter file,$(PROFILE)),file-dist pgp-keys) ## ローカル基盤を起動し、全コンテナが healthy になるまで待つ(例: make up PROFILE=cdc)
 	@if [ -f $(INFRA)/certs/.renewed ]; then \
 		$(COMPOSE) --profile '*' rm --stop --force $(CERT_CONSUMERS) >/dev/null 2>&1 || true; \
 		rm -f $(INFRA)/certs/.renewed; \
@@ -112,6 +118,9 @@ legacy-simulate: env legacy-dist ## レガシーの受注表を書き換える(�
 
 batch-etl: env batch-dist ## 分析のバッチのコマンドを 1 回だけ実行する(例: make batch-etl ARGS="run 2026-10-13 --restart"。make up PROFILE="order batch" の後。docs/runbooks/batch-rerun.md)
 	@$(COMPOSE) --profile batch run --rm --build --no-deps batch-etl $(ARGS)
+
+file-exchange: env file-dist ## ファイル授受のコマンドを 1 回だけ実行する(例: make file-exchange ARGS="receive sales_daily_20261013150000_001"。make up PROFILE=file の後。docs/runbooks/file-exchange.md)
+	@$(COMPOSE) --profile file run --rm --build --no-deps file-exchange $(ARGS)
 
 verify: ## profile ごとの検証(healthy・機能の疎通。例: make verify PROFILE=file)
 	@$(INFRA)/scripts/verify.sh $(PROFILE)

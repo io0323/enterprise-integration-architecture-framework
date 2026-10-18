@@ -46,3 +46,19 @@ for name in sftp-file sftp-b2b; do
   fi
 done
 chmod 644 "$secrets_dir"/*.pub
+
+# 取引先の代わりの SFTP(sftp-b2b)のホスト鍵(P09 ⑥。ADR-0032 §8)。サーバの起動時のフック(sftp/20-host-key.sh)が使い、
+# file-exchange と make verify はこの公開鍵を known_hosts に固定して接続する(初めての接続で鍵を覚える方式にしない)。
+# known_hosts の行は、コンテナの間の宛先([sftp-b2b]:2222)とホストからの宛先([127.0.0.1]:19223)の両方に同じ鍵を書く。
+# 作り直すときは secrets/sftp-b2b-host-key* と secrets/sftp-b2b.known_hosts を消して make env を実行する(docs/runbooks/file-exchange.md)
+host_key="$secrets_dir/sftp-b2b-host-key"
+if [[ ! -f "$host_key" ]]; then
+  ssh-keygen -q -t ed25519 -N '' -C "eiaf-sftp-b2b-host" -f "$host_key"
+  rm -f "$secrets_dir/sftp-b2b.known_hosts"
+  echo "infra/local/secrets/sftp-b2b-host-key を生成しました"
+fi
+if [[ ! -f "$secrets_dir/sftp-b2b.known_hosts" ]]; then
+  read -r key_type key_body _ <"$host_key.pub"
+  printf '[sftp-b2b]:2222,[127.0.0.1]:19223 %s %s\n' "$key_type" "$key_body" >"$secrets_dir/sftp-b2b.known_hosts"
+fi
+chmod 644 "$host_key.pub" "$secrets_dir/sftp-b2b.known_hosts"

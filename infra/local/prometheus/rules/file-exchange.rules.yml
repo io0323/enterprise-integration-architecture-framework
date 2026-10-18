@@ -1,0 +1,56 @@
+# ファイル授受(file-exchange。P09。ADR-0032)のアラート。対応は docs/runbooks/file-exchange.md。
+# 単体テストは file-exchange.test.yml(make alerts-test)。
+#
+# - 受け取りの不合格(改竄・欠損・形式の誤り)は 1 件でも知らせる。送り手に直してもらう必要がある(自動では直らない)
+# - 受け口の滞留は、最も古いマニフェストの経過時間で判定する(file-exchange の見回りが出す eia_file_exchange_inbox_oldest_age_seconds)
+# - 配送の失敗は取引先ごと。取引先の SFTP の Circuit Breaker(Resilience の名前 sftp-{取引先の ID})が開いたままのときも知らせる
+# 属性にファイルの名前は入れていない(系列が増え続けるため)。どのファイルかはログと DB(exchange.received_file・delivery)で見る。
+groups:
+  - name: file-exchange
+    rules:
+      # 受け取ったファイルを quarantine に移した(改竄・欠損・形式の誤り)
+      - alert: FileExchangeQuarantined
+        expr: sum by (job, file_exchange_reason) (increase(eia_file_exchange_files_received_total{file_exchange_destination="quarantine"}[1h])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "受け取ったファイルを quarantine に移した(理由 {{ $labels.file_exchange_reason }})"
+          runbook: docs/runbooks/file-exchange.md#quarantine-に移したとき
+
+      # 受け取り済みの名前で、中身の違うファイルが届いた(名前の使い回し。送り手は連番を変えて送り直す)
+      - alert: FileExchangeNameReused
+        expr: sum by (job) (increase(eia_file_exchange_files_extra_total{file_exchange_reason="name_reused"}[1h])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "受け取り済みの名前で、中身の違うファイルが届いた(名前の使い回し)"
+          runbook: docs/runbooks/file-exchange.md#名前の使い回し
+
+      # 受け口に 1 時間を超えて残っているファイルがある(受け取りが動いていない・データファイルが届かない)
+      - alert: FileExchangeInboxStale
+        expr: max by (job) (eia_file_exchange_inbox_oldest_age_seconds) > 3600
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "受け口に 1 時間を超えて残っているファイルがある"
+          runbook: docs/runbooks/file-exchange.md#受け口に滞留しているとき
+
+      # 取引先に送れなかった(ステップのリトライの後も失敗した。送信中のまま残っている)
+      - alert: FileExchangeDeliveryFailed
+        expr: sum by (job, file_exchange_partner) (increase(eia_file_exchange_deliveries_total{file_exchange_outcome="failed"}[1h])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "取引先 {{ $labels.file_exchange_partner }} にファイルを送れなかった"
+          runbook: docs/runbooks/file-exchange.md#取引先に送れないとき
+
+      # 取引先の SFTP の Circuit Breaker が 5 分を超えて開いている(取引先の SFTP が止まっている・接続できない)
+      - alert: FileExchangePartnerCircuitOpen
+        expr: max by (job, eia_dependency_name) (eia_resilience_circuit_breaker_state_ratio{eia_dependency_name=~"sftp-.+", state="open"}) == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "取引先の SFTP({{ $labels.eia_dependency_name }})の Circuit Breaker が開いている"
+          runbook: docs/runbooks/file-exchange.md#取引先に送れないとき

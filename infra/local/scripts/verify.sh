@@ -56,7 +56,7 @@ client_token() {
 header_value() { awk -v name="$(tr '[:upper:]' '[:lower:]' <<<"$1")" -F': ' 'tolower($1) == name { sub(/\r$/, "", $2); print $2; exit }'; }
 
 # 1 回だけ動いて終わるコンテナ(終了コード 0 で終わっていれば正常)
-oneshot_services=" order-migrate schema-publish legacy-migrate kafka-topics inventory-migrate payment-migrate shipping-migrate batch-etl-migrate "
+oneshot_services=" order-migrate schema-publish legacy-migrate kafka-topics inventory-migrate payment-migrate shipping-migrate batch-etl-migrate file-exchange-migrate "
 
 # ------------------------------------------------------------------ 共通: healthy
 verify_health() {
@@ -479,6 +479,154 @@ verify_file() {
   current="file"
   verify_s3
   verify_sftp sftp 19222 eiaf-file sftp-file
+  verify_sftp sftp-b2b 19223 partner01 sftp-b2b
+  verify_sftp_host_key
+  verify_file_bucket
+  verify_file_exchange
+}
+
+# 取引先の代わりの SFTP(sftp-b2b)のホスト鍵が、make env が作った鍵(secrets/sftp-b2b.known_hosts)と一致する。
+# 検証を外さずに(StrictHostKeyChecking=yes)接続できること、別の鍵を登録した known_hosts では接続しないことを確かめる
+verify_sftp_host_key() {
+  local opts=(-o StrictHostKeyChecking=yes -o LogLevel=ERROR -o ConnectTimeout=10 -o BatchMode=yes -i "$here/secrets/sftp-b2b" -P 19223)
+  if sftp "${opts[@]}" -o UserKnownHostsFile="$here/secrets/sftp-b2b.known_hosts" -b - partner01@127.0.0.1 >/dev/null 2>&1 <<<"ls"; then
+    pass "sftp-b2b: ホスト鍵が make env の鍵(known_hosts)と一致し、検証を外さずに接続できる"
+  else
+    fail "sftp-b2b: 登録したホスト鍵で接続できない(docs/runbooks/file-exchange.md「ホスト鍵」)"
+  fi
+  local other
+  other="$(mktemp -d)"
+  ssh-keygen -q -t ed25519 -N '' -f "$other/key"
+  printf '[127.0.0.1]:19223 %s\n' "$(cut -d' ' -f1,2 "$other/key.pub")" >"$other/known_hosts"
+  if sftp "${opts[@]}" -o UserKnownHostsFile="$other/known_hosts" -b - partner01@127.0.0.1 >/dev/null 2>&1 <<<"ls"; then
+    fail "sftp-b2b: 別の鍵を登録した known_hosts でも接続できてしまう"
+  else
+    pass "sftp-b2b: 別の鍵を登録した known_hosts では接続しない(なりすましの検知)"
+  fi
+  rm -rf "$other"
+}
+
+# ファイル授受のバケットと、batch-etl・file-exchange の資格情報の範囲(scripts/s3-file.sh。P09 ⑥)
+verify_file_bucket() {
+  local output line
+  output="$(docker run --rm --network eiaf \
+    -e ADMIN_ACCESS_KEY="$S3_ACCESS_KEY" -e ADMIN_SECRET_KEY="$S3_SECRET_KEY" \
+    -e WRITER_ACCESS_KEY="$FILE_BATCH_ETL_S3_ACCESS_KEY" -e WRITER_SECRET_KEY="$FILE_BATCH_ETL_S3_SECRET_KEY" \
+    -e EXCHANGE_ACCESS_KEY="$FILE_EXCHANGE_S3_ACCESS_KEY" -e EXCHANGE_SECRET_KEY="$FILE_EXCHANGE_S3_SECRET_KEY" \
+    -e RUN_ID="$(date +%s)-$$" -e S3_ENDPOINT=http://seaweedfs:8333 \
+    -v "$here/scripts/s3-file.sh:/s3-file.sh:ro" --entrypoint bash "$AWS_CLI_IMAGE" /s3-file.sh 2>&1 || true)"
+  while IFS= read -r line; do
+    case "$line" in
+      "OK "*) pass "S3 file: ${line#OK }" ;;
+      "NG "*) fail "S3 file: ${line#NG }" ;;
+    esac
+  done <<<"$output"
+  grep -q -E '^(OK|NG) ' <<<"$output" || fail "S3 file: 検査スクリプトを実行できない ($(tail -1 <<<"$output"))"
+}
+
+# file-exchange(ADR-0032): 送り手(batch-etl の identity)として契約どおりの売上ファイル(CSV + gzip)とマニフェストを受け口に置き、
+# 受け取り(archive)→ 取引先(sftp-b2b)への配送までを確かめる。取引先の側として、届いた .pgp を GnuPG で復号し、
+# EIAF の鍵の署名を確かめる(Bouncy Castle と GnuPG の相互運用。鍵も GnuPG で作った。make pgp-keys)
+verify_file_exchange() {
+  local work name stamp fx_sql
+  work="$(mktemp -d)"
+  stamp="$(date -u +%Y%m%d%H%M%S)"
+  name="sales_daily_${stamp}_001"
+  fx_sql() { "${compose[@]}" exec -T postgres psql -U postgres -d file_exchange -tAc "$1"; }
+
+  # 契約(contracts/files/sales_daily.v1.yaml)の CSV: ヘッダつき・CRLF・UTF-8 をファイル全体で gzip。マニフェストは最後に置く
+  python3 - "$work" "$name" <<'PY'
+import gzip, hashlib, json, sys
+from datetime import datetime, timezone
+work, name = sys.argv[1], sys.argv[2]
+rows = ["business_date,order_id,ordered_at,status,total_minor_units,currency,ship_country,ship_region"]
+rows += [f"2026-10-14,verify-{i:04d},2026-10-14T01:00:0{i}.000000Z,PLACED,{1000 * i},JPY,JP,{'JP-13' if i % 2 else ''}" for i in range(1, 4)]
+data = gzip.compress(("\r\n".join(rows) + "\r\n").encode(), mtime=0)
+open(f"{work}/{name}.csv.gz", "wb").write(data)
+manifest = {
+    "file": f"{name}.csv.gz", "recordCount": 3, "sha256": hashlib.sha256(data).hexdigest(), "schemaVersion": "sales_daily.v1",
+    "createdAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "traceparent": "00-" + hashlib.sha256(name.encode()).hexdigest()[:32] + "-00f067aa0ba902b7-01",
+    "correlationId": "verify-" + name, "sizeBytes": len(data),
+}
+open(f"{work}/{name}.manifest.json", "w").write(json.dumps(manifest))
+PY
+  if docker run --rm --network eiaf -e AWS_ACCESS_KEY_ID="$FILE_BATCH_ETL_S3_ACCESS_KEY" -e AWS_SECRET_ACCESS_KEY="$FILE_BATCH_ETL_S3_SECRET_KEY" \
+    -e AWS_DEFAULT_REGION=us-east-1 -v "$work:/work:ro" "$AWS_CLI_IMAGE" --endpoint-url http://seaweedfs:8333 s3 cp /work/ \
+    s3://eiaf-file-exchange/inbox/sales-daily/ --recursive --exclude '*' --include "$name.csv.gz" >/dev/null 2>&1 &&
+    docker run --rm --network eiaf -e AWS_ACCESS_KEY_ID="$FILE_BATCH_ETL_S3_ACCESS_KEY" -e AWS_SECRET_ACCESS_KEY="$FILE_BATCH_ETL_S3_SECRET_KEY" \
+      -e AWS_DEFAULT_REGION=us-east-1 -v "$work:/work:ro" "$AWS_CLI_IMAGE" --endpoint-url http://seaweedfs:8333 s3 cp \
+      "/work/$name.manifest.json" "s3://eiaf-file-exchange/inbox/sales-daily/$name.manifest.json" >/dev/null 2>&1; then
+    pass "file-exchange: 送り手の identity で、売上ファイルとマニフェスト(最後)を受け口に置ける"
+  else
+    fail "file-exchange: 受け口に売上ファイルを置けない"
+  fi
+
+  check "file-exchange: マニフェストの到着で受け取り、archive に収めた(received_file が STORED・ARCHIVE)" \
+    retry 18 5 equals "STORED ARCHIVE" fx_sql "select state || ' ' || destination from exchange.received_file where file_name = '$name'"
+  check "file-exchange: 取引先 partner01 に送った(delivery が SENT)" \
+    retry 18 5 equals "SENT" fx_sql "select state from exchange.delivery where file_name = '$name' and partner_id = 'partner01'"
+
+  # 取引先の側: 届いたファイルを取り出し、GnuPG で復号して署名を確かめる
+  if sftp -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$here/secrets/sftp-b2b.known_hosts" -o LogLevel=ERROR -o BatchMode=yes \
+    -i "$here/secrets/sftp-b2b" -P 19223 -b - partner01@127.0.0.1 >/dev/null 2>&1 <<EOF
+get outbox/$name.csv.gz.pgp $work/$name.csv.gz.pgp
+rm outbox/$name.csv.gz.pgp
+EOF
+  then
+    pass "sftp-b2b: 取引先の outbox に $name.csv.gz.pgp が届いた"
+  else
+    fail "sftp-b2b: 取引先の outbox から .pgp を取り出せない"
+  fi
+  local status=""
+  if [[ -s "$work/$name.csv.gz.pgp" ]]; then
+    docker build -q -t eiaf-gnupg:local --build-arg DEBIAN_IMAGE="$DEBIAN_IMAGE" "$here/images/gnupg" >/dev/null
+    # 取引先の秘密鍵と、EIAF の公開鍵だけを入れた一時の鍵束で、復号と署名の検証をする(status は GnuPG の機械向けの出力)
+    status="$(docker run --rm -i -v "$here/secrets/pgp-partner01.sec.asc:/keys/partner.sec.asc:ro" \
+      -v "$here/secrets/pgp-eiaf.pub.asc:/keys/eiaf.pub.asc:ro" -v "$work:/work" --entrypoint bash eiaf-gnupg:local -c '
+        set -euo pipefail
+        mkdir -m 700 -p "$GNUPGHOME"
+        read -r passphrase || true
+        gpg --batch --quiet --import /keys/eiaf.pub.asc 2>/dev/null
+        gpg --batch --quiet --pinentry-mode loopback --passphrase-fd 3 --import /keys/partner.sec.asc 3<<<"$passphrase" 2>/dev/null
+        gpg --batch --quiet --pinentry-mode loopback --passphrase-fd 3 --status-fd 1 --output /work/decrypted \
+          --decrypt "/work/'"$name"'.csv.gz.pgp" 3<<<"$passphrase" 2>/dev/null
+      ' <"$here/secrets/pgp-partner01.passphrase" || true)"
+  fi
+  local eiaf_fpr
+  eiaf_fpr="$(docker run --rm -i --entrypoint bash eiaf-gnupg:local -c 'mkdir -m 700 -p "$GNUPGHOME"; gpg --batch --with-colons --show-keys' \
+    <"$here/secrets/pgp-eiaf.pub.asc" 2>/dev/null | awk -F: '/^fpr:/ { print $10; exit }')"
+  if grep -q "^\[GNUPG:\] VALIDSIG $eiaf_fpr " <<<"$status" && grep -q '^\[GNUPG:\] DECRYPTION_OKAY' <<<"$status" &&
+    grep -q '^\[GNUPG:\] GOODMDC' <<<"$status"; then
+    pass "GnuPG: 取引先の鍵で復号でき、EIAF の鍵の署名と改竄の検知(MDC)を確かめられる(Bouncy Castle との相互運用)"
+  else
+    fail "GnuPG: 届いたファイルを復号・検証できない($(grep -o -E 'GNUPG:\] [A-Z_]+' <<<"$status" | tr '\n' ' '))"
+  fi
+  if [[ -f "$work/decrypted" ]] && cmp -s "$work/decrypted" "$work/$name.csv.gz"; then
+    pass "GnuPG: 復号した中身が、送り手が置いた売上ファイルと同じ"
+  else
+    fail "GnuPG: 復号した中身が、送り手が置いた売上ファイルと違う"
+  fi
+
+  # メトリクス(OTLP → Prometheus)・アラートのルール・ダッシュボード
+  check "Prometheus: file-exchange が受け取った数を出す(archive)" \
+    retry 18 10 bash -c "curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=sum(eia_file_exchange_files_received_total{file_exchange_destination=\"archive\"})' | grep -q '\"value\"'"
+  check "Prometheus: file-exchange が配送の数を出す(partner01・sent)" \
+    retry 18 10 bash -c "curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=sum(eia_file_exchange_deliveries_total{file_exchange_partner=\"partner01\",file_exchange_outcome=\"sent\"})' | grep -q '\"value\"'"
+  check "Prometheus: ファイル授受のアラートのルールを読み込んでいる" \
+    bash -c "curl -fsS http://localhost:19090/api/v1/rules | python3 -c 'import json,sys; n={r[\"name\"] for g in json.load(sys.stdin)[\"data\"][\"groups\"] for r in g[\"rules\"]}; sys.exit(0 if {\"FileExchangeQuarantined\",\"FileExchangeNameReused\",\"FileExchangeInboxStale\",\"FileExchangeDeliveryFailed\",\"FileExchangePartnerCircuitOpen\"} <= n else 1)'"
+  local dash result
+  dash="$(curl -fsS -u "admin:$GRAFANA_ADMIN_PASSWORD" http://localhost:19300/api/dashboards/uid/eiaf-file || true)"
+  if [[ "$(json 'd["meta"]["folderTitle"] + "/" + d["dashboard"]["title"]' <<<"$dash" 2>/dev/null)" == "EIAF/File — Sales daily" ]]; then
+    pass "Grafana: ダッシュボード File — Sales daily(フォルダ EIAF)を provisioning で読み込んでいる"
+    # quarantine・受け取り済みの名前・配送の失敗・リトライと拒否・アラートは、平常時は空でよい
+    result="$(dashboard_panels_return_data "$dash" "quarantine に移した数(理由ごと)" "受け取り済みの名前で届いた数" \
+      "配送の失敗(取引先ごと)" "取引先の SFTP のリトライと拒否" "ファイル授受のアラート(firing / pending)")"
+    if [[ "$result" == ok ]]; then pass "Grafana: ファイル授受のダッシュボードの全パネルの式が、Prometheus でデータを返す"; else fail "Grafana: ファイル授受のパネルの式が想定外: $result"; fi
+  else
+    fail "Grafana: ダッシュボード eiaf-file を読み込めない"
+  fi
+  rm -rf "$work"
 }
 
 verify_b2b() {
