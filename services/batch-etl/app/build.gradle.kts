@@ -38,6 +38,8 @@ dependencies {
     integrationTestImplementation(platform(libs.aws.sdk.bom))
     integrationTestImplementation(libs.aws.sdk.s3)
     integrationTestImplementation(libs.aws.sdk.url.connection.client)
+    // 置き場が止まっても、取り込みの DAG と SLA のメトリクスに影響しないことを、メトリクスを読んで確かめる(P09 ⑥)
+    integrationTestImplementation(libs.opentelemetry.sdk.testing)
 }
 
 tasks.named<Test>("integrationTest") {

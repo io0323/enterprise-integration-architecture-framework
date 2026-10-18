@@ -10,6 +10,7 @@ import io.eia.platform.filetransfer.store.S3ObjectStore
 import io.eia.platform.observability.Observability
 import io.eia.platform.observability.ObservabilityConfig
 import io.eia.platform.observability.ObservabilityRuntime
+import io.eia.platform.observability.TelemetrySinks
 import io.eia.platform.security.secret.EnvSecretProvider
 import io.eia.platform.security.secret.Secret
 import io.eia.shared.kernel.Result
@@ -91,10 +92,15 @@ internal class BatchEtlServer private constructor(
         private const val VALID_TIMEOUT_SECONDS = 2
         private val logger = LoggerFactory.getLogger(BatchEtlServer::class.java)
 
-        /** serve・run の設定・アプリのロールのパスワード・OTel を用意して、配線を作る。 */
+        /**
+         * serve・run の設定・アプリのロールのパスワード・OTel を用意して、配線を作る。
+         *
+         * @param sinks テレメトリの出力先(統合テストでメトリクスを読むときだけ渡す。null なら OTLP の設定に従う)
+         */
         internal fun wire(
             env: Map<String, String>,
             serviceName: String = "batch-etl",
+            sinks: TelemetrySinks? = null,
         ): Result<Pair<BatchEtlConfig, Pair<Koin, ObservabilityRuntime>>, ValidationError> =
             BatchEtlConfig
                 .fromEnvironment(env)
@@ -110,7 +116,14 @@ internal class BatchEtlServer private constructor(
                     ObservabilityConfig.fromEnvironment(observabilityEnv).map { observability -> inputs to observability }
                 }.map { (inputs, observability) ->
                     val (config, run, password: Secret) = inputs
-                    val runtime = Observability.init(observability)
+                    val runtime =
+                        if (sinks ==
+                            null
+                        ) {
+                            Observability.init(observability)
+                        } else {
+                            Observability.init(observability, sinks, installLogAppender = false)
+                        }
                     val koin = koinApplication { modules(batchEtlModule(config, run, password, EnvSecretProvider(env), runtime)) }.koin
                     config to (koin to runtime)
                 }
@@ -141,8 +154,11 @@ internal class BatchEtlServer private constructor(
             runtime.close()
         }
 
-        fun start(env: Map<String, String>): Result<BatchEtlServer, ValidationError> =
-            wire(env).map { (config, wired) ->
+        fun start(
+            env: Map<String, String>,
+            sinks: TelemetrySinks? = null,
+        ): Result<BatchEtlServer, ValidationError> =
+            wire(env, sinks = sinks).map { (config, wired) ->
                 val (koin, runtime) = wired
                 val scheduler = koin.get<BatchScheduler>()
                 val dataSource = koin.get<HikariDataSource>()
