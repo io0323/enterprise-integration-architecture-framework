@@ -25,6 +25,8 @@ make up PROFILE=order         # core + order-service(先に installDist でイ�
 make certs                    # 開発用の CA と mTLS の証明書を作る(make up も毎回確かめる。残りが 7 日を切ると作り直す)
 make e2e                      # E2E のシナリオ(tests/e2e)。make up PROFILE="order cdc saga batch" で起動した基盤に対して実行する
 make batch-etl ARGS="run 2026-10-13"  # 分析のバッチを 1 日分だけ実行する(make up PROFILE="order batch" の後。docs/runbooks/batch-rerun.md)
+make file-exchange ARGS="receive <名前>"  # ファイル授受の受け取りと配送を 1 回だけ実行する(make up PROFILE=file の後。docs/runbooks/file-exchange.md)
+make pgp-keys                 # 開発用の PGP の鍵を GnuPG で作る(make up PROFILE=file も実行する)
 make ps                       # 状態
 make logs SERVICE=kafka       # ログ
 make stats                    # メモリ使用量(docker stats)
@@ -45,12 +47,12 @@ docker compose -f infra/local/docker-compose.yml --env-file infra/local/images.e
 | `core` | kafka, apicurio, postgres, keycloak, apisix, otel-collector, prometheus, tempo, loki, grafana | 常に起動する |
 | `cdc` | kafka-connect(Debezium), postgres-exporter, kafka-exporter, legacy-migrate・kafka-topics・schema-publish(1 回だけ動いて終わる), legacy-order-acl | Outbox + CDC(P06)、レガシーの CDC と Anti-Corruption Layer(P06 ⑤。ADR-0026)と、その監視(P06 ④) |
 | `iot` | mosquitto | MQTT(P11) |
-| `file` | seaweedfs(S3), sftp | ファイル連携(P09)、Audit のアンカー(P04a) |
+| `file` | seaweedfs(S3), seaweedfs-init, sftp, sftp-b2b, file-exchange-migrate(1 回だけ動いて終わる), file-exchange | ファイル連携(P09。ADR-0032)。file-exchange が受け口の売上ファイルを検査し、取引先の代わりの sftp-b2b(partner01)に PGP で送る。送り手の batch-etl と一緒に動かすときは `make up PROFILE="order batch file"` |
 | `b2b` | seaweedfs(S3), sftp-b2b | B2B / EDI(P12) |
 | `chaos` | toxiproxy | 障害注入(P04b, P14) |
 | `order` | order-migrate・kafka-topics・schema-publish(1 回だけ動いて終わる), order-service, kafka-connect, postgres-exporter, kafka-exporter, seaweedfs, seaweedfs-init | API 連携のサンプル業務サービス(P05。ADR-0024)。SeaweedFS は監査のアンカーの保存先(ADR-0017 §5) |
 | `saga` | inventory-migrate・payment-migrate・shipping-migrate・kafka-topics・schema-publish(1 回だけ動いて終わる), inventory-service, payment-service, shipping-service, kafka-connect, postgres-exporter, kafka-exporter | 注文 Saga の参加者(P07。ADR-0029)。返事は Outbox + Debezium(コネクタ `inventory-outbox`・`payment-outbox`・`shipping-outbox`)で発行する。Orchestrator は order-service(order profile。`make up PROFILE="order saga"` で両方を動かす) |
-| `batch` | batch-etl-migrate・kafka-topics・schema-publish(1 回だけ動いて終わる), batch-etl, kafka-exporter | 注文の分析のバッチ(P08。ADR-0030・ADR-0031)。注文のイベントを書くのは order-service(`make up PROFILE="order batch"` で両方を動かす)。週次の照合は Gateway 経由で order-service を読む |
+| `batch` | batch-etl-migrate・kafka-topics・schema-publish(1 回だけ動いて終わる), batch-etl, kafka-exporter, seaweedfs, seaweedfs-init | 注文の分析のバッチ(P08。ADR-0030・ADR-0031)。注文のイベントを書くのは order-service(`make up PROFILE="order batch"` で両方を動かす)。週次の照合は Gateway 経由で order-service を読む。日次の売上ファイルを SeaweedFS の受け口に置く(P09。置き場が止まっても取り込みの DAG には影響しない) |
 
 Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)。
 
@@ -68,13 +70,13 @@ Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)�
 | 19094 | `toxiproxy:19094` → `kafka:9094` | Kafka(Toxiproxy 経由) | chaos | proxy `kafka-host`。ホスト用の `TOXI_HOST` リスナー(advertised `localhost:19094`)。コンテナからは proxy `kafka-internal` の `toxiproxy:19095` → `kafka:9095`(`TOXI_INTERNAL`) |
 | 19180 | `keycloak:8080` | Keycloak | core | OIDC(realm `eiaf`)。管理コンソール `/admin` |
 | 19222 | `sftp:2222` | SFTP(社内向け) | file | 利用者 `eiaf-file`、公開鍵認証のみ |
-| 19223 | `sftp-b2b:2222` | SFTP(取引先向け) | b2b | 利用者 `partner01`、公開鍵認証のみ |
+| 19223 | `sftp-b2b:2222` | SFTP(取引先向け) | b2b, file | 利用者 `partner01`、公開鍵認証のみ。ホスト鍵は `secrets/sftp-b2b-host-key`(known_hosts は `secrets/sftp-b2b.known_hosts`) |
 | 19300 | `grafana:3000` | Grafana | core | UI(利用者 `admin`) |
 | 19310 | `loki:3100` | Loki | core | API |
 | 19317 | `otel-collector:4317` | OTel Collector | core | OTLP gRPC |
 | 19318 | `otel-collector:4318` | OTel Collector | core | OTLP HTTP |
 | 19320 | `tempo:3200` | Tempo | core | API |
-| 19333 | `seaweedfs:8333` | SeaweedFS | file, b2b, order | S3 API(path-style: `http://localhost:19333/{bucket}/{key}`) |
+| 19333 | `seaweedfs:8333` | SeaweedFS | file, b2b, order, batch | S3 API(path-style: `http://localhost:19333/{bucket}/{key}`) |
 | 19432 | `postgres:5432` | PostgreSQL | core | サービス別 DB |
 | 19433 | `toxiproxy:19433` | PostgreSQL(Toxiproxy 経由) | chaos | 障害注入用 |
 | 19443 | `order-service:8443` | order-service | order | API(`/v1/...`)。**mTLS だけ**(クライアント証明書は開発用 CA の署名で、SAN が `apisix`)。mTLS なしの接続を拒否することの検査と調査用。ヘルスチェック(8081。平文)は公開しない |
@@ -87,7 +89,7 @@ Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)�
 
 | 対象 | 利用者 | 値 |
 |---|---|---|
-| PostgreSQL(サービス別) | `order_service` / `inventory_service` / `payment_service` / `shipping_service` / `legacy_sim` / `batch_etl`(DB 名と同じ。DB の所有者で、マイグレーションに使う) | `.env` の `<SERVICE>_DB_PASSWORD`。他のサービスの DB には接続できない |
+| PostgreSQL(サービス別) | `order_service` / `inventory_service` / `payment_service` / `shipping_service` / `legacy_sim` / `batch_etl` / `file_exchange`(DB 名と同じ。DB の所有者で、マイグレーションに使う) | `.env` の `<SERVICE>_DB_PASSWORD`。他のサービスの DB には接続できない |
 | PostgreSQL(サービス別のアプリ用) | `<DB 名>_app`(例 `order_service_app`)。表を所有せず、権限は各マイグレーションが付ける(監査記録は INSERT と SELECT だけ。ADR-0017) | `.env` の `<SERVICE>_APP_DB_PASSWORD`。**P04a ④ より前に作ったボリュームには無いので、`make clean` が必要** |
 | PostgreSQL(CDC) | `debezium`(REPLICATION) | `DEBEZIUM_DB_PASSWORD` |
 | PostgreSQL(CDC の監視) | `postgres_exporter`(`pg_monitor` だけ。表のデータは読めない) | `POSTGRES_EXPORTER_DB_PASSWORD`。**P06 ④ より前に作ったボリュームには無いので、`make clean` が必要** |
@@ -100,7 +102,11 @@ Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)�
 | S3(管理者) | `eiaf`(Admin)。バケットとポリシーの作成用 | `S3_ACCESS_KEY` / `S3_SECRET_KEY` |
 | S3(監査のアンカーの書込み。サービスごと) | `eiaf-audit-{service}`(今は `eiaf-audit-order`)。バケット `eiaf-audit` の Read / List と、`anchors/{service}/` の下だけの Write。ほかのサービスのプレフィックス・バケットの管理操作・削除・Legal Hold はできない(ADR-0017 §7。Issue #43) | `ORDER_AUDIT_S3_ACCESS_KEY` / `ORDER_AUDIT_S3_SECRET_KEY`。以前の共有の `AUDIT_S3_*` は使われない(.env に残っていても害はない) |
 | S3(監査の検査) | `eiaf-audit-verify`。バケット `eiaf-audit` の Read / List だけ。`make audit-verify` が使う | `AUDIT_VERIFY_S3_ACCESS_KEY` / `AUDIT_VERIFY_S3_SECRET_KEY` |
+| PostgreSQL(ファイル授受) | `file_exchange` / `file_exchange_app` | `FILE_EXCHANGE_DB_PASSWORD` / `FILE_EXCHANGE_APP_DB_PASSWORD`。**P09 ⑥ より前に作ったボリュームには無いので、`make clean` が必要** |
+| S3(ファイル授受の書き手) | `eiaf-file-batch-etl`。バケット `eiaf-file-exchange` の `inbox/sales-daily/` への Write だけ。読めない・消せない・バケットの管理操作はできない(バケットポリシー `seaweedfs/file-bucket-policy.json`) | `FILE_BATCH_ETL_S3_ACCESS_KEY` / `FILE_BATCH_ETL_S3_SECRET_KEY` |
+| S3(ファイル授受) | `eiaf-file-exchange`。バケット `eiaf-file-exchange` の Read / List / Write(検査と移動)。バケットの管理操作はできない | `FILE_EXCHANGE_S3_ACCESS_KEY` / `FILE_EXCHANGE_S3_SECRET_KEY` |
 | SFTP | `eiaf-file` / `partner01` | 秘密鍵 `secrets/sftp-file` / `secrets/sftp-b2b` |
+| PGP(開発用) | 自社 `eiaf`・取引先の代わり `partner01`(`make pgp-keys` が GnuPG で作る) | `secrets/pgp-{eiaf,partner01}.{pub.asc,sec.asc,passphrase}` |
 
 トークンの取得例:
 
@@ -149,6 +155,14 @@ curl -s -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token
   - 監視は Grafana の **Batch — Order analytics**(uid `eiaf-batch`)と `prometheus/rules/batch.rules.yml`。
   - `make verify PROFILE=batch` は、前日の分の自動の実行・`run`・権限・保持期間・メトリクス・ダッシュボードを確かめる(order profile と一緒なら照合も)。
 - **イベント・コマンドの受信(ADR-0028)**: サービスの Consumer(`EventConsumer`)の DLQ・遅れは `prometheus/rules/consumer.rules.yml` のアラートで見る(処理が止まった Consumer は「lag があるのにオフセットが進まない」で判定する)。DLQ のメッセージを戻すのは `make dlq-replay ARGS="--topic <topic>.dlq --limit <n> [--execute]"`(既定は dry-run。ホストの `localhost:19092` に接続する)。手順は `docs/runbooks/event-dlq-replay.md`。
+- **ファイル授受(ADR-0032)**: `make up PROFILE=file` が installDist と開発用の PGP の鍵(`make pgp-keys`)の後に、`seaweedfs-init`
+  (バケット `eiaf-file-exchange` とバケットポリシー)→ `file-exchange-migrate`(所有者)→ `file-exchange`(アプリのロール)の順に動かす。
+  - 受け口(`inbox/sales-daily/`)のマニフェストの到着で受け取り(archive / quarantine)、合格のファイルを取引先の台帳(`file-exchange/partners.json`。
+    秘密情報の名前だけ)の `partner01`(sftp-b2b)に PGP で暗号化・署名して送る。運用者のコマンドは `make file-exchange ARGS="receive <名前> [--restart]"`・`sweep`。
+  - sftp-b2b のホスト鍵は `make env` が作り(`secrets/sftp-b2b-host-key`)、起動時に入れる(`sftp/20-host-key.sh`)。file-exchange はこの鍵に固定して接続する。
+  - 監視は Grafana の **File — Sales daily**(uid `eiaf-file`)と `prometheus/rules/file-exchange.rules.yml`。手順は `docs/runbooks/file-exchange.md`。
+  - `make verify PROFILE=file` は、バケットの権限(両方の identity の管理操作の拒否)・ホスト鍵の固定・売上ファイルの受け取りから配送まで・
+    GnuPG での復号と署名の検証・メトリクス・アラート・ダッシュボードを確かめる。
 - **Toxiproxy**: 起動時に `kafka-host`(19094)、`kafka-internal`(19095)、`postgres`(19433)の proxy を作る(`toxiproxy/toxiproxy.json`)。
 
 ## イメージの更新
@@ -167,18 +181,34 @@ curl -s -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token
 4. `make clean && make up PROFILE=<該当する profile> && make verify PROFILE=<同じ>` を実行し、PR にその結果を載せる。CI(`.github/workflows/infra.yml`)も全 profile で同じ検査を行う。
 
 ### 固定の定期確認(#35)
-`.github/workflows/pin-check.yml` が毎日(と手動の実行で)、固定したイメージと Kafka Connect の成果物を確かめる(ADR-0016 §2・§9)。手元では `python3 -I infra/local/scripts/check-pins.py`(Docker の buildx を使う。Issue は作らない)。
+`.github/workflows/pin-check.yml` が毎日(と手動の実行で)、固定したイメージと Kafka Connect の成果物と、GnuPG のイメージの Debian のパッケージの版を確かめる(ADR-0016 §2・§9)。手元では `python3 -I infra/local/scripts/check-pins.py`(Docker の buildx を使う。Issue は作らない)。
 
 | 検知 | 意味 | 対応 |
 |---|---|---|
 | 固定したダイジェストを取得できない | 上流で削除された。`make up` と CI のイメージの取得が失敗する | **早く直す**。Issue の本文の候補(タグの今のダイジェスト)に上の手順で更新する |
 | タグが別のダイジェストに付け直された | 上流が同じタグで新しいイメージを出した(distroless の `nonroot` など)。固定したダイジェストは取得できるので、今は壊れていない | 次の更新のときに候補へ更新する。候補がない(amd64 / arm64 の片方がない)ときは更新しない |
+| Debian のパッケージの版がリポジトリにない | ポイントリリースなどで固定した版が消えた。GnuPG のイメージを組み立て直せない(`make up PROFILE=file`・`make pgp-keys`・`make verify PROFILE=file` が失敗する) | **早く直す**。Issue の候補の版から選び、下の「GnuPG のイメージ」の手順で更新する |
 | 成果物を取得できない・SHA-256 が合わない | 上流で削除・差し替えられた、または取得の誤り | **SHA-256 を取得した値に書き換えない**。Maven Central(または GitHub のリリース)の `.sha1` / `.sha256` と、手元で取得したファイルの値を確かめる。上流で差し替えられていたら、理由を確かめてから版を上げる |
 
 - 取得の一時的な失敗(Maven Central・レジストリの 4xx/5xx・誤った応答)は、待ってやり直してから判断する(3 回)。イメージの半分以上でタグを取得できないときは、確認の環境(docker・ネットワーク)の問題として失敗で終わり、Issue は作らない。
 - Issue はタイトル `[pin-check] <変数名>:` で、固定ごとに 1 つ。開いている間は、新しい値のときだけコメントが足される。更新の PR で閉じる(`Closes #<番号>`)。
 - Issue を作るのは定期の実行だけ。手動の実行は、既定では作るはずの Issue(作る / コメントする / 報告済み)を Step Summary に表示するだけで、`create_issues` を有効にしたときだけ作る。
 - 確認の仕組みそのものを確かめるときは、手動の実行で `simulate` を有効にする(1 つ目のイメージと成果物を取得できない値に書き換える)。既定どおり `create_issues` は無効のままにし、表示だけで確かめる。Issue の作成と重複の防止は、gh を差し替えた単体テスト(`check_pins_test.py`)で確かめている。
+
+### GnuPG のイメージ
+
+開発用の PGP の鍵の作成と、取引先の側の復号・署名の検証に使う(`images/gnupg/Dockerfile`。P09 ⑥)。ベースは `images.env` の `DEBIAN_IMAGE`、
+パッケージ(`gpg`・`gpg-agent`・`gpgconf`)は Debian の版で固定する(`ARG GPG_DEB_VERSION`)。
+
+- Debian のポイントリリースで古い版はリポジトリから消える(snapshot.debian.org にだけ残る)。消えると組み立て直せないので、
+  定期確認(上の #35)が固定した版を Debian の一覧(`DEBIAN_SUITE` と `-updates`・`-security`。amd64 と arm64)で確かめ、消えていれば Issue を作る。
+- 版を上げる: ベースのイメージと同じ Debian の版(`DEBIAN_SUITE`)の今の版を確かめて `ARG GPG_DEB_VERSION` を書き換える。
+
+  ```bash
+  docker run --rm debian:13.7-slim sh -c 'apt-get update -qq && apt-cache policy gpg gpg-agent gpgconf'
+  ```
+
+  `make pgp-keys`(鍵を消してから)と `make verify PROFILE=file` で確かめる。
 
 ### Kafka Connect(Debezium)のイメージ
 

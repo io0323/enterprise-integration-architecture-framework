@@ -4,6 +4,8 @@
 - 注文の分析のバッチ `batch-etl`(ADR-0031)。
   - 日次の DAG `batch-etl.order-daily`: 毎日 01:00 JST に前日の分を取り込み、日次のパーティションを作る。SLA の期限は翌日 06:00 JST。
   - 週次の照合 `batch-etl.order-reconcile`: 毎週月曜 07:00 JST に起動し、order-service の日次の集計と、前日から 38 日前までを比べる。
+  - 日次の売上ファイル `batch-etl.sales-file`(INT-SALES-004。ADR-0031 §8): 日次の DAG の同じ日の成功で起動し、ファイル授受のバケットの受け口
+    (`eiaf-file-exchange` の `inbox/sales-daily/`)に置く。SLA の期限は 07:00 JST。受け取り以降は file-exchange(`docs/runbooks/file-exchange.md`)。
 - DAG の実行の仕組み `platform/batch`(ADR-0030):
   - 実行は DAG とパーティションごとに 1 つだけ。
   - 成功したステップは再実行で飛ばす。
@@ -40,6 +42,8 @@
 |---|---|
 | `make batch-etl ARGS="run 2026-10-13"` | その日の日次の DAG を実行する。失敗・中断した実行は、失敗したステップから再開する。成功した日は何もしない |
 | `make batch-etl ARGS="run 2026-10-13 --restart"` | その日を最初から作り直す(世代が 1 増える)。取り込みは冪等、パーティションは置換なので、何度実行しても結果は同じ |
+| `make batch-etl ARGS="sales-file 2026-10-13"` | その日の売上ファイルを置く(日次の DAG が成功している日だけ)。失敗・中断した実行は再開する。成功した日は何もしない |
+| `make batch-etl ARGS="sales-file 2026-10-13 --restart"` | その日の売上ファイルを新しい版(名前の連番が 1 増える)で置き直す |
 | `make batch-etl ARGS="reconcile 2026-10-19"` | その日を実行の日として照合する。一致しない日があれば終了コード 3 |
 | `make batch-etl ARGS="skip-lost-events"` | 保持期間を過ぎて消えたイベントの件数を表示する(何も変えない)。`--confirm` で消えた範囲を飛ばす |
 
@@ -59,6 +63,21 @@
    | `reconcile` が `unavailable` | order-service・Gateway・Keycloak に問い合わせられない(その日は UNVERIFIED) | 戻ってから `reconcile <日付>` |
 2. 原因を除いてから `make batch-etl ARGS="run <日付>"`。失敗したステップから再開する。
 3. 前の日も失敗していれば、古い日から順に実行する(遅れて届いたデータの作り直しは、実行の日から 31 日前までが対象。ADR-0031 §5)。
+
+## 売上ファイルを置き直すとき
+`BatchRunFailed`(`batch_dag="batch-etl.sales-file"`)、または受け手(file-exchange)が quarantine に移したとき。
+
+- **置き場(SeaweedFS)が止まっていた**: 売上ファイルの DAG だけが失敗する。注文の取り込みの DAG(`order-daily`)とその SLA には影響しない
+  (別の DAG。P09 ⑥ の統合テスト `BatchEtlAppIT` で確かめた)。置き場が戻ってから `make batch-etl ARGS="sales-file <日付>"`。
+  失敗したステップから再開し、同じ名前(同じ版)で置く。
+- **受け手が quarantine に移した**(改竄・欠損・形式の誤り。`FileExchangeQuarantined`): 原因を直してから
+  `make batch-etl ARGS="sales-file <日付> --restart"` で **新しい版** を置く。同じ名前で置き直すと、受け手は受け取り済みの名前として扱い、
+  取り込まない(`FileExchangeNameReused`。docs/runbooks/file-exchange.md#名前の使い回し)。
+- その日の日次の DAG を作り直した(`run <日付> --restart`)ときも、売上ファイルは自動では置き直さない。必要なら `sales-file <日付> --restart`。
+- 置いた版は実行の記録で確かめる(`generation` が名前の連番。受け取りは file-exchange の `exchange.received_file`):
+  ```sql
+  SELECT partition_key, status, generation, finished_at FROM batch.batch_run WHERE dag_id = 'batch-etl.sales-file' ORDER BY started_at DESC LIMIT 10;
+  ```
 
 ## SLA に遅れる見込みのとき
 `BatchSlaAtRisk`。期限(06:00 JST)までに終わらない見込み(前段のステップの遅れによる待ちを含む予測。ADR-0030 §6)。`BatchSlaMissed` は期限を過ぎて終わった。
