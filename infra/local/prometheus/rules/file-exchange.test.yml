@@ -1,0 +1,104 @@
+# file-exchange.rules.yml の単体テスト(promtool test rules。make alerts-test)。
+rule_files:
+  - file-exchange.rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: quarantine に移したら理由ごとに知らせる。archive だけなら出さない
+    interval: 1m
+    input_series:
+      - series: 'eia_file_exchange_files_received_total{job="file-exchange",file_exchange_destination="archive",file_exchange_reason="none"}'
+        values: "0 1 2 3 4"
+      - series: 'eia_file_exchange_files_received_total{job="file-exchange",file_exchange_destination="quarantine",file_exchange_reason="checksum_mismatch"}'
+        values: "0 0 0 1 1"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: FileExchangeQuarantined
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: FileExchangeQuarantined
+        exp_alerts:
+          - exp_labels: { severity: warning, job: file-exchange, file_exchange_reason: checksum_mismatch }
+            exp_annotations:
+              summary: "受け取ったファイルを quarantine に移した(理由 checksum_mismatch)"
+              runbook: docs/runbooks/file-exchange.md#quarantine-に移したとき
+
+  - name: 名前の使い回しは知らせる。同じ中身の送り直し(duplicate)は知らせない
+    interval: 1m
+    input_series:
+      - series: 'eia_file_exchange_files_extra_total{job="file-exchange",file_exchange_reason="duplicate"}'
+        values: "0 1 2 3"
+      - series: 'eia_file_exchange_files_extra_total{job="file-exchange",file_exchange_reason="name_reused"}'
+        values: "0 0 0 1"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: FileExchangeNameReused
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: FileExchangeNameReused
+        exp_alerts:
+          - exp_labels: { severity: warning, job: file-exchange }
+            exp_annotations:
+              summary: "受け取り済みの名前で、中身の違うファイルが届いた(名前の使い回し)"
+              runbook: docs/runbooks/file-exchange.md#名前の使い回し
+
+  - name: 受け口の滞留は 1 時間を超えて 10 分続けば知らせる。1 時間以内なら出さない
+    interval: 1m
+    input_series:
+      - series: 'eia_file_exchange_inbox_oldest_age_seconds{job="file-exchange"}'
+        values: "3000+60x30"
+    alert_rule_test:
+      # 3600 秒を超えるのは 11 分から。10 分続く前(15 分)は出さない
+      - eval_time: 15m
+        alertname: FileExchangeInboxStale
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: FileExchangeInboxStale
+        exp_alerts:
+          - exp_labels: { severity: warning, job: file-exchange }
+            exp_annotations:
+              summary: "受け口に 1 時間を超えて残っているファイルがある"
+              runbook: docs/runbooks/file-exchange.md#受け口に滞留しているとき
+
+  - name: 配送の失敗は取引先ごとに知らせる。送った・相手の側にあった・送信済みは知らせない
+    interval: 1m
+    input_series:
+      - series: 'eia_file_exchange_deliveries_total{job="file-exchange",file_exchange_partner="partner01",file_exchange_outcome="sent"}'
+        values: "0 1 2 3"
+      - series: 'eia_file_exchange_deliveries_total{job="file-exchange",file_exchange_partner="partner01",file_exchange_outcome="already_present"}'
+        values: "0 0 1 1"
+      - series: 'eia_file_exchange_deliveries_total{job="file-exchange",file_exchange_partner="partner02",file_exchange_outcome="failed"}'
+        values: "0 0 0 1"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: FileExchangeDeliveryFailed
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: FileExchangeDeliveryFailed
+        exp_alerts:
+          - exp_labels: { severity: warning, job: file-exchange, file_exchange_partner: partner02 }
+            exp_annotations:
+              summary: "取引先 partner02 にファイルを送れなかった"
+              runbook: docs/runbooks/file-exchange.md#取引先に送れないとき
+
+  - name: 取引先の SFTP の Circuit Breaker が 5 分を超えて開けば知らせる。ほかの依存先・短い Open は知らせない
+    interval: 1m
+    input_series:
+      - series: 'eia_resilience_circuit_breaker_state_ratio{job="file-exchange",eia_dependency_name="sftp-partner01",state="open"}'
+        values: "0 1 1 1 1 1 1 1 1"
+      - series: 'eia_resilience_circuit_breaker_state_ratio{job="file-exchange",eia_dependency_name="sftp-partner02",state="open"}'
+        values: "0 1 1 0 0 0 0 0 0"
+      - series: 'eia_resilience_circuit_breaker_state_ratio{job="batch-etl",eia_dependency_name="order-service",state="open"}'
+        values: "1 1 1 1 1 1 1 1 1"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: FileExchangePartnerCircuitOpen
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: FileExchangePartnerCircuitOpen
+        exp_alerts:
+          - exp_labels: { severity: warning, job: file-exchange, eia_dependency_name: sftp-partner01 }
+            exp_annotations:
+              summary: "取引先の SFTP(sftp-partner01)の Circuit Breaker が開いている"
+              runbook: docs/runbooks/file-exchange.md#取引先に送れないとき

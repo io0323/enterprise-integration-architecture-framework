@@ -1,0 +1,29 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "FileIdentitiesCannotManageBucket",
+      "Effect": "Deny",
+      "Principal": {
+        "AWS": ["arn:aws:iam::*:user/eiaf-file-batch-etl", "arn:aws:iam::*:user/eiaf-file-exchange"]
+      },
+      "Action": [
+        "s3:PutBucketPolicy",
+        "s3:DeleteBucketPolicy",
+        "s3:DeleteBucket",
+        "s3:PutBucketVersioning",
+        "s3:PutBucketObjectLockConfiguration",
+        "s3:PutLifecycleConfiguration",
+        "s3:PutBucketAcl"
+      ],
+      "Resource": ["arn:aws:s3:::eiaf-file-exchange", "arn:aws:s3:::eiaf-file-exchange/*"]
+    },
+    {
+      "Sid": "SalesFileWriterCannotDelete",
+      "Effect": "Deny",
+      "Principal": { "AWS": "arn:aws:iam::*:user/eiaf-file-batch-etl" },
+      "Action": ["s3:DeleteObject", "s3:DeleteObjectVersion"],
+      "Resource": ["arn:aws:s3:::eiaf-file-exchange/*"]
+    }
+  ]
+}

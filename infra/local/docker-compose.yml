@@ -345,6 +345,9 @@ services:
         condition: service_completed_successfully
       kafka-topics:
         condition: service_completed_successfully
+      # 起動の順序だけ(売上ファイルのバケットを作ってから)。起動の後に置き場が止まっても batch-etl は動き続ける
+      seaweedfs-init:
+        condition: service_healthy
       otel-collector:
         condition: service_healthy
     environment:
@@ -356,10 +359,79 @@ services:
       # トークンの iss は Keycloak の KC_HOSTNAME(http://localhost:19180)。Gateway・order-service の検証と同じ
       BATCH_ETL_TOKEN_URL: http://keycloak:8080/realms/eiaf/protocol/openid-connect/token
       BATCH_ETL_CLIENT_SECRET: ${EIAF_BATCH_ETL_CLIENT_SECRET:?make env を実行してください}
+      # 日次の売上ファイル(INT-SALES-004。ADR-0031 §8)。受け口(inbox/sales-daily/)に書くだけの identity で置く。
+      # 置き場が止まっても、売上ファイルの DAG が失敗するだけで、注文の取り込みの DAG とその SLA には影響しない(P09 ⑥ の承認の条件 2)
+      BATCH_ETL_FILE_S3_ENDPOINT: http://seaweedfs:8333
+      BATCH_ETL_FILE_S3_ACCESS_KEY: ${FILE_BATCH_ETL_S3_ACCESS_KEY:?make env を実行してください}
+      BATCH_ETL_FILE_S3_SECRET_KEY: ${FILE_BATCH_ETL_S3_SECRET_KEY:?}
       OTEL_SERVICE_NAME: batch-etl
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
     volumes:
       - *probe-volume
+    mem_limit: 256m
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "/probe/bin/wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/health/ready"]
+
+  # ファイル授受(file-exchange。P09。ADR-0032)。マイグレーションは所有者のパスワードを渡す唯一のコンテナ
+  file-exchange-migrate:
+    build: &file-exchange-build
+      context: ../../services/file-exchange/app
+      args:
+        JAVA_RUNTIME_IMAGE: ${JAVA_RUNTIME_IMAGE:?}
+    profiles: [file]
+    command: ["migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      FILE_EXCHANGE_DB_URL: jdbc:postgresql://postgres:5432/file_exchange
+      FILE_EXCHANGE_DB_PASSWORD: ${FILE_EXCHANGE_DB_PASSWORD:?make env を実行してください}
+      OTEL_SERVICE_NAME: file-exchange
+    mem_limit: 256m
+    restart: "no"
+
+  # 受け口(バケット eiaf-file-exchange の inbox/sales-daily/)に届いたファイルを検査して archive / quarantine に移し、合格のファイルを
+  # 取引先(sftp-b2b の partner01)に PGP で暗号化・署名して送る。アプリのロールのパスワードだけを渡す。
+  # - 取引先の台帳(file-exchange/partners.json)には秘密情報の名前だけを書き、値は secrets/ のファイルを _FILE で渡す
+  # - 鍵(secrets/*。0600)を読めるよう、ホストの利用者の uid で動かす(Makefile の EIAF_UID。root では make up が止まる)
+  # - 取引先の SFTP には依存しない(止まっていても受け取りは動き、配送は取引先ごとの Circuit Breaker と再実行で続ける)
+  file-exchange:
+    build: *file-exchange-build
+    profiles: [file]
+    command: ["serve"]
+    user: "${EIAF_UID:-65532}:${EIAF_GID:-65532}"
+    depends_on:
+      file-exchange-migrate:
+        condition: service_completed_successfully
+      seaweedfs-init:
+        condition: service_healthy
+      otel-collector:
+        condition: service_healthy
+    environment:
+      FILE_EXCHANGE_DB_URL: jdbc:postgresql://postgres:5432/file_exchange
+      FILE_EXCHANGE_APP_DB_PASSWORD: ${FILE_EXCHANGE_APP_DB_PASSWORD:?make env を実行してください}
+      FILE_EXCHANGE_S3_ENDPOINT: http://seaweedfs:8333
+      FILE_EXCHANGE_S3_ACCESS_KEY: ${FILE_EXCHANGE_S3_ACCESS_KEY:?make env を実行してください}
+      FILE_EXCHANGE_S3_SECRET_KEY: ${FILE_EXCHANGE_S3_SECRET_KEY:?}
+      FILE_EXCHANGE_PARTNERS_FILE: /config/partners.json
+      # 自社の署名の鍵(make pgp-keys が GnuPG で作る)
+      FILE_EXCHANGE_PGP_SECRET_KEY_FILE: /secrets/pgp-eiaf.sec.asc
+      FILE_EXCHANGE_PGP_PASSPHRASE_FILE: /secrets/pgp-eiaf.passphrase
+      # 取引先 partner01 の鍵(台帳に書いた名前)
+      PARTNER01_SFTP_KNOWN_HOSTS_FILE: /secrets/sftp-b2b.known_hosts
+      PARTNER01_SFTP_KEY_FILE: /secrets/sftp-b2b
+      PARTNER01_PGP_PUBLIC_KEY_FILE: /secrets/pgp-partner01.pub.asc
+      OTEL_SERVICE_NAME: file-exchange
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    volumes:
+      - *probe-volume
+      - ./file-exchange/partners.json:/config/partners.json:ro
+      - ./secrets/pgp-eiaf.sec.asc:/secrets/pgp-eiaf.sec.asc:ro
+      - ./secrets/pgp-eiaf.passphrase:/secrets/pgp-eiaf.passphrase:ro
+      - ./secrets/pgp-partner01.pub.asc:/secrets/pgp-partner01.pub.asc:ro
+      - ./secrets/sftp-b2b.known_hosts:/secrets/sftp-b2b.known_hosts:ro
+      - ./secrets/sftp-b2b:/secrets/sftp-b2b:ro
     mem_limit: 256m
     healthcheck:
       <<: *healthcheck
@@ -496,24 +568,29 @@ services:
 
   # ---------------------------------------------------------------- file / b2b / order
   # S3 互換オブジェクトストレージ(ADR-0015)。master・volume・filer・S3 ゲートウェイを 1 プロセスで動かす
-  # order profile では、order-service が監査のアンカーを保存する(ADR-0017 §5)
+  # order profile では、order-service が監査のアンカーを保存する(ADR-0017 §5)。batch profile では、batch-etl が日次の売上ファイルを置く(P09)
   seaweedfs:
     image: ${SEAWEEDFS_IMAGE:?}
-    profiles: [file, b2b, order]
+    profiles: [file, b2b, order, batch]
     # S3 の認証情報(.env)から設定ファイルを生成してから起動する。
     # - eiaf: 管理者(バケットとポリシーの作成用)
     # - eiaf-audit-{service}: サービスごとの監査のアンカーの書込み用(Issue #43。ADR-0017 §7)。Write は anchors/{service}/ の下だけ
     #   (プレフィックスに限った Write はバケットの管理操作も含まない)。自分のプレフィックスの Legal Hold と削除は、seaweedfs-init が
     #   設定するバケットポリシーで拒否する。アンカーを書くサービスを足すときは、ここ・env.example・バケットポリシーに同じ形で足す
     # - eiaf-audit-verify: 監査の検査(make audit-verify)専用。バケット eiaf-audit の Read / List だけ
+    # - eiaf-file-batch-etl: 日次の売上ファイルの書き手(batch-etl)。バケット eiaf-file-exchange の受け口 inbox/sales-daily/ に Write だけ
+    # - eiaf-file-exchange: ファイル授受(file-exchange)。バケット eiaf-file-exchange の Read / List / Write(検査と移動)。
+    #   ファイル授受の 2 つの identity のバケットの管理操作は、seaweedfs-init が設定するバケットポリシーで拒否する(P09 ⑥)
     entrypoint:
       - sh
       - -c
       - >-
         mkdir -p /etc/seaweedfs &&
-        printf '{"identities":[{"name":"eiaf","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","Write","List","Tagging"]},{"name":"eiaf-audit-order","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Read:eiaf-audit","List:eiaf-audit","Write:eiaf-audit/anchors/order/*"]},{"name":"eiaf-audit-verify","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Read:eiaf-audit","List:eiaf-audit"]}]}'
+        printf '{"identities":[{"name":"eiaf","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","Write","List","Tagging"]},{"name":"eiaf-audit-order","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Read:eiaf-audit","List:eiaf-audit","Write:eiaf-audit/anchors/order/*"]},{"name":"eiaf-audit-verify","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Read:eiaf-audit","List:eiaf-audit"]},{"name":"eiaf-file-batch-etl","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Write:eiaf-file-exchange/inbox/sales-daily/*"]},{"name":"eiaf-file-exchange","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Read:eiaf-file-exchange","List:eiaf-file-exchange","Write:eiaf-file-exchange"]}]}'
         "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY" "$$ORDER_AUDIT_S3_ACCESS_KEY" "$$ORDER_AUDIT_S3_SECRET_KEY"
-        "$$AUDIT_VERIFY_S3_ACCESS_KEY" "$$AUDIT_VERIFY_S3_SECRET_KEY" > /etc/seaweedfs/s3.json &&
+        "$$AUDIT_VERIFY_S3_ACCESS_KEY" "$$AUDIT_VERIFY_S3_SECRET_KEY"
+        "$$FILE_BATCH_ETL_S3_ACCESS_KEY" "$$FILE_BATCH_ETL_S3_SECRET_KEY" "$$FILE_EXCHANGE_S3_ACCESS_KEY" "$$FILE_EXCHANGE_S3_SECRET_KEY"
+        > /etc/seaweedfs/s3.json &&
         exec weed server -dir=/data -ip=seaweedfs -ip.bind=0.0.0.0
         -master.volumeSizeLimitMB=256 -volume.max=32
         -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3.json
@@ -524,6 +601,10 @@ services:
       ORDER_AUDIT_S3_SECRET_KEY: ${ORDER_AUDIT_S3_SECRET_KEY:?}
       AUDIT_VERIFY_S3_ACCESS_KEY: ${AUDIT_VERIFY_S3_ACCESS_KEY:?make env を実行してください}
       AUDIT_VERIFY_S3_SECRET_KEY: ${AUDIT_VERIFY_S3_SECRET_KEY:?}
+      FILE_BATCH_ETL_S3_ACCESS_KEY: ${FILE_BATCH_ETL_S3_ACCESS_KEY:?make env を実行してください}
+      FILE_BATCH_ETL_S3_SECRET_KEY: ${FILE_BATCH_ETL_S3_SECRET_KEY:?}
+      FILE_EXCHANGE_S3_ACCESS_KEY: ${FILE_EXCHANGE_S3_ACCESS_KEY:?make env を実行してください}
+      FILE_EXCHANGE_S3_SECRET_KEY: ${FILE_EXCHANGE_S3_SECRET_KEY:?}
     ports:
       - 127.0.0.1:19333:8333
     volumes:
@@ -533,11 +614,12 @@ services:
       <<: *healthcheck
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8333/healthz"]
 
-  # 監査のアンカー用のバケット(eiaf-audit。Object Lock)とバケットポリシーを作る(ADR-0017)。make up のたびに実行し、終えたら待機する。
+  # 監査のアンカー用のバケット(eiaf-audit。Object Lock)と、ファイル授受のバケット(eiaf-file-exchange。P09 ⑥)と、
+  # それぞれのバケットポリシーを作る(ADR-0017・ADR-0032)。make up のたびに実行し、終えたら待機する。
   # 完了はヘルスチェック(完了のファイル)で示す。終了させると、Compose v2.38 の up --wait が失敗として扱うため
   seaweedfs-init:
     image: ${AWS_CLI_IMAGE:?}
-    profiles: [file, b2b, order]
+    profiles: [file, b2b, order, batch]
     depends_on:
       seaweedfs:
         condition: service_healthy
@@ -549,6 +631,8 @@ services:
     volumes:
       - ./seaweedfs/init-audit-bucket.sh:/init/init-audit-bucket.sh:ro
       - ./seaweedfs/audit-bucket-policy.json:/init/audit-bucket-policy.json:ro
+      - ./seaweedfs/init-file-bucket.sh:/init/init-file-bucket.sh:ro
+      - ./seaweedfs/file-bucket-policy.json:/init/file-bucket-policy.json:ro
     mem_limit: 256m
     restart: "no"
     healthcheck:
@@ -579,10 +663,12 @@ services:
       <<: *healthcheck
       test: ["CMD", "nc", "-z", "127.0.0.1", "2222"]
 
-  # SFTP(b2b profile。取引先向け。ADR-0008 で B2B のプロトコルは SFTP のみ)。社内向けの sftp とは利用者・鍵・保存領域を分ける
+  # SFTP(b2b profile。取引先向け。ADR-0008 で B2B のプロトコルは SFTP のみ)。社内向けの sftp とは利用者・鍵・保存領域を分ける。
+  # file profile では、file-exchange が日次の売上ファイルを送る取引先(partner01)の代わり(P09。ADR-0032 §8)。
+  # ホスト鍵は make env が作ったもの(secrets/sftp-b2b-host-key)を起動時に入れる。接続する側は known_hosts でこの鍵に固定する
   sftp-b2b:
     image: ${SFTP_IMAGE:?}
-    profiles: [b2b]
+    profiles: [b2b, file]
     environment:
       PUID: 1000
       PGID: 1000
@@ -596,7 +682,10 @@ services:
       - 127.0.0.1:19223:2222
     volumes:
       - ./secrets/sftp-b2b.pub:/keys/sftp-b2b.pub:ro
+      - ./secrets/sftp-b2b-host-key:/keys/host/ssh_host_ed25519_key:ro
+      - ./secrets/sftp-b2b-host-key.pub:/keys/host/ssh_host_ed25519_key.pub:ro
       - ./sftp/10-directories.sh:/custom-cont-init.d/10-directories.sh:ro
+      - ./sftp/20-host-key.sh:/custom-cont-init.d/20-host-key.sh:ro
       - sftp-b2b-data:/config
     mem_limit: 64m
     healthcheck:
@@ -760,6 +849,7 @@ services:
       SHIPPING_DB_PASSWORD: ${SHIPPING_DB_PASSWORD:?}
       LEGACY_SIM_DB_PASSWORD: ${LEGACY_SIM_DB_PASSWORD:?}
       BATCH_ETL_DB_PASSWORD: ${BATCH_ETL_DB_PASSWORD:?}
+      FILE_EXCHANGE_DB_PASSWORD: ${FILE_EXCHANGE_DB_PASSWORD:?make env を実行してください}
       # アプリ用のロール({name}_app。ADR-0017)。追加前のボリュームには作られないため make clean が必要(infra/local/README.md)
       ORDER_APP_DB_PASSWORD: ${ORDER_APP_DB_PASSWORD:?make env を実行してください}
       INVENTORY_APP_DB_PASSWORD: ${INVENTORY_APP_DB_PASSWORD:?}
@@ -767,6 +857,8 @@ services:
       SHIPPING_APP_DB_PASSWORD: ${SHIPPING_APP_DB_PASSWORD:?}
       LEGACY_SIM_APP_DB_PASSWORD: ${LEGACY_SIM_APP_DB_PASSWORD:?}
       BATCH_ETL_APP_DB_PASSWORD: ${BATCH_ETL_APP_DB_PASSWORD:?}
+      # file-exchange の DB(P09 ⑥)。追加前のボリュームには作られないため make clean が必要(infra/local/README.md)
+      FILE_EXCHANGE_APP_DB_PASSWORD: ${FILE_EXCHANGE_APP_DB_PASSWORD:?make env を実行してください}
       KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?}
       APICURIO_DB_PASSWORD: ${APICURIO_DB_PASSWORD:?}
       DEBEZIUM_DB_PASSWORD: ${DEBEZIUM_DB_PASSWORD:?make env を実行してください}

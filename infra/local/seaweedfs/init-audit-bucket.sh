@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # 監査のアンカー用のバケット(eiaf-audit)を作り、audit の identity の管理操作を拒否するバケットポリシーを設定する(ADR-0017)。
+# 続けて、ファイル授受のバケット(eiaf-file-exchange)を作る(init-file-bucket.sh。P09 ⑥)。
 # seaweedfs-init コンテナ(AWS CLI のイメージ)が、管理者の資格情報で `make up` のたびに実行する。何度実行しても結果は同じ。
 # 初期化を終えたら完了のファイルを作って待機する(終了しない)。`make up`(`up --wait`)は、ヘルスチェックでこのファイルを見て完了を待つ。
 # 終了させない理由: Compose v2.38(CI)の `up --wait` は、終了コード 0 で終わったコンテナも失敗として扱うため(ADR-0017 の Consequences)。
@@ -30,6 +31,9 @@ fi
 # ポリシーは毎回設定し直す(ファイルの変更を反映し、ストレージ側で失われていても戻す)
 s3api put-bucket-policy --bucket "$bucket" --policy file:///init/audit-bucket-policy.json
 echo "$bucket のバケットポリシーを設定しました"
+
+# ファイル授受のバケット(P09 ⑥)
+bash /init/init-file-bucket.sh
 
 touch "$ready"
 # SIGTERM(make down)ですぐに止まるよう、sleep をバックグラウンドで待つ
