@@ -39,6 +39,9 @@ import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
+import io.opentelemetry.sdk.metrics.data.DoublePointData
+import io.opentelemetry.sdk.metrics.data.LongPointData
+import io.opentelemetry.sdk.testing.exporter.InMemoryMetricReader
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -133,10 +136,13 @@ class BatchEtlAppIT :
             ).use { store -> (store.list(filePrefix) as? Result.Ok)?.value?.map { it.key } ?: fail("一覧できません") }
         }
 
-        fun query(sql: String): String? {
+        fun query(
+            sql: String,
+            database: String = "batch_etl",
+        ): String? {
             val dataSource =
                 PGSimpleDataSource().apply {
-                    setURL(postgres.jdbcUrl.replaceAfterLast('/', "batch_etl"))
+                    setURL(postgres.jdbcUrl.replaceAfterLast('/', database))
                     user = postgres.username
                     password = postgres.password
                 }
@@ -385,6 +391,81 @@ class BatchEtlAppIT :
                 }
                 val compact = yesterday.replace("-", "")
                 fileKeys().any { it.startsWith("${filePrefix}sales_daily_$compact") && it.endsWith(".manifest.json") } shouldBe true
+            } finally {
+                server.stop()
+            }
+        }
+
+        test("serve: 置き場(S3)が止まっていても、売上ファイルの DAG が失敗するだけで、注文の取り込みの DAG とその SLA に影響しない") {
+            // 別の DB で動かす(前のテストで前日の分は成功している)。置き場は接続を受け付けない宛先(止まっている)にする
+            val database = "batch_etl_s3_down"
+            PGSimpleDataSource()
+                .apply {
+                    setURL(postgres.jdbcUrl)
+                    user = postgres.username
+                    password = postgres.password
+                }.connection
+                .use { c ->
+                    c.createStatement().use { s ->
+                        s.execute("CREATE DATABASE $database OWNER batch_etl")
+                        s.execute("REVOKE ALL ON DATABASE $database FROM PUBLIC")
+                        s.execute("GRANT CONNECT ON DATABASE $database TO batch_etl_app")
+                    }
+                }
+            val dbUrl = postgres.jdbcUrl.replaceAfterLast('/', database)
+            BatchEtlCommands.run(
+                listOf("migrate"),
+                mapOf(BatchEtlConfig.DB_URL to dbUrl, BatchEtlConfig.OWNER_PASSWORD.value to ownerPassword),
+            ) shouldBe BatchEtlCommands.OK
+            val yesterday = BusinessDay.of(Clock.System.now()).minusDays(1).toString()
+            val reader = InMemoryMetricReader.create()
+            val env =
+                appEnv() + fileEnv() +
+                    mapOf(
+                        BatchEtlConfig.DB_URL to dbUrl,
+                        BatchEtlConfig.DAILY_AT to "00:00",
+                        // 前日の分の期限を今日の終わりにする(既定の 06:00 だと、テストを朝の後に動かすと必ず期限を過ぎて終わり、
+                        // 置き場とは関係なく sla.missed が出る)
+                        BatchEtlConfig.SLA_AT to "23:59",
+                        BatchEtlConfig.FILE_SLA_AT to "23:59",
+                        BatchEtlConfig.FILE_S3_ENDPOINT to "http://127.0.0.1:9",
+                    )
+            val server = (BatchEtlServer.start(env, TelemetrySinks(metricReaders = listOf(reader))) as? Result.Ok)?.value ?: fail("起動できません")
+
+            fun status(dag: String) =
+                query("SELECT status FROM batch.batch_run WHERE dag_id = '$dag' AND partition_key = '$yesterday'", database)
+
+            try {
+                withTimeout(90.seconds) { while (status("batch-etl.order-daily") != "SUCCEEDED") delay(500) }
+                // 売上ファイルの DAG はステップのリトライの後に失敗する(置き場に接続できない)
+                withTimeout(120.seconds) { while (status("batch-etl.sales-file") != "FAILED") delay(500) }
+                query("SELECT count(*) FROM mart.partition_build WHERE business_date = '$yesterday'", database) shouldBe "1"
+                ktor.get("http://localhost:${server.healthPort}/health/ready").status shouldBe HttpStatusCode.OK
+
+                val metrics = reader.collectAllMetrics()
+
+                fun points(name: String) =
+                    metrics
+                        .filter { it.name == name }
+                        .flatMap { it.data.points }
+                        .map { point -> point.attributes.asMap().mapKeys { it.key.key } to point }
+
+                fun runs(
+                    dag: String,
+                    status: String,
+                ) = points("eia.batch.runs")
+                    .filter { (attributes, _) -> attributes["batch.dag"] == dag && attributes["batch.run.status"] == status }
+                    .sumOf { (_, point) -> (point as LongPointData).value }
+
+                // 取り込みの DAG は成功だけ。失敗も SLA の期限の超過もない。余裕の予測は出ていない(実行中・失敗の実行がない)か、負でない
+                runs("batch-etl.order-daily", "succeeded") shouldBe 1L
+                runs("batch-etl.order-daily", "failed") shouldBe 0L
+                points("eia.batch.sla.missed").none { (attributes, _) -> attributes["batch.dag"] == "batch-etl.order-daily" } shouldBe true
+                points("eia.batch.sla.slack")
+                    .filter { (attributes, _) -> attributes["batch.dag"] == "batch-etl.order-daily" }
+                    .all { (_, point) -> (point as DoublePointData).value >= 0 } shouldBe true
+                // 売上ファイルの DAG の失敗は、その DAG のメトリクスにだけ出る(BatchRunFailed は batch.dag ごと)
+                runs("batch-etl.sales-file", "failed") shouldBe 1L
             } finally {
                 server.stop()
             }
