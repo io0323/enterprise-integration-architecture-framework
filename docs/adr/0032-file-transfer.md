@@ -98,6 +98,20 @@ S3 の部分は P09 ③a、SFTP と PGP(§8)は ③b で決めた。Parquet の�
 
 ### 7. 監視と運用(⑤・⑥)
 - 不合格の数(理由ごと)・移動の失敗・受け口に残っている時間をメトリクスにし、アラートと Runbook を ⑤・⑥ で足す。ラベルにファイル名は入れない(系列が増え続けるため)。
+- **ローカル基盤(P09 ⑥)**
+  - バケット `eiaf-file-exchange`(Object Lock なし)と identity は、書き手 `eiaf-file-batch-etl`(受け口 `inbox/sales-daily/` への Write だけ)と、
+    受け手 `eiaf-file-exchange`(Read / List / Write)。SeaweedFS の Write にはバケットの管理操作が含まれうるので、**バケットポリシーの Deny で、
+    両方の identity のポリシーの変更・削除、バケットの削除、バージョニング・Object Lock・ライフサイクル・ACL の変更を拒否する**(ADR-0017 §7 と同じ)。
+    書き手は受け口のファイルも消せない(受け手が受け取る前に消さない)。`make verify PROFILE=file` が両方の identity で拒否されることを確かめる(承認の条件 1)。
+  - seaweedfs は batch の profile でも動かし、batch-etl はいつも売上ファイルを書く。**置き場が止まっても、売上ファイルの DAG が失敗するだけで、
+    注文の取り込みの DAG とその SLA のメトリクスには影響しない**(別の DAG。`BatchEtlAppIT` で、置き場に接続できない状態で確かめた。承認の条件 2)。
+  - 取引先の代わりの `sftp-b2b` のホスト鍵は `make env` が作り、起動時に入れる。file-exchange と verify は known_hosts でこの鍵に固定する(初めての接続で覚えない)。
+  - 開発用の PGP の鍵は GnuPG(`infra/local/images/gnupg`。ベースは images.env の `DEBIAN_IMAGE`、パッケージは Debian の版で固定)で作る。
+    `make verify PROFILE=file` が、取引先の側として届いたファイルを GnuPG で復号し、署名と改竄の検知(MDC)を確かめる。
+    **GnuPG で作った鍵を Bouncy Castle が読み、Bouncy Castle で暗号化・署名したファイルを GnuPG が読めることを確かめた**(§8 の Consequences の持ち越し)。
+    Debian の古い版はリポジトリから消えるので、定期確認(pin-check。#35)が固定した版を確かめる(承認の条件 3)。
+  - アラート(`prometheus/rules/file-exchange.rules.yml`): quarantine に移した(理由ごと)・名前の使い回し・受け口の滞留(1 時間)・配送の失敗(取引先ごと)・
+    取引先の SFTP の Circuit Breaker の Open(5 分)。ダッシュボード **File — Sales daily**。手順は `docs/runbooks/file-exchange.md`。
 
 ### 8. SFTP と PGP(P09 ③b)
 #### SFTP のクライアント(`SftpSender`)
@@ -194,9 +208,11 @@ S3 の部分は P09 ③a、SFTP と PGP(§8)は ③b で決めた。Parquet の�
 - SFTP の暗号の方式を絞ったので、古い方式しか持たない取引先とは接続できない。その取引先と接続するときは、方式を足すのではなく、相手に更新を頼む(足すなら、この ADR を改訂して理由を残す)。
 - 送信の冪等は、取引先の側に正式名のファイルが残っていることに頼る。取引先が受け取ってすぐに消すと、落ちた後のやり直しで送り直すことがある(§8 の限界)。
 - 取引先ごとに Resilience を作るので、取引先の数だけ Resilience のメトリクスの系列が増える(取引先の数は台帳で決まり、少ない)。
-- PGP のテストは送り手・受け手とも Bouncy Castle で行った。形式は標準の OpenPGP(v4 の鍵・SEIPD)なので GnuPG と相互に読めるはずだが、GnuPG との相互運用は、⑥ で開発用の鍵を作るときに確かめる。
+- PGP のテストは送り手・受け手とも Bouncy Castle で行った。GnuPG との相互運用は、⑥ で開発用の鍵を GnuPG で作り、`make verify PROFILE=file` で確かめた(§7)。
+- 開発用の GnuPG のイメージは Debian のパッケージを版で固定したので、Debian のポイントリリースで版が消えると組み立て直せない。定期確認で検知して版を上げる(§7)。
 
 ## 改訂履歴
 - 2026-10-15: P09 ③b で、SFTP と PGP(§8)を決めた。③a で書いた方針(sshj・ホスト鍵の固定・古い方式を使わない・暗号化と署名)を、使う暗号の方式の一覧・鍵の扱い・失敗の分け方・統合テストまで具体にした。
 - 2026-10-16: P09 ⑤a で、file-exchange の受け取りの実装(§5: 受け取りの DAG・状態・見回り・見回りと受け取りの排他)を書いた。理由のコードに `duplicate`・`name_reused` を足した。
 - 2026-10-17: P09 ⑤b で、取引先への配送(§8「取引先への配送」: 配送のステップ・取引先の台帳・配送の記録・送る前の正式名の確認による冪等・取引先ごとの Resilience)を書いた。`SftpSender` に正式名の確認(`exists`)を足した。
+- 2026-10-18: P09 ⑥ で、ローカル基盤(§7: バケットと identity とバケットポリシー・置き場の停止と取り込みの独立・ホスト鍵の固定・GnuPG の鍵と相互運用・アラート・ダッシュボード・Runbook)を書いた。
