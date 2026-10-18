@@ -18,6 +18,7 @@ on:
     paths:
       - "infra/local/images.env"
       - "infra/local/images/kafka-connect/Dockerfile"
+      - "infra/local/images/gnupg/Dockerfile"
       - "infra/local/scripts/check-pins.py"
       - "infra/local/scripts/check_pins_test.py"
       - ".github/workflows/pin-check.yml"
@@ -27,7 +28,7 @@ concurrency:
   group: pin-check-${{ github.ref }}
   cancel-in-progress: true
 
-# 固定したイメージのダイジェストと、Kafka Connect の成果物の SHA-256 の定期確認(ADR-0016 §2・§9。#35)。
+# 固定したイメージのダイジェストと、Kafka Connect の成果物の SHA-256 と、GnuPG のイメージの Debian のパッケージの版の定期確認(ADR-0016 §2・§9。#35)。
 # - 取得できない(上流で削除された)・タグが付け直された・成果物の SHA-256 が合わない、を検知する。
 # - 定期の実行では、異常ごとに Issue を作る(同じ固定の Issue が開いていれば、新しい値のときだけコメントを足す)。
 #   手動の実行は、create_issues を有効にしたときだけ作る。既定は、作るはずの Issue を Step Summary に表示するだけ。

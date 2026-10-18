@@ -9,6 +9,10 @@
 - infra/local/images/kafka-connect/Dockerfile の `ADD --checksum=sha256:${…}` の成果物(Maven Central・GitHub のリリース)
   3. 固定した URL から今も取得できるか(削除の検知)。
   4. 取得したファイルの SHA-256 が固定した値と一致するか(差し替えの検知)。
+- infra/local/images/gnupg/Dockerfile の Debian のパッケージ(`ARG <名前>_DEB_VERSION` と `apt-get install <パッケージ>=${…}`)
+  5. 固定した版を、Debian のリポジトリ(DEBIAN_SUITE と -updates・-security)から今も取得できるか。linux/amd64 と linux/arm64 の
+     両方で確かめる。ポイントリリースで古い版はリポジトリから消える(snapshot.debian.org にだけ残る)ので、消えれば組み立て直せない。
+     ベースのイメージ(images.env の DEBIAN_IMAGE)は 1・2 で確かめる。
 
 使い方:
   check-pins.py [--summary FILE] [--create-issues] [--simulate] [--fail-on-broken]
@@ -27,6 +31,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import lzma
 import re
 import subprocess
 import sys
@@ -39,6 +44,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 IMAGES_ENV = ROOT / "infra/local/images.env"
 DOCKERFILES = [ROOT / "infra/local/images/kafka-connect/Dockerfile"]
+DEB_DOCKERFILES = [ROOT / "infra/local/images/gnupg/Dockerfile"]
+# Debian のパッケージの一覧の置き場。{suite} はベースの Debian の版の名前(Dockerfile の DEBIAN_SUITE)
+DEBIAN_INDEXES = [
+    "https://deb.debian.org/debian/dists/{suite}/main/binary-{arch}/Packages.xz",
+    "https://deb.debian.org/debian/dists/{suite}-updates/main/binary-{arch}/Packages.xz",
+    "https://security.debian.org/debian-security/dists/{suite}-security/main/binary-{arch}/Packages.xz",
+]
+DEB_ARCHES = ["amd64", "arm64"]
 REQUIRED_PLATFORMS = {"linux/amd64", "linux/arm64"}
 ZERO_SHA256 = "0" * 64
 TITLE_PREFIX = "[pin-check]"
@@ -51,7 +64,7 @@ class Finding:
     """1 つの固定の確認の結果。[problems] が空なら正常。"""
 
     name: str
-    kind: str  # image / artifact
+    kind: str  # image / artifact / package
     pinned: str
     problems: list[str] = field(default_factory=list)
     current: str | None = None  # タグの今のダイジェスト・取得したファイルの SHA-256
@@ -97,7 +110,19 @@ def parse_artifacts(text: str) -> list[tuple[str, str, str]]:
     return artifacts
 
 
-# ------------------------------------------------------------------ 確かめる
+def parse_packages(text: str) -> list[tuple[str, str, str, str]]:
+    """Dockerfile の Debian のパッケージの固定から (変数名, パッケージ, 版, Debian の版の名前) を返す。
+
+    読む形: `ARG DEBIAN_SUITE=<名前>`・`ARG <名前>_DEB_VERSION=<版>` と、`apt-get install` の `<パッケージ>=${<名前>_DEB_VERSION}`。
+    """
+    args = dict(re.findall(r"^ARG\s+([A-Z0-9_]+)=(\S+)", text, re.MULTILINE))
+    joined = re.sub(r"\\\n\s*", " ", text)
+    found = re.findall(r"(?<![\w.+-])([a-z0-9][a-z0-9.+-]*)=\$\{([A-Z0-9_]+_DEB_VERSION)\}", joined)
+    if found and "DEBIAN_SUITE" not in args:
+        raise ValueError("Debian のパッケージを固定するときは ARG DEBIAN_SUITE=<版の名前> を書いてください")
+    return [(var, package, args[var], args["DEBIAN_SUITE"]) for package, var in found]
+
+
 
 
 # 取得の一時的な失敗(Maven Central・レジストリの 4xx/5xx・誤った応答)で Issue を作らないよう、失敗したら待ってやり直す。
@@ -144,6 +169,65 @@ def fetch_sha256(url: str) -> tuple[str | None, str | None]:
     except (urllib.error.URLError, TimeoutError) as e:
         return None, type(e).__name__
     return digest.hexdigest(), None
+
+
+def debian_index(url: str) -> str | None:
+    """Debian の Packages.xz を展開した文字列(取得できなければ None)。"""
+    try:
+        request = urllib.request.Request(url, headers={"User-Agent": "eiaf-pin-check"})
+        with urllib.request.urlopen(request, timeout=300) as response:
+            return lzma.decompress(response.read()).decode("utf-8", "replace")
+    except (urllib.error.URLError, TimeoutError, lzma.LZMAError):
+        return None
+
+
+def parse_debian_index(text: str) -> dict[str, set[str]]:
+    """Packages の一覧から、パッケージの名前ごとの版の集合。"""
+    versions: dict[str, set[str]] = {}
+    for stanza in text.split("\n\n"):
+        package = re.search(r"^Package: (\S+)$", stanza, re.MULTILINE)
+        version = re.search(r"^Version: (\S+)$", stanza, re.MULTILINE)
+        if package and version:
+            versions.setdefault(package[1], set()).add(version[1])
+    return versions
+
+
+_debian_cache: dict[tuple[str, str], dict[str, set[str]] | None] = {}
+
+
+def debian_versions(suite: str, arch: str) -> dict[str, set[str]] | None:
+    """[suite] と -updates・-security の [arch] のパッケージの版(1 つでも取得できなければ None。やり直してもだめなら None)。"""
+    if (suite, arch) not in _debian_cache:
+        merged: dict[str, set[str]] | None = {}
+        for template in DEBIAN_INDEXES:
+            text = retrying(lambda url=template.format(suite=suite, arch=arch): debian_index(url))
+            if text is None:
+                merged = None
+                break
+            for name, found in parse_debian_index(text).items():
+                merged.setdefault(name, set()).update(found)
+        _debian_cache[(suite, arch)] = merged
+    return _debian_cache[(suite, arch)]
+
+
+def check_package(name: str, package: str, version: str, suite: str) -> Finding:
+    finding = Finding(f"{name}:{package}", "package", f"{package}={version} ({suite})")
+    current: set[str] = set()
+    for arch in DEB_ARCHES:
+        versions = debian_versions(suite, arch)
+        if versions is None:
+            finding.problems.append(f"linux/{arch} のパッケージの一覧を取得できない")
+            continue
+        available = versions.get(package, set())
+        current |= available
+        if version not in available:
+            finding.problems.append(f"linux/{arch} のリポジトリに {package}={version} がない(ポイントリリースなどで消えた)")
+            finding.broken = True
+    if current:
+        finding.current = ", ".join(sorted(current))
+    if finding.broken and current:
+        finding.candidate = f"ARG {name}=<{', '.join(sorted(current))} から選ぶ>(変更の内容を Debian の changelog で確かめてから使う)"
+    return finding
 
 
 def platforms(manifest: dict) -> set[str]:
@@ -254,7 +338,8 @@ def report_issue(f: Finding, simulate: bool, create: bool) -> str:
             return f"#{issue['number']} にコメントする(表示だけ)"
         gh("issue", "comment", str(issue["number"]), "--body", body)
         return f"#{issue['number']}(コメントを追加)"
-    title = f"{prefix} 固定した{'イメージ' if f.kind == 'image' else '成果物'}を確認する"
+    kind = {"image": "イメージ", "artifact": "成果物", "package": "パッケージ"}[f.kind]
+    title = f"{prefix} 固定した{kind}を確認する"
     if not create:
         return f"作る(表示だけ): {title}"
     url = gh("issue", "create", "--title", title, "--label", LABELS, "--body", body).strip()
@@ -288,14 +373,17 @@ def main(argv: list[str]) -> int:
 
     images = parse_images(IMAGES_ENV.read_text())
     artifacts = [a for path in DOCKERFILES for a in parse_artifacts(path.read_text())]
+    packages = [p for path in DEB_DOCKERFILES for p in parse_packages(path.read_text())]
     if args.simulate:
-        # 1 つ目のイメージは取得できないダイジェスト、1 つ目の成果物は合わない SHA-256 にする
+        # 1 つ目のイメージは取得できないダイジェスト、1 つ目の成果物は合わない SHA-256、1 つ目のパッケージはない版にする
         name, repo, tag, _ = images[0]
         images[0] = (name, repo, tag, "sha256:" + ZERO_SHA256)
         var, url, _ = artifacts[0]
         artifacts[0] = (var, url, ZERO_SHA256)
+        var, package, _, suite = packages[0]
+        packages[0] = (var, package, "0~simulated", suite)
 
-    findings = [check_image(*i) for i in images] + [check_artifact(*a) for a in artifacts]
+    findings = [check_image(*i) for i in images] + [check_artifact(*a) for a in artifacts] + [check_package(*p) for p in packages]
     report = table(findings, args.simulate)
     print(report)
     if args.summary:

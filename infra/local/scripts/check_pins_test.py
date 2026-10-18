@@ -46,6 +46,65 @@ class ParseTest(unittest.TestCase):
         self.assertGreaterEqual(len(pins.parse_images(pins.IMAGES_ENV.read_text())), 19)
         names = [a[0] for path in pins.DOCKERFILES for a in pins.parse_artifacts(path.read_text())]
         self.assertEqual(sorted(names), ["APICURIO_CONVERTER_SHA256", "DEBEZIUM_POSTGRES_SHA256", "JMX_EXPORTER_SHA256"])
+        packages = [p for path in pins.DEB_DOCKERFILES for p in pins.parse_packages(path.read_text())]
+        self.assertEqual([p[1] for p in packages], ["gpg", "gpg-agent", "gpgconf"])
+        self.assertEqual({p[3] for p in packages}, {"trixie"})
+
+    def test_dockerfile_debian_packages(self):
+        text = (
+            "ARG DEBIAN_SUITE=trixie\nARG GPG_DEB_VERSION=2.4.7-21+deb13u1+b5\nARG CURL_DEB_VERSION=8.14.1-2\n"
+            "RUN apt-get update \\\n    && apt-get install -y gpg=${GPG_DEB_VERSION} \\\n      gpg-agent=${GPG_DEB_VERSION} curl=${CURL_DEB_VERSION}\n"
+        )
+        self.assertEqual(
+            pins.parse_packages(text),
+            [
+                ("GPG_DEB_VERSION", "gpg", "2.4.7-21+deb13u1+b5", "trixie"),
+                ("GPG_DEB_VERSION", "gpg-agent", "2.4.7-21+deb13u1+b5", "trixie"),
+                ("CURL_DEB_VERSION", "curl", "8.14.1-2", "trixie"),
+            ],
+        )
+
+    def test_dockerfile_debian_packages_need_the_suite(self):
+        with self.assertRaises(ValueError):
+            pins.parse_packages("ARG GPG_DEB_VERSION=1\nRUN apt-get install gpg=${GPG_DEB_VERSION}\n")
+
+    def test_debian_index(self):
+        text = "Package: gpg\nVersion: 2.4.7-21+deb13u1+b5\nArchitecture: arm64\n\nPackage: gpg\nVersion: 2.4.7-21+deb13u2\n\nPackage: curl\nVersion: 8\n"
+        self.assertEqual(pins.parse_debian_index(text), {"gpg": {"2.4.7-21+deb13u1+b5", "2.4.7-21+deb13u2"}, "curl": {"8"}})
+
+
+class PackageTest(unittest.TestCase):
+    def setUp(self):
+        self.original = (pins.debian_versions,)
+
+    def tearDown(self):
+        (pins.debian_versions,) = self.original
+
+    def check(self, by_arch, version="2.4.7-21+deb13u1+b5"):
+        pins.debian_versions = lambda suite, arch: by_arch[arch]
+        return pins.check_package("GPG_DEB_VERSION", "gpg", version, "trixie")
+
+    def test_available_on_both_architectures(self):
+        finding = self.check({"amd64": {"gpg": {"2.4.7-21+deb13u1+b5"}}, "arm64": {"gpg": {"2.4.7-21+deb13u1+b5"}}})
+        self.assertTrue(finding.ok)
+        self.assertEqual(finding.name, "GPG_DEB_VERSION:gpg")
+
+    def test_removed_version_is_broken_with_candidates(self):
+        finding = self.check({"amd64": {"gpg": {"2.4.7-21+deb13u2"}}, "arm64": {"gpg": {"2.4.7-21+deb13u2"}}})
+        self.assertTrue(finding.broken)
+        self.assertEqual(len(finding.problems), 2)
+        self.assertIn("linux/amd64 のリポジトリに gpg=2.4.7-21+deb13u1+b5 がない", finding.problems[0])
+        self.assertIn("2.4.7-21+deb13u2", finding.candidate)
+
+    def test_missing_on_one_architecture_is_broken(self):
+        finding = self.check({"amd64": {"gpg": {"2.4.7-21+deb13u1+b5"}}, "arm64": {"gpg": {"2.4.7-21+deb13u1"}}})
+        self.assertTrue(finding.broken)
+        self.assertEqual([p.split(" ")[0] for p in finding.problems], ["linux/arm64"])
+
+    def test_unreachable_index_is_reported_but_not_broken(self):
+        finding = self.check({"amd64": None, "arm64": None})
+        self.assertFalse(finding.broken)
+        self.assertEqual(finding.problems, ["linux/amd64 のパッケージの一覧を取得できない", "linux/arm64 のパッケージの一覧を取得できない"])
 
 
 class RetryTest(unittest.TestCase):
@@ -172,7 +231,7 @@ class ReportIssueTest(unittest.TestCase):
 
 
 class SimulateTest(unittest.TestCase):
-    """main の simulate: 書き換えた 2 つ(1 つ目のイメージと成果物)だけを報告し、既定では Issue を作らない(ネットワークは使わない)。"""
+    """main の simulate: 書き換えた 3 つ(1 つ目のイメージ・成果物・パッケージ)だけを報告し、既定では Issue を作らない(ネットワークは使わない)。"""
 
     def setUp(self):
         images = pins.parse_images(pins.IMAGES_ENV.read_text())
@@ -180,6 +239,10 @@ class SimulateTest(unittest.TestCase):
         digests = {f"{repo}:{tag}": digest for _, repo, tag, digest in images}
         pinned = {digest for *_, digest in images}
         checksums = {url: sha for _, url, sha in artifacts}
+        packages = [p for path in pins.DEB_DOCKERFILES for p in pins.parse_packages(path.read_text())]
+        debian = {}
+        for _, package, version, _ in packages:
+            debian.setdefault(package, set()).add(version)
         manifest = lambda digest: {  # noqa: E731
             "digest": digest,
             "manifests": [{"platform": {"os": "linux", "architecture": a}} for a in ("amd64", "arm64")],
@@ -190,17 +253,20 @@ class SimulateTest(unittest.TestCase):
                 return manifest(ref.split("@")[1]) if ref.split("@")[1] in pinned else None
             return manifest(digests[ref])
 
-        self.original = (pins.imagetools, pins.fetch_sha256, pins.gh, pins.RETRY_DELAYS)
+        self.original = (pins.imagetools, pins.fetch_sha256, pins.gh, pins.RETRY_DELAYS, pins.debian_versions)
         pins.imagetools = imagetools
+        pins.debian_versions = lambda suite, arch: debian
         pins.fetch_sha256 = lambda url: (checksums[url], None)
         self.gh = FakeGh([])
         pins.gh = self.gh
         pins.RETRY_DELAYS = []
         self.first_image = images[0][0]
         self.first_artifact = artifacts[0][0]
+        self.first_package = packages[0][0]
+        self.checked = len(images) + len(artifacts) + len(packages)
 
     def tearDown(self):
-        pins.imagetools, pins.fetch_sha256, pins.gh, pins.RETRY_DELAYS = self.original
+        pins.imagetools, pins.fetch_sha256, pins.gh, pins.RETRY_DELAYS, pins.debian_versions = self.original
 
     def run_main(self, *argv):
         err = io.StringIO()
@@ -208,24 +274,24 @@ class SimulateTest(unittest.TestCase):
             code = pins.main(list(argv))
         return code, err.getvalue()
 
-    def test_simulate_reports_only_the_two_rewritten_pins_without_creating_issues(self):
+    def test_simulate_reports_only_the_rewritten_pins_without_creating_issues(self):
         code, err = self.run_main("--simulate")
         self.assertEqual(code, 0)
         reported = [line.split(":")[0] for line in err.splitlines() if line and not line.startswith(" ") and ":" in line]
-        self.assertEqual(reported, [self.first_image, self.first_artifact])
-        self.assertIn("確認 22 件、異常 2 件", err)
-        self.assertEqual(err.count("作る(表示だけ): [pin-check][simulated]"), 2)
+        self.assertEqual(reported, [self.first_image, self.first_artifact, self.first_package])
+        self.assertIn(f"確認 {self.checked} 件、異常 3 件", err)
+        self.assertEqual(err.count("作る(表示だけ): [pin-check][simulated]"), 3)
         self.assertEqual({c[:2] for c in self.gh.calls}, {("issue", "list")})
 
     def test_simulate_creates_issues_only_when_asked(self):
         code, err = self.run_main("--simulate", "--create-issues")
         self.assertEqual(code, 0)
-        self.assertEqual(sum(1 for c in self.gh.calls if c[:2] == ("issue", "create")), 2)
+        self.assertEqual(sum(1 for c in self.gh.calls if c[:2] == ("issue", "create")), 3)
 
     def test_without_simulate_everything_is_ok(self):
         code, err = self.run_main("--create-issues")
         self.assertEqual(code, 0)
-        self.assertIn("確認 22 件、異常 0 件", err)
+        self.assertIn(f"確認 {self.checked} 件、異常 0 件", err)
         self.assertEqual(self.gh.calls, [])
 
 
