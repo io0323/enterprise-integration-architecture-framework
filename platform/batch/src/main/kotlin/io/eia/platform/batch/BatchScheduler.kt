@@ -42,6 +42,9 @@ public data class DueRun(
  *
  * 判定は実行の記録(DB)を見るので、前段の DAG がほかのプロセスで動いていても、同じ DB を使っていれば後段を起動できる。
  *
+ * 同時に動かす実行は [Settings.maxConcurrentRuns] まで。超えた分は起動せず、次の確認の回に回す(起動の条件は記録とマニフェストで
+ * 決まるので、回しても失わない)。1 つの実行は、実行のロックの接続(実行の間ずっと持つ。ADR-0030 §2)と、ステップの中の読み書きの接続の
+ * 2 本を使う。接続のプールは、`maxConcurrentRuns × 2` にほかの用途(見回り・ヘルスチェックなど)を足した大きさにする(#133)。
  */
 public class BatchScheduler(
     private val runner: BatchRunner,
@@ -54,14 +57,22 @@ public class BatchScheduler(
     /**
      * @property pollInterval 起動の条件を確かめる間隔
      * @property lookback 前段の完了を探す期間。これより前に成功した前段の後段は、自動では起動しない
+     * @property maxConcurrentRuns このスケジューラが同時に動かす実行の上限(ファイルの到着がまとめて来ても、接続のプールを使い切らない)
      */
     public data class Settings(
         val pollInterval: Duration = 30.seconds,
         val lookback: Duration = 7.days,
+        val maxConcurrentRuns: Int = DEFAULT_MAX_CONCURRENT_RUNS,
     ) {
         init {
+            require(maxConcurrentRuns >= 1) { "maxConcurrentRuns は 1 以上にしてください: $maxConcurrentRuns" }
             require(pollInterval.isPositive()) { "pollInterval は正の値にしてください: $pollInterval" }
             require(lookback.isPositive()) { "lookback は正の値にしてください: $lookback" }
+        }
+
+        public companion object {
+            /** 同時に動かす実行の既定の上限。2 本ずつ使っても、プールが 5 のサービス(ヘルスチェックの 1 本を足して 5)に収まる */
+            public const val DEFAULT_MAX_CONCURRENT_RUNS: Int = 2
         }
     }
 
@@ -75,7 +86,9 @@ public class BatchScheduler(
     public suspend fun run(): Unit =
         coroutineScope {
             while (isActive) {
-                due().forEach { due ->
+                // 上限に達したら、残りは次の回に回す(due は実行中のものを除くので、次の回に同じ実行が並ぶ)
+                for (due in due()) {
+                    if (inFlight.size >= settings.maxConcurrentRuns) break
                     if (inFlight.add(due.key)) {
                         launch {
                             try {

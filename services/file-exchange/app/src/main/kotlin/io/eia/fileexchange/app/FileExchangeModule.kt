@@ -75,7 +75,7 @@ internal fun fileExchangeModule(
             runner = get(),
             store = get<JdbcBatchStore>(),
             jobs = listOf(ReceiveJob.job(get(), get<S3ObjectStore>(), config.prefixes.inbox)),
-            settings = BatchScheduler.Settings(pollInterval = config.pollInterval),
+            settings = BatchScheduler.Settings(pollInterval = config.pollInterval, maxConcurrentRuns = MAX_CONCURRENT_RUNS),
         )
     }
 }
@@ -105,7 +105,14 @@ private fun Module.deliveryBeans(
     single<DeliverFileUseCase> { DeliverFileService(get<JdbcReceivedFiles>(), inputs.partners, get<JdbcDeliveries>(), get()) }
 }
 
-private const val POOL_SIZE = 5
+/**
+ * 接続のプール。受け取りの実行は 1 つで 2 本(実行のロックと、記録の読み書き)を使う。同時に動かす実行は [MAX_CONCURRENT_RUNS] までにし、
+ * 見回り(ロックと読み書きの 2 本)とヘルスチェック(1 本)を足しても収まる大きさにする(3 × 2 + 2 + 1 = 9。#133)。
+ */
+private const val POOL_SIZE = 10
+
+/** 同時に動かす受け取りの実行の上限(ファイルがまとめて届いても、プールを使い切らない。残りは次の確認の回に動く。#133)。 */
+private const val MAX_CONCURRENT_RUNS = 3
 
 /**
  * 取引先の SFTP の Timeout・Retry・Circuit Breaker。試行の上限は、接続(10 秒)と応答の待ち(30 秒)の上限に、送る時間を足したもの。
