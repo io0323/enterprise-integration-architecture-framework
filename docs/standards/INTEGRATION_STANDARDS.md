@@ -102,6 +102,18 @@ audit:                  # 任意。この連携が監査を記録するなら書
   retention: legal                 # legal(法令に従う。期間は環境ごとの設定)か ISO 8601 の期間(例 P7Y)
 lifecycle: active       # proposed | design | active | deprecated | retired
 ```
+- `lifecycle` は 1 つの PR で 1 段階だけ前に進める。エントリを消せるのは retired になった後、契約のファイルを消せるのは使う連携がすべて retired になった後(ADR-0034。contract-check の `CC-LIFECYCLE-*`)。状態ごとに書く項目:
+  ```yaml
+  lifecycle: deprecated
+  deprecation: { sunset: 2027-03-31, notice: "#200", replacement: INT-SALES-005 }  # 移行の期限・消費者への通知・移行先(任意)
+  ---
+  lifecycle: retired
+  retirement: { issue: "#210" }        # 資格情報・ACL・FW の穴を閉じる後片付け
+  ---
+  onboarding: { kind: existing, reason: 2024 年から稼働している連携を登録する }   # 既存の連携を後から登録するときだけ、active で登録できる
+  reactivation: { reason: 移行先の廃止が中止された, approver: "@name" }           # deprecated → active に戻すとき
+  ```
+  移行の期限を過ぎても deprecated のままの連携は、contract-check の警告(ゾンビ連携)に出る。
 - `owner` はチーム単位(`team-{name}`)。個人名は使わない(Framework 16.2)。
 - `consumers[*].group` は Kafka の Consumer Group(`{service}.{purpose}`)。event / cdc の consumer では必須。
 - コマンド(`pattern: queue`、ADR-0006)では、`provider` をコマンドを受信して処理するサービスとし、`consumers` はその受信サービスの 1 件(`group: {service}.command`)だけにする。送信側は `senders` に書く。
