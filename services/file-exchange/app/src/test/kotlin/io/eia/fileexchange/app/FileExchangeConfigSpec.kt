@@ -59,6 +59,8 @@ class FileExchangeConfigSpec :
             config.sweepInterval shouldBe 5.minutes
             config.healthPort shouldBe 8081
             config.appUser shouldBe "file_exchange_app"
+            config.sftpOpenDuration shouldBe 30.seconds
+            config.deliverRetryDelay shouldBe 5.seconds
             config
                 .forRun()
                 .failure()
@@ -76,8 +78,12 @@ class FileExchangeConfigSpec :
                                 FileExchangeConfig.S3_ENDPOINT to "http://seaweedfs:8333",
                                 FileExchangeConfig.INBOX_PREFIX to "inbox/a/",
                                 FileExchangeConfig.SWEEP_INTERVAL to "1m",
+                                FileExchangeConfig.SFTP_OPEN_DURATION to "5s",
+                                FileExchangeConfig.DELIVER_RETRY_DELAY to "1s",
                             ),
                     ).ok()
+            config.sftpOpenDuration shouldBe 5.seconds
+            config.deliverRetryDelay shouldBe 1.seconds
             config.forRun().ok().toString() shouldBe "http://seaweedfs:8333"
             config.prefixes.inbox shouldBe "inbox/a/"
             config.sweepInterval shouldBe 1.minutes
@@ -89,6 +95,7 @@ class FileExchangeConfigSpec :
                         FileExchangeConfig.ARCHIVE_PREFIX to "/archive",
                         FileExchangeConfig.HEALTH_PORT to "99999",
                         FileExchangeConfig.POLL_INTERVAL to "-1s",
+                        FileExchangeConfig.SFTP_OPEN_DURATION to "soon",
                     ),
                 ).failure()
                 .violations
@@ -99,6 +106,7 @@ class FileExchangeConfigSpec :
                     FileExchangeConfig.ARCHIVE_PREFIX,
                     FileExchangeConfig.HEALTH_PORT,
                     FileExchangeConfig.POLL_INTERVAL,
+                    FileExchangeConfig.SFTP_OPEN_DURATION,
                 )
             FileExchangeConfig
                 .fromEnvironment(minimal + (FileExchangeConfig.QUARANTINE_PREFIX to "inbox/sales-daily/"))
@@ -138,6 +146,11 @@ class FileExchangeConfigSpec :
             dag.integrationId shouldBe "INT-SALES-004"
             dag.steps.map { it.name } shouldBe listOf(StepName("receive"), StepName("deliver"))
             dag.step(StepName("deliver")).dependsOn shouldBe listOf(StepName("receive"))
+            dag.step(StepName("deliver")).retry.initialDelay shouldBe 5.seconds
+            ReceiveJob
+                .dag(receive, deliver, metrics, deliverRetryDelay = 1.seconds)
+                .step(StepName("deliver"))
+                .retry.initialDelay shouldBe 1.seconds
             val source = object : ObjectReader by FakeReader {}
             val trigger = ReceiveJob.job(dag, source, "inbox/sales-daily/").trigger.shouldBeInstanceOf<Trigger.FileArrival>()
             trigger.prefix shouldBe "inbox/sales-daily/"

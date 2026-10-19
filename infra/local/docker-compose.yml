@@ -422,6 +422,11 @@ services:
       PARTNER01_SFTP_KNOWN_HOSTS_FILE: /secrets/sftp-b2b.known_hosts
       PARTNER01_SFTP_KEY_FILE: /secrets/sftp-b2b
       PARTNER01_PGP_PUBLIC_KEY_FILE: /secrets/pgp-partner01.pub.asc
+      # 到着の確認の間隔・取引先の Circuit Breaker の Open の期間・配送のリトライの最初の待ち時間。E2E では tests/e2e/e2e.env で短くする
+      # (make up E2E=1。理由は e2e.env のコメント)
+      FILE_EXCHANGE_POLL_INTERVAL: ${FILE_EXCHANGE_POLL_INTERVAL:-30s}
+      FILE_EXCHANGE_SFTP_OPEN_DURATION: ${FILE_EXCHANGE_SFTP_OPEN_DURATION:-30s}
+      FILE_EXCHANGE_DELIVER_RETRY_DELAY: ${FILE_EXCHANGE_DELIVER_RETRY_DELAY:-5s}
       OTEL_SERVICE_NAME: file-exchange
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
     volumes:

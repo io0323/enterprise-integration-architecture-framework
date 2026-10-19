@@ -9,6 +9,7 @@ import io.eia.fileexchange.domain.ReceiptDestination
 import io.eia.platform.batch.BatchJob
 import io.eia.platform.batch.DagDefinition
 import io.eia.platform.batch.DagId
+import io.eia.platform.batch.StepBuilder
 import io.eia.platform.batch.Trigger
 import io.eia.platform.batch.dag
 import io.eia.platform.filetransfer.store.ObjectReader
@@ -24,6 +25,7 @@ import io.opentelemetry.api.metrics.Meter
 import org.slf4j.LoggerFactory
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.time.Clock
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.DurationUnit
 
@@ -43,10 +45,12 @@ internal object ReceiveJob {
 
     private val logger = LoggerFactory.getLogger(ReceiveJob::class.java)
 
+    /** @param deliverRetryDelay 配送のステップのリトライの最初の待ち時間(2 倍ずつ延ばし、上限は 1 分) */
     fun dag(
         receive: ReceiveFileUseCase,
         deliver: DeliverFileUseCase,
         metrics: FileExchangeMetrics,
+        deliverRetryDelay: Duration = StepBuilder.DEFAULT_RETRY.initialDelay,
     ): DagDefinition =
         dag(DAG_ID.value) {
             integrationId = INTEGRATION_ID
@@ -57,6 +61,7 @@ internal object ReceiveJob {
                 }
             step("deliver", received) {
                 expected = 5.minutes
+                retry = StepBuilder.DEFAULT_RETRY.copy(initialDelay = deliverRetryDelay)
                 action { context ->
                     deliver(context.run.partition.value).flatMap { report ->
                         metrics.delivered(report)
