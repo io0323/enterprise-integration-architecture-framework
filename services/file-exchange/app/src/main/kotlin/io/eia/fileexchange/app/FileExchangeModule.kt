@@ -26,9 +26,11 @@ import io.eia.platform.filetransfer.verify.FileVerifier
 import io.eia.platform.observability.ObservabilityRuntime
 import io.eia.platform.reliability.ResilienceMetrics
 import io.eia.platform.security.secret.SecretProvider
+import io.eia.shared.resilience.CircuitBreakerConfig
 import io.eia.shared.resilience.ResilienceConfig
 import org.koin.core.module.Module
 import org.koin.dsl.module
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 
 /**
@@ -68,7 +70,7 @@ internal fun fileExchangeModule(
     }
     deliveryBeans(inputs, secrets, runtime)
     single { FileExchangeMetrics(runtime.meter) }
-    single { ReceiveJob.dag(get(), get(), get()) }
+    single { ReceiveJob.dag(get(), get(), get(), deliverRetryDelay = config.deliverRetryDelay) }
     single { BatchRunner(get<JdbcBatchStore>(), runtime, listener = BatchMetrics(runtime.meter)) }
     single {
         BatchScheduler(
@@ -99,7 +101,10 @@ private fun Module.deliveryBeans(
             archivePrefix = inputs.config.prefixes.archive,
             ownPgpKey = OwnPgpKey(FileExchangeConfig.PGP_SECRET_KEY, FileExchangeConfig.PGP_PASSPHRASE),
             secrets = secrets,
-            resilience = inputs.partners.partners.associate { it.id to metrics.resilience("sftp-${it.id}", PARTNER_RESILIENCE) },
+            resilience =
+                inputs.partners.partners.associate {
+                    it.id to metrics.resilience("sftp-${it.id}", partnerResilience(inputs.config.sftpOpenDuration))
+                },
         )
     }
     single<DeliverFileUseCase> { DeliverFileService(get<JdbcReceivedFiles>(), inputs.partners, get<JdbcDeliveries>(), get()) }
@@ -116,6 +121,8 @@ private const val MAX_CONCURRENT_RUNS = 3
 
 /**
  * 取引先の SFTP の Timeout・Retry・Circuit Breaker。試行の上限は、接続(10 秒)と応答の待ち(30 秒)の上限に、送る時間を足したもの。
- * Circuit Breaker と Retry は既定(直近 10 回のうち 50% の失敗で 30 秒止める。リトライは 3 回まで)。
+ * Retry と Circuit Breaker の判定は既定(直近 20 回のうち 10 回以上で 50% の失敗で Open。リトライは 3 回まで)。
+ * Open の期間は設定(`FILE_EXCHANGE_SFTP_OPEN_DURATION`。既定 30 秒)。
  */
-private val PARTNER_RESILIENCE = ResilienceConfig(attemptTimeout = 2.minutes, deadline = 5.minutes)
+private fun partnerResilience(openDuration: Duration) =
+    ResilienceConfig(attemptTimeout = 2.minutes, deadline = 5.minutes, circuitBreaker = CircuitBreakerConfig(openDuration = openDuration))

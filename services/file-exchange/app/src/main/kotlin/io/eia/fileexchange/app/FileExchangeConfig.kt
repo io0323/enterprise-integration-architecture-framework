@@ -35,6 +35,8 @@ import kotlin.time.Duration.Companion.seconds
  * | `FILE_EXCHANGE_SWEEP_INTERVAL` | 5m | serve(受け口の見回りの間隔) |
  * | `FILE_EXCHANGE_PARTNERS_FILE` | なし(なければ配送しない) | 取引先の台帳(JSON。ADR-0032 §8)のパス |
  * | `FILE_EXCHANGE_PGP_SECRET_KEY` / `FILE_EXCHANGE_PGP_PASSPHRASE`(`_FILE` も可) | なし | 自社の PGP の署名の鍵(配送のときに読む) |
+ * | `FILE_EXCHANGE_SFTP_OPEN_DURATION` | 30s | serve・receive(取引先の SFTP の Circuit Breaker が Open のままでいる期間。ADR-0032 §8) |
+ * | `FILE_EXCHANGE_DELIVER_RETRY_DELAY` | 5s | serve・receive(配送のステップのリトライの最初の待ち時間。2 倍ずつ延ばし、上限は 1 分) |
  *
  * 取引先ごとの SFTP の鍵・ホスト鍵・PGP の公開鍵は、台帳に書いた名前の秘密情報から読む。
  */
@@ -49,6 +51,8 @@ internal data class FileExchangeConfig(
     val pollInterval: Duration,
     val sweepInterval: Duration,
     val partnersFile: Path?,
+    val sftpOpenDuration: Duration = DEFAULT_SFTP_OPEN_DURATION,
+    val deliverRetryDelay: Duration = DEFAULT_DELIVER_RETRY_DELAY,
 ) {
     companion object {
         val OWNER_PASSWORD = SecretName("FILE_EXCHANGE_DB_PASSWORD")
@@ -67,10 +71,14 @@ internal data class FileExchangeConfig(
         const val POLL_INTERVAL = "FILE_EXCHANGE_POLL_INTERVAL"
         const val SWEEP_INTERVAL = "FILE_EXCHANGE_SWEEP_INTERVAL"
         const val PARTNERS_FILE = "FILE_EXCHANGE_PARTNERS_FILE"
+        const val SFTP_OPEN_DURATION = "FILE_EXCHANGE_SFTP_OPEN_DURATION"
+        const val DELIVER_RETRY_DELAY = "FILE_EXCHANGE_DELIVER_RETRY_DELAY"
         private const val MAX_PORT = 65_535
         private const val DEFAULT_HEALTH_PORT = 8081
         private val DEFAULT_POLL_INTERVAL = 30.seconds
         private val DEFAULT_SWEEP_INTERVAL = 5.minutes
+        private val DEFAULT_SFTP_OPEN_DURATION = 30.seconds
+        private val DEFAULT_DELIVER_RETRY_DELAY = 5.seconds
         private val PREFIX = Regex("^([a-z0-9][a-z0-9-]*/)+$")
 
         @Suppress("CyclomaticComplexMethod") // 項目ごとの既定と検査を並べる
@@ -131,6 +139,8 @@ internal data class FileExchangeConfig(
                     pollInterval = duration(POLL_INTERVAL, DEFAULT_POLL_INTERVAL),
                     sweepInterval = duration(SWEEP_INTERVAL, DEFAULT_SWEEP_INTERVAL),
                     partnersFile = optional(PARTNERS_FILE)?.let { Path.of(it) },
+                    sftpOpenDuration = duration(SFTP_OPEN_DURATION, DEFAULT_SFTP_OPEN_DURATION),
+                    deliverRetryDelay = duration(DELIVER_RETRY_DELAY, DEFAULT_DELIVER_RETRY_DELAY),
                 )
             return if (violations.isEmpty()) ok(config) else err(ValidationError(violations))
         }
