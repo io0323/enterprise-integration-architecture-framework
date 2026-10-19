@@ -7,7 +7,9 @@ GRADLE := ./gradlew
 # PROFILE: core / cdc / iot / file / b2b / chaos / order / saga / batch。core は常に含まれる(積み上げ方式)。空白区切りで複数指定できる。
 PROFILE ?= core
 INFRA := infra/local
-COMPOSE := docker compose -f $(INFRA)/docker-compose.yml --env-file $(INFRA)/images.env --env-file $(INFRA)/.env
+# E2E=1: E2E 用の設定(tests/e2e/e2e.env。待ち時間を短くする)を足して起動する(例: make up PROFILE="order cdc saga batch file" E2E=1)
+E2E ?=
+COMPOSE := docker compose -f $(INFRA)/docker-compose.yml --env-file $(INFRA)/images.env --env-file $(INFRA)/.env $(if $(E2E),--env-file tests/e2e/e2e.env)
 COMPOSE_PROFILES_ARGS := --profile core $(foreach p,$(filter-out core,$(PROFILE)),--profile $(p))
 SERVICE ?=
 # order-service のコンテナは、開発用の鍵(infra/local/certs/*.key。0600)を読むため、ホストの利用者の uid で動かす。
@@ -134,8 +136,8 @@ dlq-replay: ## DLQ のメッセージを元のトピックに戻す。既定は 
 stats: ## 起動中コンテナのメモリ使用量(docker stats)
 	@$(INFRA)/scripts/stats.sh
 
-# 秘密情報は infra/local/.env から環境変数で渡す(verify.sh と同じ)。基盤は make up PROFILE="order cdc saga batch" で起動しておく
+# 秘密情報は infra/local/.env から環境変数で渡す(verify.sh と同じ)。基盤は make up PROFILE="order cdc saga batch file" E2E=1 で起動しておく
 # シナリオの後に、監査記録の全体の検査が OK で、アンカーがあることを確かめる(AuditAnchorE2E がアンカーの保存を待つ。ADR-0017)
-e2e: env ## E2E シナリオ(tests/e2e。make up PROFILE="order cdc saga batch" で起動した基盤に、公開されたエンドポイント・レガシーのアプリの操作・参加者の停止だけで接続する)
+e2e: env ## E2E シナリオ(tests/e2e。make up PROFILE="order cdc saga batch file" E2E=1 で起動した基盤に、公開されたエンドポイント・運用者のコマンド・コンテナの停止だけで接続する。tests/e2e/README.md)
 	@set -a && . $(INFRA)/.env && set +a && $(GRADLE) :tests:e2e:e2eTest
 	@$(INFRA)/scripts/audit-anchored.sh order
