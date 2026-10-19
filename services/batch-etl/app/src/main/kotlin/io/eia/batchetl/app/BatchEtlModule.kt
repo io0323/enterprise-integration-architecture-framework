@@ -199,4 +199,9 @@ internal fun salesFileModule(
 internal val DAILY = named("daily")
 internal val RECONCILE = named("reconcile")
 internal val SALES_FILE = named("sales-file")
-private const val POOL_SIZE = 5
+
+/**
+ * 接続のプール。実行は 1 つで 2 本(実行のロックと、ステップの読み書き)を使い、同時に動かす実行はスケジューラの既定の 2 つまで
+ * (`BatchScheduler.Settings.DEFAULT_MAX_CONCURRENT_RUNS`)。取り込みの遅れの確認(1 本)とヘルスチェック(1 本)を足す(2 × 2 + 1 + 1。#133)。
+ */
+private const val POOL_SIZE = 6

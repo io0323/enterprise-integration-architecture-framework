@@ -191,6 +191,66 @@ class BatchSchedulerSpec :
                 listOf("sales_daily_20261014010000_001", "sales_daily_20261014010000_002")
         }
 
+        test("run は同時に動かす実行を上限までにし、残りは後の回に動かす(ファイルがまとめて届いても接続のプールを使い切らない。#133)") {
+            val store = InMemoryBatchStore()
+            val source = FakeObjectSource()
+            val running = AtomicInteger()
+            val peak = AtomicInteger()
+            val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+            val slow =
+                dag("test.slow") {
+                    step("hold") {
+                        action {
+                            peak.accumulateAndGet(running.incrementAndGet(), ::maxOf)
+                            gate.await()
+                            running.decrementAndGet()
+                            ok(Unit)
+                        }
+                    }
+                }
+            val names = (1..5).map { "sales_daily_20261014010000_00$it" }
+            names.forEach { source.objects["inbound/$it.manifest.json"] = manifest("$it.csv") }
+            val scheduler =
+                BatchScheduler(
+                    BatchRunner(store, telemetry.runtime, TestClock(now)),
+                    store,
+                    listOf(BatchJob(slow, Trigger.FileArrival(source, "inbound/", requireDataFile = false))),
+                    TestClock(now),
+                    settings = BatchScheduler.Settings(pollInterval = 10.milliseconds, maxConcurrentRuns = 2),
+                )
+
+            coroutineScope {
+                val loop = launch(Dispatchers.Default) { scheduler.run() }
+                withTimeout(5.seconds) { while (running.get() < 2) delay(10.milliseconds) }
+                // 何回まわっても、上限の 2 つより多くは動かさない
+                delay(100.milliseconds)
+                running.get() shouldBe 2
+                store.runs.size shouldBe 2
+                gate.complete(Unit)
+                withTimeout(5.seconds) {
+                    while (names.any {
+                            store.runs[
+                                RunKey(
+                                    slow.id,
+                                    PartitionKey(it),
+                                ),
+                            ]?.status != RunStatus.SUCCEEDED
+                        }
+                    ) {
+                        delay(10.milliseconds)
+                    }
+                }
+                loop.cancelAndJoin()
+            }
+            peak.get() shouldBe 2
+        }
+
+        test("同時に動かす実行の上限は 1 以上") {
+            io.kotest.assertions.throwables
+                .shouldThrow<IllegalArgumentException> { BatchScheduler.Settings(maxConcurrentRuns = 0) }
+            BatchScheduler.Settings().maxConcurrentRuns shouldBe BatchScheduler.Settings.DEFAULT_MAX_CONCURRENT_RUNS
+        }
+
         test("run は起動の条件を繰り返し確かめて実行し、SLA の予測も更新する。前段の完了で後段が続けて動く") {
             val store = InMemoryBatchStore()
             val ran = AtomicInteger()
