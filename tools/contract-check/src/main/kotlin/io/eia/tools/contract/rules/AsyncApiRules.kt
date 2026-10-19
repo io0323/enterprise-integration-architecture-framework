@@ -45,6 +45,40 @@ object AsyncApiRules {
         return Result(violations, addresses)
     }
 
+    /**
+     * [document] の message の payload が参照する Avro スキーマ(リポジトリルートからの相対パス。contracts/avro の .avsc で、存在するものだけ)。
+     * ライフサイクルの検査(契約のファイルの削除)で、連携が使う Avro を辿るのに使う。
+     */
+    fun avroReferences(
+        contracts: Contracts,
+        document: ContractDocument,
+    ): Set<String> {
+        val avroDir = contracts.root.resolve(Contracts.CONTRACTS_DIR).resolve("avro")
+        return document.tree
+            .get("channels")
+            ?.properties()
+            .orEmpty()
+            .flatMap { (_, channel) ->
+                channel
+                    .get("messages")
+                    ?.properties()
+                    .orEmpty()
+                    .mapNotNull { (_, ref) ->
+                        val payload = ref.resolveLocalRef(document.tree).get("payload")?.resolveLocalRef(document.tree)
+                        payload
+                            ?.get("schema")
+                            ?.text("\$ref")
+                            ?.takeIf { it.endsWith(".avsc") }
+                            ?.let {
+                                document.file.parent
+                                    .resolve(it)
+                                    .normalize()
+                            }?.takeIf { it.startsWith(avroDir) && it.isRegularFile() }
+                            ?.let(contracts::relative)
+                    }
+            }.toSet()
+    }
+
     private fun checkStructure(document: ContractDocument): List<Violation> {
         val version = document.tree.text("asyncapi")
         if (version != SUPPORTED_VERSION) {

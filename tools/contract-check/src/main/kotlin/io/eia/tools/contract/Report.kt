@@ -4,6 +4,7 @@ package io.eia.tools.contract
 object Report {
     private val HEADER = listOf("ファイル", "ルール ID", "内容", "Framework 章", "修正方法")
     private val WAIVED_HEADER = listOf("ファイル", "ルール ID", "内容", "理由", "Issue", "期限")
+    private val WARNING_HEADER = listOf("ファイル", "ルール ID", "内容", "対応")
 
     fun text(result: CheckResult): String =
         buildString {
@@ -27,6 +28,14 @@ object Report {
             result.unusedWaivers.forEach { waiver ->
                 appendLine()
                 appendLine("使われていない例外があります(削除してください): ${waiver.rule} ${waiver.file}(${waiver.issue})")
+            }
+            if (result.warnings.isNotEmpty()) {
+                appendLine()
+                appendLine("警告が ${result.warnings.size} 件あります(ジョブは失敗させません)")
+                result.warnings.forEach { w ->
+                    appendLine("  [${w.rule.id}] ${w.file}: ${w.message}")
+                    appendLine("    対応: ${w.rule.fix}")
+                }
             }
         }
 
@@ -60,14 +69,27 @@ object Report {
                 appendLine()
                 appendLine("使われていない例外(削除してください): " + result.unusedWaivers.joinToString { "${it.rule} `${it.file}`(${it.issue})" })
             }
+            if (result.warnings.isNotEmpty()) {
+                appendLine()
+                appendLine("### 警告(ジョブは失敗させません)")
+                appendLine()
+                appendLine(WARNING_HEADER.joinToString(" | ", "| ", " |"))
+                appendLine(WARNING_HEADER.joinToString(" | ", "| ", " |") { "---" })
+                result.warnings.forEach { w ->
+                    val cells = listOf("`${w.file}`", "`${w.rule.id}`", w.message, w.rule.fix)
+                    appendLine(cells.joinToString(" | ", "| ", " |") { it.escapeCell() })
+                }
+            }
         }
 
     private fun summary(result: CheckResult): String {
-        val baseline = if (result.baselineUsed) "" else "(比較元がないため互換性検査 CC-COMPAT-* は省略)"
+        val baseline =
+            if (result.baselineUsed) "" else "(比較元がないため互換性検査 CC-COMPAT-* とライフサイクルの検査 CC-LIFECYCLE-001〜004 は省略)"
+        val warnings = if (result.warnings.isEmpty()) "" else "。警告が ${result.warnings.size} 件あります"
         return if (result.violations.isEmpty()) {
-            "違反はありません$baseline"
+            "違反はありません$baseline$warnings"
         } else {
-            "違反が ${result.violations.size} 件あります$baseline"
+            "違反が ${result.violations.size} 件あります$baseline$warnings"
         }
     }
 
