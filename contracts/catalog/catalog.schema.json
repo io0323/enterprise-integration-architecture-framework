@@ -79,15 +79,67 @@
         }
       }
     },
-    "lifecycle": { "enum": ["proposed", "design", "active", "deprecated", "retired"] }
+    "lifecycle": { "enum": ["proposed", "design", "active", "deprecated", "retired"] },
+    "deprecation": {
+      "description": "廃止の予告(lifecycle: deprecated で必須。Framework 16.1・ADR-0034)。消費者に通知し、移行の期限を設ける",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sunset", "notice"],
+      "properties": {
+        "sunset": { "description": "移行の期限(この日の後に retired にできる)", "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+        "notice": { "description": "消費者への通知(Issue。例 #123)", "$ref": "#/$defs/issue" },
+        "replacement": { "description": "移行先の連携 ID", "type": "string", "pattern": "^INT-[A-Z][A-Z0-9]*-[0-9]{3}$" }
+      }
+    },
+    "retirement": {
+      "description": "廃止(lifecycle: retired で必須)。資格情報・ACL・FW の穴を閉じる後片付けの Issue",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["issue"],
+      "properties": { "issue": { "$ref": "#/$defs/issue" } }
+    },
+    "onboarding": {
+      "description": "既に動いている連携を後からカタログに登録する(新しいエントリを active で始めてよい。ADR-0034)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "reason"],
+      "properties": {
+        "kind": { "const": "existing" },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "reactivation": {
+      "description": "廃止の取り消し(deprecated から active に戻す。ADR-0034)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "approver"],
+      "properties": {
+        "reason": { "type": "string", "minLength": 1 },
+        "approver": { "$ref": "#/$defs/approver" }
+      }
+    }
   },
   "allOf": [
+    {
+      "if": { "properties": { "lifecycle": { "const": "deprecated" } }, "required": ["lifecycle"] },
+      "then": { "required": ["deprecation"] }
+    },
+    {
+      "if": { "properties": { "lifecycle": { "const": "retired" } }, "required": ["lifecycle"] },
+      "then": { "required": ["retirement"] }
+    },
     {
       "if": { "properties": { "style": { "enum": ["event", "cdc"] } } },
       "then": { "required": ["channels"], "properties": { "channels": { "minItems": 1 } } }
     }
   ],
   "$defs": {
+    "issue": { "description": "GitHub の Issue(#123)", "type": "string", "pattern": "^#[0-9]+$" },
+    "approver": {
+      "description": "承認者(GitHub のアカウント @name かチーム team-name)",
+      "type": "string",
+      "pattern": "^(@[A-Za-z0-9][A-Za-z0-9-]*|team-[a-z][a-z0-9-]*)$"
+    },
     "party": {
       "type": "object",
       "additionalProperties": false,

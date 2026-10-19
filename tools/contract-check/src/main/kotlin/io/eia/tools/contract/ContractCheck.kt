@@ -8,6 +8,7 @@ import io.eia.tools.contract.rules.AvroRules
 import io.eia.tools.contract.rules.CatalogRules
 import io.eia.tools.contract.rules.FileCompatibility
 import io.eia.tools.contract.rules.FileRules
+import io.eia.tools.contract.rules.LifecycleRules
 import io.eia.tools.contract.rules.OpenApiCompatibility
 import io.eia.tools.contract.rules.OpenApiRules
 import java.nio.file.Path
@@ -16,14 +17,16 @@ import java.time.ZoneOffset
 import kotlin.io.path.isDirectory
 
 /**
- * 検査結果。[baselineUsed] が false なら互換性検査(CC-COMPAT-*)は比較元なしで省略している。
+ * 検査結果。[baselineUsed] が false なら、比較元が要る検査(互換性 CC-COMPAT-*・ライフサイクル CC-LIFECYCLE-001〜004)は省略している。
  * [waived] は例外(contracts/compat-waivers.yaml)で許可した違反、[unusedWaivers] はどの違反にも当たらなかった例外。
+ * [warnings] は知らせるだけの指摘(移行の期限を過ぎた deprecated の連携など。ジョブは失敗させない)。
  */
 class CheckResult(
     val violations: List<Violation>,
     val baselineUsed: Boolean,
     val waived: List<WaivedViolation> = emptyList(),
     val unusedWaivers: List<Waiver> = emptyList(),
+    val warnings: List<Violation> = emptyList(),
 )
 
 /**
@@ -32,7 +35,7 @@ class CheckResult(
  * @param root 検査するリポジトリのルート(contracts/ を含むディレクトリ)
  * @param baselineRoot 互換性検査の比較元(main の contracts/ を含むディレクトリ)。null か存在しなければ互換性検査を省略する
  * @param oasdiff oasdiff の実行ファイル
- * @param today 例外の期限の判定に使う日付(UTC)
+ * @param today 例外の期限・連携の移行の期限の判定に使う日付(UTC)
  */
 class ContractCheck(
     private val root: Path,
@@ -53,6 +56,7 @@ class ContractCheck(
                         OpenApiCompatibility(oasdiff).check(contracts, it) +
                         FileCompatibility.check(contracts, it)
                 }.orEmpty()
+        val lifecycle = LifecycleRules(contracts, baseline, today)
         val (waivers, waiverViolations) = Waivers.load(root)
         val waived = Waivers.apply(compatibility, waivers, today)
         val violations =
@@ -64,12 +68,14 @@ class ContractCheck(
                 CatalogRules(contracts, asyncApi.addressesByFile, openApi.domainsByFile).check() +
                 FileRules.check(contracts) +
                 checkCanonical(contracts) +
+                lifecycle.check() +
                 waived.violations
         return CheckResult(
             violations = violations.distinct().sortedWith(compareBy({ it.file }, { it.rule.id })),
             baselineUsed = baseline != null,
             waived = waived.waived,
             unusedWaivers = waived.unused,
+            warnings = lifecycle.warnings().sortedWith(compareBy({ it.file }, { it.rule.id })),
         )
     }
 

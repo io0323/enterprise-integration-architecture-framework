@@ -252,6 +252,39 @@ enum class Rule(
         "例外が不要になっていれば削除する。まだ必要なら理由を Issue に残して expires を延ばす",
     ),
 
+    // --- ライフサイクル(比較元に対する検査。ADR-0034) ---
+    LIFECYCLE_TRANSITION(
+        "CC-LIFECYCLE-001",
+        "連携の状態は 1 つの PR で 1 段階だけ前に進める(proposed → design → active → deprecated → retired)",
+        "16.1, ADR-0034",
+        "状態を 1 段階ずつ進める。新しい連携は proposed か design で登録する(既存の連携の後からの登録は onboarding)。" +
+            "deprecated から active に戻すときは reactivation に reason と approver を書く",
+    ),
+    LIFECYCLE_ENTRY_REMOVED(
+        "CC-LIFECYCLE-002",
+        "カタログのエントリを消せるのは、比較元で retired のものだけ",
+        "16.1, ADR-0034",
+        "先に deprecated → retired と進め、retired がマージされた後の PR で消す",
+    ),
+    LIFECYCLE_CONTRACT_REMOVED(
+        "CC-LIFECYCLE-003",
+        "retired 以外の連携が使う契約のファイル(OpenAPI・AsyncAPI・ファイルの仕様と、AsyncAPI が参照する Avro)を消さない",
+        "16.1, ADR-0034",
+        "その契約を使う連携を retired にしてから消す。新しい版は別のファイル(v{n+1})で足し、古い版の連携を廃止の手順に乗せる",
+    ),
+    LIFECYCLE_RETIRED_BEFORE_SUNSET(
+        "CC-LIFECYCLE-004",
+        "retired に進めるのは、deprecated の移行の期限(deprecation.sunset)の後だけ",
+        "16.1, ADR-0034",
+        "移行の期限を待つ。消費者の移行が終わって早めるときは、通知(deprecation.notice)で合意してから sunset を前に直す",
+    ),
+    LIFECYCLE_PAST_SUNSET(
+        "CC-LIFECYCLE-005",
+        "移行の期限を過ぎた deprecated の連携(警告。ジョブは失敗させない)",
+        "16, ADR-0034",
+        "消費者の移行を確かめて retired に進める。移行が終わらないなら、理由を Issue に残して sunset を延ばす",
+    ),
+
     // --- Canonical ---
     CANONICAL_AVRO(
         "CC-CANON-001",

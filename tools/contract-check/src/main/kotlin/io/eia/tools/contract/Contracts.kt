@@ -45,6 +45,7 @@ data class CatalogEntry(
     val consumers: List<CatalogParty>,
     val contract: String?,
     val channels: List<String>,
+    val lifecycle: String? = null,
 )
 
 class CatalogDocument(
@@ -168,6 +169,7 @@ data class Contracts(
                         ?.values()
                         ?.mapNotNull { if (it.isString) it.stringValue() else null }
                         .orEmpty(),
+                lifecycle = tree.text("lifecycle"),
             )
 
         private fun parseParty(node: JsonNode) = CatalogParty(node.text("owner"), node.text("system"), node.text("group"))

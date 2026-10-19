@@ -41,7 +41,7 @@ class ReportSpec :
 
             markdown shouldContain "| ファイル | ルール ID | 内容 | Framework 章 | 修正方法 |"
             markdown shouldContain "| `contracts/x.yaml` | `CC-API-003` | a \\| b<br>c | 12 | ${Rule.API_SECURITY.fix} |"
-            markdown shouldContain "比較元がないため互換性検査 CC-COMPAT-* は省略"
+            markdown shouldContain "比較元がないため互換性検査 CC-COMPAT-* とライフサイクルの検査 CC-LIFECYCLE-001〜004 は省略"
             Report.text(result) shouldContain "Framework 章 : 12"
         }
 

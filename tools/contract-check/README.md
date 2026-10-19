@@ -82,9 +82,26 @@ ID は `CC-{区分}-{連番}`。定義は `src/main/kotlin/io/eia/tools/contract
 | `CC-COMPAT-003` | ファイルの仕様が main の版に対して互換(列の削除・型や必須性の変更・並べ替え・enum の変更・形式の変更がない) | 9, 15.3 | 足してよいのは、末尾の任意(nullable: true)の列と、新しい形式だけ。ほかの変更は新しい版のファイル({system}_{dataset}.v{n+1}.yaml)で行う |
 | `CC-WAIVER-001` | 互換性検査の例外リストの形式が正しい | 16.1, ADR-0013 | 各例外に rule(CC-COMPAT-*)・file・contains・reason・issue・expires(YYYY-MM-DD)を書く |
 | `CC-WAIVER-002` | 期限切れの互換性検査の例外が残っていない | 16.1, ADR-0013 | 例外が不要になっていれば削除する。まだ必要なら理由を Issue に残して expires を延ばす |
+| `CC-LIFECYCLE-001` | 連携の状態は 1 つの PR で 1 段階だけ前に進める(proposed → design → active → deprecated → retired) | 16.1, ADR-0034 | 状態を 1 段階ずつ進める。新しい連携は proposed か design で登録する(既存の連携の後からの登録は onboarding)。deprecated から active に戻すときは reactivation に reason と approver を書く |
+| `CC-LIFECYCLE-002` | カタログのエントリを消せるのは、比較元で retired のものだけ | 16.1, ADR-0034 | 先に deprecated → retired と進め、retired がマージされた後の PR で消す |
+| `CC-LIFECYCLE-003` | retired 以外の連携が使う契約のファイル(OpenAPI・AsyncAPI・ファイルの仕様と、AsyncAPI が参照する Avro)を消さない | 16.1, ADR-0034 | その契約を使う連携を retired にしてから消す。新しい版は別のファイル(v{n+1})で足し、古い版の連携を廃止の手順に乗せる |
+| `CC-LIFECYCLE-004` | retired に進めるのは、deprecated の移行の期限(deprecation.sunset)の後だけ | 16.1, ADR-0034 | 移行の期限を待つ。消費者の移行が終わって早めるときは、通知(deprecation.notice)で合意してから sunset を前に直す |
+| `CC-LIFECYCLE-005` | 移行の期限を過ぎた deprecated の連携(警告。ジョブは失敗させない) | 16, ADR-0034 | 消費者の移行を確かめて retired に進める。移行が終わらないなら、理由を Issue に残して sunset を延ばす |
 | `CC-CANON-001` | Canonical Model(Kotlin)と Avro スキーマの項目が一致する | 15.1, ADR-0012 | ADR-0012 の変換規則に従って、項目名・必須性・型を Canonical Model と揃える |
 | `CC-CANON-002` | Canonical Model に対応づけた Avro の型が存在する | 15.1, ADR-0012 | CanonicalBindings の対応表か、contracts/avro の型名を直す |
 | `CC-TOOL-001` | 検査ツール(oasdiff)を実行できる | 19 | --oasdiff に oasdiff の実行ファイルを指定する(./gradlew :tools:contract-check:run は自動で取得する) |
+
+## 連携のライフサイクルの検査(`CC-LIFECYCLE-*`。ADR-0034)
+
+比較元(main)のカタログと比べて、連携の状態の進め方と、エントリ・契約のファイルの削除を検査する(Framework 16.1)。比較元がなければ 001〜004 は省略する。
+
+- 状態は proposed → design → active → deprecated → retired の順に、1 つの PR で 1 段階だけ進める(`CC-LIFECYCLE-001`)。
+  - 新しい連携は proposed か design で登録する。既に動いている連携を後から登録するときだけ、`onboarding: { kind: existing, reason: ... }` を書いて active で登録できる。
+  - 廃止の取り消し(deprecated → active)は、`reactivation: { reason: ..., approver: "@name" または team-name }` を書いたときだけ許す。
+- deprecated には `deprecation: { sunset: YYYY-MM-DD, notice: "#Issue", replacement: INT-... }`(replacement は任意)、retired には `retirement: { issue: "#Issue" }` が要る(カタログスキーマ。`CC-CATALOG-001`)。
+- retired に進めるのは `deprecation.sunset` の後だけ(`CC-LIFECYCLE-004`)。消せるのは、比較元で retired のエントリだけ(`CC-LIFECYCLE-002`)。
+- retired でない連携が使う契約のファイル(OpenAPI・AsyncAPI・ファイルの仕様と、AsyncAPI が参照する Avro)は消せない(`CC-LIFECYCLE-003`)。どの連携も使っていないファイルは消してよい。
+- **警告**: 移行の期限を過ぎても deprecated のままの連携(ゾンビ連携。`CC-LIFECYCLE-005`)は、出力と Step Summary の「警告」に出す。ジョブは失敗させない。
 
 ## 互換性検査の例外(`contracts/compat-waivers.yaml`)
 
