@@ -75,7 +75,7 @@ INTEGRATION_STANDARDS §5 のカタログに次の項目を追加し、`contract
 
 ## Consequences(トレードオフ)
 - 初回のビルドで oasdiff を GitHub Releases から取得するため、ネットワークが必要になる(2 回目以降は `build/` のものを使う)。版を上げるときは、チェックサムの表も更新する。
-- 比較は同じ相対パスのファイルどうしで行う。ファイルの削除・改名は互換性検査の対象外になる。参照が切れた場合は `CC-EVENT-002` / `CC-CATALOG-002` で検出されるが、参照されていない契約を削除した場合は検出しない(ライフサイクルに沿った削除の検査は #22 で追加する)。
+- 比較は同じ相対パスのファイルどうしで行う。ファイルの削除・改名は互換性検査の対象外になる。参照が切れた場合は `CC-EVENT-002` / `CC-CATALOG-002` で検出されるが、参照されていない契約を削除した場合は検出しない。**解決済み(2026-10-20)**: ライフサイクルに沿った削除の検査(`CC-LIFECYCLE-*`)を ADR-0034 で足した。
 - Avro の `SchemaCompatibility` は論理型の変更(`timestamp-micros` → `timestamp-millis`)を非互換としない。Canonical Model に対応づけた型は `CC-CANON-001` で検出できるが、それ以外の型では検出できない。
 - JSON Schema の検証メッセージは、実行環境のロケールに依存しないよう日本語に固定する。
 - **解決済み**: Framework 6.3 の「BACKWARD 互換必須(消費者を先に更新せず発行者を進化可能)」は、括弧内が FORWARD 互換の性質を指していた。ADR-0014 で FULL 互換を要件とし、`CC-COMPAT-001` を FULL の検査にした。Framework 6.3・15.3 と INTEGRATION_STANDARDS §4 も ADR-0014 に合わせて直した。
@@ -88,3 +88,4 @@ INTEGRATION_STANDARDS §5 のカタログに次の項目を追加し、`contract
   - `CC-FILE-003`: ファイル名と中の system・dataset・version の一致。
   - `CC-FILE-004`: カタログへの登録。
   - `CC-COMPAT-003`: main の版に対する互換性。足してよいのは、末尾の任意の列と新しい形式だけ。CSV は列の位置で読まれ、受ける側は型・必須性・enum の値で検査するため。
+- 2026-10-20: ファイルの削除・改名が互換性検査の対象外になる制約を、ADR-0034 のライフサイクルの検査(`CC-LIFECYCLE-*`)で補った(#22。P09 ⑧a)。
