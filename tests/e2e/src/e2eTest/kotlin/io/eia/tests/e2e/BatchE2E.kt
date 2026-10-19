@@ -147,7 +147,7 @@ private fun stepStatus(
     )
 
 /** Gateway 経由で注文を受け付け、注文 ID を返す。 */
-private fun placeOrder(): String {
+internal fun placeOrder(): String {
     val created =
         sendRespectingRateLimit(
             request(ORDERS)
@@ -160,7 +160,7 @@ private fun placeOrder(): String {
 }
 
 /** 注文の受け付けのイベントが Kafka に届くまで待つ(Outbox → Debezium)。 */
-private fun awaitCreated(orderIds: Set<String>) {
+internal fun awaitCreated(orderIds: Set<String>) {
     val properties =
         mapOf<String, Any>(
             ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG to KAFKA,

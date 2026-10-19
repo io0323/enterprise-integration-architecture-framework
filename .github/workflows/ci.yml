@@ -263,12 +263,13 @@ jobs:
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           docker system prune --all --force >/dev/null
-      # order と cdc(レガシーの CDC と ACL。P06 ⑤。LegacyOrderAclE2E)と saga(注文 Saga の参加者。P07 ⑥。SagaE2E)
-      - name: Up (core + order + cdc + saga + batch)
+      # order と cdc(レガシーの CDC と ACL。P06 ⑤。LegacyOrderAclE2E)と saga(注文 Saga の参加者。P07 ⑥。SagaE2E)と
+      # file(ファイル授受。P09 ⑦。FileExchangeE2E)。E2E=1 で tests/e2e/e2e.env(待ち時間を短くする設定)を足す
+      - name: Up (core + order + cdc + saga + batch + file)
         id: up
         run: |
           start=$(date +%s)
-          make up PROFILE="order cdc saga batch"
+          make up PROFILE="order cdc saga batch file" E2E=1
           echo "seconds=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
       - name: E2E
         id: e2e
@@ -276,6 +277,10 @@ jobs:
           start=$(date +%s)
           make e2e
           echo "seconds=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
+      # 全 profile を同時に動かしたときのメモリの使用量(ランナーは 16 GB。file を足した後の余裕を見る)
+      - name: Memory
+        if: ${{ !cancelled() }}
+        run: make stats | tee stats.md
       - name: Summary
         if: ${{ !cancelled() }}
         run: |
@@ -284,9 +289,10 @@ jobs:
             echo
             echo "| 段階 | 秒 |"
             echo "|---|---|"
-            echo "| 基盤の起動(make up PROFILE=\"order cdc saga batch\") | ${{ steps.up.outputs.seconds }} |"
+            echo "| 基盤の起動(make up PROFILE=\"order cdc saga batch file\" E2E=1) | ${{ steps.up.outputs.seconds }} |"
             echo "| E2E(make e2e) | ${{ steps.e2e.outputs.seconds }} |"
             echo
+            if [ -f stats.md ]; then cat stats.md; echo; fi
             python3 scripts/ci/test-summary.py
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload test results (JUnit XML)
