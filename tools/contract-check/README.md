@@ -82,6 +82,7 @@ ID は `CC-{区分}-{連番}`。定義は `src/main/kotlin/io/eia/tools/contract
 | `CC-COMPAT-003` | ファイルの仕様が main の版に対して互換(列の削除・型や必須性の変更・並べ替え・enum の変更・形式の変更がない) | 9, 15.3 | 足してよいのは、末尾の任意(nullable: true)の列と、新しい形式だけ。ほかの変更は新しい版のファイル({system}_{dataset}.v{n+1}.yaml)で行う |
 | `CC-WAIVER-001` | 互換性検査の例外リストの形式が正しい | 16.1, ADR-0013 | 各例外に rule(CC-COMPAT-*)・file・contains・reason・issue・expires(YYYY-MM-DD)を書く |
 | `CC-WAIVER-002` | 期限切れの互換性検査の例外が残っていない | 16.1, ADR-0013 | 例外が不要になっていれば削除する。まだ必要なら理由を Issue に残して expires を延ばす |
+| `CC-WAIVER-003` | active・deprecated の連携の契約への例外は、承認者と作成日を書き、期限は作成日から 14 日以内 | 16.1, ADR-0013 | approver(@name か team-name)と created(YYYY-MM-DD)を書き、expires を created から 14 日以内にする。長く要るなら、例外ではなく新しい版(v{n+1})で並行提供する |
 | `CC-LIFECYCLE-001` | 連携の状態は 1 つの PR で 1 段階だけ前に進める(proposed → design → active → deprecated → retired) | 16.1, ADR-0034 | 状態を 1 段階ずつ進める。新しい連携は proposed か design で登録する(既存の連携の後からの登録は onboarding)。deprecated から active に戻すときは reactivation に reason と approver を書く |
 | `CC-LIFECYCLE-002` | カタログのエントリを消せるのは、比較元で retired のものだけ | 16.1, ADR-0034 | 先に deprecated → retired と進め、retired がマージされた後の PR で消す |
 | `CC-LIFECYCLE-003` | retired 以外の連携が使う契約のファイル(OpenAPI・AsyncAPI・ファイルの仕様と、AsyncAPI が参照する Avro)を消さない | 16.1, ADR-0034 | その契約を使う連携を retired にしてから消す。新しい版は別のファイル(v{n+1})で足し、古い版の連携を廃止の手順に乗せる |
@@ -116,10 +117,14 @@ waivers:
     reason: 利用者がいない理由など
     issue: "#25"                                 # 経緯を残した Issue
     expires: 2026-10-31                          # 翌日から CC-WAIVER-002 で失敗する
+    approver: "@name"                            # active・deprecated の連携の契約では必須(@name か team-name)
+    created: 2026-10-20                          # active・deprecated の連携の契約では必須。expires は created から 14 日以内
 ```
 
 - 許可した違反は、出力の「例外で許可した違反」に理由・Issue・期限とともに表示する(違反の件数には数えない)。
 - どの違反にも当たらない例外(main にマージされて比較元と一致したものなど)は「使われていない例外」として表示する。失敗にはしないので、気づいたら削除する。
+- **active・deprecated の連携(消費者がいる)の契約への例外は、緊急対応だけに使う**(`CC-WAIVER-003`)。`approver` と `created` を書き、`expires` を `created` から 14 日以内にする。対象かどうかは、カタログの `contract`(と AsyncAPI が参照する Avro)から辿って判定する。
+- **比較元で proposed・design の連携だけが使う契約は、例外がなくても破壊的変更を許す**(消費者がまだいない)。許可した違反は「設計中の連携の契約なので許可した互換性の違反」として表示する(違反の件数には数えない)。判定は比較元の状態で行う(同じ PR で design に戻しても許可しない)。どの連携も使っていない契約は許可しない。
 
 ## テスト
 

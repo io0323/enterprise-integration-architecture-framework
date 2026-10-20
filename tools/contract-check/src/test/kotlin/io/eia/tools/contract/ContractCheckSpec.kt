@@ -29,8 +29,15 @@ private class Case(
     val name: String,
     val expected: Set<String>,
     val withBaseline: Boolean = false,
+    val prepareBaseline: Workspace.() -> Workspace = { this },
     val prepare: Workspace.() -> Workspace,
 )
+
+/**
+ * 日次の売上ファイル(INT-SALES-004)を active にする。設計中(design)の連携だけが使う契約は破壊的変更を許すので(ADR-0013 §7)、
+ * ファイルの仕様の互換性の違反のサンプルは、比較元と変更後の両方で active にして検査する。
+ */
+private fun Workspace.fileIntegrationActive(): Workspace = replace(CATALOG_FILE, "lifecycle: design", "lifecycle: active")
 
 private val cases =
     listOf(
@@ -214,20 +221,30 @@ private val cases =
                 "required: [id, customerId, status, orderedAt, lines, shippingAddress]",
             )
         },
-        Case("ファイルの仕様: 列の削除と型の変更", setOf("CC-COMPAT-003"), withBaseline = true) {
-            replace(FILE_SPEC, "  - name: ordered_at\n    type: timestamp\n", "  - name: ordered_at\n    type: string\n")
+        Case("ファイルの仕様: 列の削除と型の変更", setOf("CC-COMPAT-003"), withBaseline = true, prepareBaseline = { fileIntegrationActive() }) {
+            fileIntegrationActive()
                 .replace(
+                    FILE_SPEC,
+                    "  - name: ordered_at\n    type: timestamp\n",
+                    "  - name: ordered_at\n    type: string\n",
+                ).replace(
                     FILE_SPEC,
                     "  - name: ship_region\n    type: string\n    nullable: true\n    description: 届け先の都道府県(ない注文は null)\n",
                     "",
                 )
         },
-        Case("ファイルの仕様: 列の並べ替えと、必須の列の追加と、enum の値の追加", setOf("CC-COMPAT-003"), withBaseline = true) {
-            replace(
-                FILE_SPEC,
-                "enum: [PLACED, CONFIRMED, SHIPPED, DELIVERED, CANCELLED]",
-                "enum: [PLACED, CONFIRMED, SHIPPED, DELIVERED, CANCELLED, RETURNED]",
-            ).replace(FILE_SPEC, "  - name: currency\n", "  - name: currency_code\n")
+        Case(
+            "ファイルの仕様: 列の並べ替えと、必須の列の追加と、enum の値の追加",
+            setOf("CC-COMPAT-003"),
+            withBaseline = true,
+            prepareBaseline = { fileIntegrationActive() },
+        ) {
+            fileIntegrationActive()
+                .replace(
+                    FILE_SPEC,
+                    "enum: [PLACED, CONFIRMED, SHIPPED, DELIVERED, CANCELLED]",
+                    "enum: [PLACED, CONFIRMED, SHIPPED, DELIVERED, CANCELLED, RETURNED]",
+                ).replace(FILE_SPEC, "  - name: currency\n", "  - name: currency_code\n")
                 .replace(
                     FILE_SPEC,
                     "    description: 届け先の都道府県(ない注文は null)\n",
@@ -235,8 +252,9 @@ private val cases =
                         "  - name: channel\n    type: string\n    nullable: false\n    description: 受付の経路\n",
                 )
         },
-        Case("ファイルの仕様: 形式の削除と、CSV の改行の変更", setOf("CC-COMPAT-003"), withBaseline = true) {
-            replace(FILE_SPEC, "  - type: parquet\n    extension: parquet\n    compression: zstd\n", "")
+        Case("ファイルの仕様: 形式の削除と、CSV の改行の変更", setOf("CC-COMPAT-003"), withBaseline = true, prepareBaseline = { fileIntegrationActive() }) {
+            fileIntegrationActive()
+                .replace(FILE_SPEC, "  - type: parquet\n    extension: parquet\n    compression: zstd\n", "")
                 .replace(FILE_SPEC, "    lineSeparator: \"\\r\\n\"", "    lineSeparator: \"\\n\"")
         },
         // --- Canonical ⇔ Avro(ADR-0012) ---
@@ -350,7 +368,7 @@ class ContractCheckSpec :
 
         cases.forEach { case ->
             test("違反: ${case.name} → ${case.expected.sorted().joinToString()}") {
-                val baseline = if (case.withBaseline) Workspace.ofRepositoryContracts() else null
+                val baseline = if (case.withBaseline) Workspace.ofRepositoryContracts().(case.prepareBaseline)() else null
                 val result = Workspace.ofRepositoryContracts().(case.prepare)().check(baseline)
 
                 withClue(result.violations.joinToString("\n")) { result.ruleIds shouldBe case.expected }

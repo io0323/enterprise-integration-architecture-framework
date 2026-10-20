@@ -251,6 +251,13 @@ enum class Rule(
         "16.1, ADR-0013",
         "例外が不要になっていれば削除する。まだ必要なら理由を Issue に残して expires を延ばす",
     ),
+    WAIVER_ACTIVE(
+        "CC-WAIVER-003",
+        "active・deprecated の連携の契約への例外は、承認者と作成日を書き、期限は作成日から 14 日以内",
+        "16.1, ADR-0013",
+        "approver(@name か team-name)と created(YYYY-MM-DD)を書き、expires を created から 14 日以内にする。" +
+            "長く要るなら、例外ではなく新しい版(v{n+1})で並行提供する",
+    ),
 
     // --- ライフサイクル(比較元に対する検査。ADR-0034) ---
     LIFECYCLE_TRANSITION(
