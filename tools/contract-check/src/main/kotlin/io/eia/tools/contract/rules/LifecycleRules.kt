@@ -162,15 +162,11 @@ class LifecycleRules(
 
     /** 比較元で retired 以外の連携が使う契約のファイル(と、AsyncAPI が参照する Avro)が、消えていないこと。 */
     private fun checkRemovedContracts(base: Contracts): List<Violation> {
-        val asyncApis = base.asyncApis.associateBy { it.path }
         val used =
-            base.catalogs
-                .filter { it.entry.lifecycle != RETIRED }
-                .flatMap { catalog ->
-                    val contract = catalog.entry.contract ?: return@flatMap emptyList()
-                    val avros = asyncApis[contract]?.let { AsyncApiRules.avroReferences(base, it) }.orEmpty()
-                    (listOf(contract) + avros).map { it to catalog.entry.id }
-                }.groupBy({ it.first }, { it.second })
+            ContractUsage
+                .of(base)
+                .mapValues { (_, catalogs) -> catalogs.filter { it.entry.lifecycle != RETIRED }.map { it.entry.id } }
+                .filterValues { it.isNotEmpty() }
         return used
             .filterKeys {
                 !contracts.root

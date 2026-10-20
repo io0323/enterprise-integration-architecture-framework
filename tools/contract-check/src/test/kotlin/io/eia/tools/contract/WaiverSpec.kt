@@ -17,22 +17,31 @@ private const val REMOVED_PATH = "api-path-removed-without-deprecation"
 private fun withRemovedPath(): Workspace =
     Workspace.ofRepositoryContracts().replace(OPENAPI, "  /v1/orders/{orderId}:\n", "  /v1/orders/{orderId}/renamed:\n")
 
+/**
+ * 例外のファイル。order-api は active の連携(INT-SALES-001)の契約なので、承認者と作成日を書き、期限は作成日から 14 日以内にする
+ * (CC-WAIVER-003)。[approver]・[created] に null を渡すと、その行を書かない。
+ */
+@Suppress("LongParameterList") // 例外の項目を、テストごとに 1 つずつ変える
 private fun waiverFile(
     rule: String = "CC-COMPAT-002",
     contains: String = REMOVED_PATH,
     expires: String = "2026-10-31",
+    approver: String? = "\"@io0323\"",
+    created: String? = "2026-10-20",
     extra: String = "",
 ): String =
-    """
-    waivers:
-      - rule: $rule
-        file: $OPENAPI
-        contains: "$contains"
-        reason: テスト
-        issue: "#25"
-        expires: $expires
-    $extra
-    """.trimIndent()
+    listOfNotNull(
+        "waivers:",
+        "  - rule: $rule",
+        "    file: $OPENAPI",
+        "    contains: \"$contains\"",
+        "    reason: テスト",
+        "    issue: \"#25\"",
+        "    expires: $expires",
+        approver?.let { "    approver: $it" },
+        created?.let { "    created: $it" },
+        extra.takeIf { it.isNotEmpty() },
+    ).joinToString("\n")
 
 class WaiverSpec :
     FunSpec({
@@ -86,10 +95,45 @@ class WaiverSpec :
         }
 
         mapOf(
+            "承認者がない" to waiverFile(approver = null),
+            "承認者の形式が誤り(個人名)" to waiverFile(approver = "山田"),
+            "作成日がない" to waiverFile(created = null),
+            "期限が作成日から 14 日を超える" to waiverFile(created = "2026-10-01", expires = "2026-10-16"),
+            "期限が作成日より前" to waiverFile(created = "2026-10-20", expires = "2026-10-19"),
+        ).forEach { (name, text) ->
+            test("active な連携の契約への例外: $name → CC-WAIVER-003") {
+                val result = withRemovedPath().write(Waivers.FILE, text).check(Workspace.ofRepositoryContracts(), today = BEFORE_EXPIRY)
+
+                withClue(result.violations.joinToString("\n")) { result.ruleIds shouldBe setOf("CC-WAIVER-003") }
+            }
+        }
+
+        test("active な連携の契約への例外: 期限が作成日からちょうど 14 日なら許す") {
+            val text = waiverFile(created = "2026-10-01", expires = "2026-10-15")
+            withRemovedPath()
+                .write(
+                    Waivers.FILE,
+                    text,
+                ).check(Workspace.ofRepositoryContracts(), today = BEFORE_EXPIRY)
+                .violations
+                .shouldBeEmpty()
+        }
+
+        test("設計中の連携だけが使う契約への例外は、承認者と作成日がなくてよい(CC-WAIVER-003 は active・deprecated だけ)") {
+            val designOnly =
+                Workspace
+                    .ofRepositoryContracts()
+                    .replace("contracts/catalog/INT-SALES-001.yaml", "lifecycle: active", "lifecycle: design")
+                    .write(Waivers.FILE, waiverFile(approver = null, created = null))
+            designOnly.check(today = BEFORE_EXPIRY).ruleIds shouldBe emptySet()
+        }
+
+        mapOf(
             "CC-COMPAT-* 以外のルール" to waiverFile(rule = "CC-NAMING-001"),
             "存在しないルール" to waiverFile(rule = "CC-COMPAT-999"),
             "日付の形式が不正" to waiverFile(expires = "2026/10/31"),
             "必須項目の欠落" to waiverFile(extra = "  - rule: CC-COMPAT-002\n    file: $OPENAPI"),
+            "作成日の形式が不正" to waiverFile(created = "2026/10/20"),
             "waivers が配列でない" to "waivers: {}",
         ).forEach { (name, text) ->
             test("形式の違反: $name → CC-WAIVER-001") {

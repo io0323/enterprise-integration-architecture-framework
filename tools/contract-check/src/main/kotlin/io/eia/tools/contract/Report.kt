@@ -5,6 +5,7 @@ object Report {
     private val HEADER = listOf("ファイル", "ルール ID", "内容", "Framework 章", "修正方法")
     private val WAIVED_HEADER = listOf("ファイル", "ルール ID", "内容", "理由", "Issue", "期限")
     private val WARNING_HEADER = listOf("ファイル", "ルール ID", "内容", "対応")
+    private val DESIGN_HEADER = listOf("ファイル", "ルール ID", "内容")
 
     fun text(result: CheckResult): String =
         buildString {
@@ -28,6 +29,11 @@ object Report {
             result.unusedWaivers.forEach { waiver ->
                 appendLine()
                 appendLine("使われていない例外があります(削除してください): ${waiver.rule} ${waiver.file}(${waiver.issue})")
+            }
+            if (result.designAllowed.isNotEmpty()) {
+                appendLine()
+                appendLine("設計中の連携の契約なので許可した互換性の違反が ${result.designAllowed.size} 件あります")
+                result.designAllowed.forEach { v -> appendLine("  [${v.rule.id}] ${v.file}: ${v.message}") }
             }
             if (result.warnings.isNotEmpty()) {
                 appendLine()
@@ -68,6 +74,17 @@ object Report {
             if (result.unusedWaivers.isNotEmpty()) {
                 appendLine()
                 appendLine("使われていない例外(削除してください): " + result.unusedWaivers.joinToString { "${it.rule} `${it.file}`(${it.issue})" })
+            }
+            if (result.designAllowed.isNotEmpty()) {
+                appendLine()
+                appendLine("### 設計中の連携の契約なので許可した互換性の違反(proposed・design。ADR-0013 §7)")
+                appendLine()
+                appendLine(DESIGN_HEADER.joinToString(" | ", "| ", " |"))
+                appendLine(DESIGN_HEADER.joinToString(" | ", "| ", " |") { "---" })
+                result.designAllowed.forEach { v ->
+                    val cells = listOf("`${v.file}`", "`${v.rule.id}`", v.message)
+                    appendLine(cells.joinToString(" | ", "| ", " |") { it.escapeCell() })
+                }
             }
             if (result.warnings.isNotEmpty()) {
                 appendLine()

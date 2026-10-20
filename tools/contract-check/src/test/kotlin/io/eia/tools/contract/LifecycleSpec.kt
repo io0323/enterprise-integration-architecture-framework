@@ -168,6 +168,24 @@ class LifecycleSpec :
             markdown.readText() shouldContain "CC-LIFECYCLE-005"
         }
 
+        test("互換性と状態の連動: 比較元で設計中の連携だけが使う契約は、破壊的変更を許可して報告する。active なら違反") {
+            val breaking = { workspace: Workspace -> workspace.replace(FILE_CONTRACT, "    type: int64", "    type: string") }
+            val designResult = check(Workspace.ofRepositoryContracts(), breaking(Workspace.ofRepositoryContracts()))
+            designResult.violations.shouldBeEmpty()
+            designResult.designAllowed.map { it.rule.id to it.file } shouldBe listOf("CC-COMPAT-003" to FILE_CONTRACT)
+            Report.text(designResult) shouldContain "設計中の連携の契約なので許可した互換性の違反が 1 件あります"
+            Report.markdown(designResult) shouldContain "### 設計中の連携の契約なので許可した互換性の違反"
+
+            val activeBase = Workspace.ofRepositoryContracts().lifecycle(FILE, DESIGN, ACTIVE)
+            val activeResult = check(activeBase, breaking(Workspace.ofRepositoryContracts().lifecycle(FILE, DESIGN, ACTIVE)))
+            ids(activeResult) shouldBe setOf("CC-COMPAT-003")
+            activeResult.designAllowed.shouldBeEmpty()
+
+            withClue("比較元の状態で決める(同じ PR で design に戻しても許可しない)") {
+                ids(check(activeBase, breaking(Workspace.ofRepositoryContracts()))) shouldBe setOf("CC-COMPAT-003", "CC-LIFECYCLE-001")
+            }
+        }
+
         test("比較元がなければ、状態の遷移の検査は省略する") {
             val result = Workspace.ofRepositoryContracts().lifecycle(EVENTS, ACTIVE, RETIRED).check()
             result.baselineUsed shouldBe false

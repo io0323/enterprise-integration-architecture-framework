@@ -1,6 +1,8 @@
 # 互換性検査(CC-COMPAT-*)の例外(ADR-0013 §6)。
 # - rule / file が一致し、違反の内容に contains を含むものだけを許可する。
 # - 例外にできるのは CC-COMPAT-* だけ。expires の翌日から CC-WAIVER-002 で CI が失敗する。
+# - active・deprecated の連携の契約への例外は緊急対応だけ。approver(@name か team-name)と created を書き、
+#   expires は created から 14 日以内にする(CC-WAIVER-003)。設計中(proposed・design)の連携だけが使う契約は、例外なしで破壊的変更を許す。
 # - main にマージされて比較元と一致すると、例外は「使われていない」と表示される。そうなったら削除する。
 # 現在、有効な例外はない。#25 のスコープ名の変更の例外は、main にマージされて使われなくなったため削除した。
 waivers: []

@@ -6,6 +6,7 @@ import io.eia.tools.contract.canonical.CanonicalBindings
 import io.eia.tools.contract.rules.AsyncApiRules
 import io.eia.tools.contract.rules.AvroRules
 import io.eia.tools.contract.rules.CatalogRules
+import io.eia.tools.contract.rules.ContractUsage
 import io.eia.tools.contract.rules.FileCompatibility
 import io.eia.tools.contract.rules.FileRules
 import io.eia.tools.contract.rules.LifecycleRules
@@ -20,6 +21,7 @@ import kotlin.io.path.isDirectory
  * 検査結果。[baselineUsed] が false なら、比較元が要る検査(互換性 CC-COMPAT-*・ライフサイクル CC-LIFECYCLE-001〜004)は省略している。
  * [waived] は例外(contracts/compat-waivers.yaml)で許可した違反、[unusedWaivers] はどの違反にも当たらなかった例外。
  * [warnings] は知らせるだけの指摘(移行の期限を過ぎた deprecated の連携など。ジョブは失敗させない)。
+ * [designAllowed] は、比較元で proposed・design の連携だけが使う契約の互換性の違反(設計中なので許可。ADR-0013 §7)。
  */
 class CheckResult(
     val violations: List<Violation>,
@@ -27,6 +29,7 @@ class CheckResult(
     val waived: List<WaivedViolation> = emptyList(),
     val unusedWaivers: List<Waiver> = emptyList(),
     val warnings: List<Violation> = emptyList(),
+    val designAllowed: List<Violation> = emptyList(),
 )
 
 /**
@@ -57,11 +60,15 @@ class ContractCheck(
                         FileCompatibility.check(contracts, it)
                 }.orEmpty()
         val lifecycle = LifecycleRules(contracts, baseline, today)
+        // 比較元で設計中(proposed・design)の連携だけが使う契約は、破壊的変更を許す(消費者がまだいない。ADR-0013 §7)
+        val designUsage = baseline?.let(ContractUsage::of).orEmpty()
+        val (designAllowed, enforced) = compatibility.partition { inDesignOnly(designUsage[it.file]) }
         val (waivers, waiverViolations) = Waivers.load(root)
-        val waived = Waivers.apply(compatibility, waivers, today)
+        val waived = Waivers.apply(enforced, waivers, today)
         val violations =
             contracts.loadViolations +
                 waiverViolations +
+                Waivers.checkActive(waivers, ContractUsage.of(contracts)) +
                 openApi.violations +
                 asyncApi.violations +
                 AvroRules.checkNaming(contracts) +
@@ -76,8 +83,13 @@ class ContractCheck(
             waived = waived.waived,
             unusedWaivers = waived.unused,
             warnings = lifecycle.warnings().sortedWith(compareBy({ it.file }, { it.rule.id })),
+            designAllowed = designAllowed.sortedWith(compareBy({ it.file }, { it.rule.id })),
         )
     }
+
+    /** 契約を使う連携があり、すべて proposed・design なら true(どの連携も使っていない契約は、許可しない)。 */
+    private fun inDesignOnly(users: List<CatalogDocument>?): Boolean =
+        !users.isNullOrEmpty() && users.all { it.entry.lifecycle in DESIGN_STATES }
 
     private fun checkCanonical(contracts: Contracts): List<Violation> {
         val namedTypes =
@@ -100,3 +112,5 @@ class ContractCheck(
         }
     }
 }
+
+private val DESIGN_STATES = setOf("proposed", "design")

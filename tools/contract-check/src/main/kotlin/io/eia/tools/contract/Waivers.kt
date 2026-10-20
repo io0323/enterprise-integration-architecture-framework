@@ -19,6 +19,8 @@ data class Waiver(
     val reason: String,
     val issue: String,
     val expires: LocalDate,
+    val approver: String? = null,
+    val created: LocalDate? = null,
 )
 
 /** 例外で許可した違反と、その根拠の例外。 */
@@ -39,6 +41,11 @@ object Waivers {
     const val FILE = "contracts/compat-waivers.yaml"
 
     private const val WAIVABLE_PREFIX = "CC-COMPAT-"
+
+    /** active・deprecated の連携の契約への例外の期限の上限(作成日から)。緊急対応のためだけに使う(ADR-0013 §6) */
+    const val ACTIVE_MAX_DAYS: Long = 14
+    private val APPROVER = Regex("^(@[A-Za-z0-9][A-Za-z0-9-]*|team-[a-z][a-z0-9-]*)$")
+    private val IN_USE = setOf("active", "deprecated")
     private val REQUIRED = listOf("rule", "file", "contains", "reason", "issue", "expires")
     private val yaml = YAMLMapper.builder().build()
 
@@ -81,6 +88,34 @@ object Waivers {
         return WaiverResult(remaining + expiredViolations, waived, active.filterNot { it in used })
     }
 
+    /**
+     * active・deprecated の連携(消費者がいる)の契約への例外は、緊急対応だけに使う(ADR-0013 §6。CC-WAIVER-003)。
+     * 承認者・作成日を書き、期限は作成日から [ACTIVE_MAX_DAYS] 日以内にする。連携はカタログの contract から辿る([usage])。
+     */
+    fun checkActive(
+        waivers: List<Waiver>,
+        usage: Map<String, List<CatalogDocument>>,
+    ): List<Violation> =
+        waivers.mapNotNull { waiver ->
+            val users = usage[waiver.file].orEmpty().filter { it.entry.lifecycle in IN_USE }
+            if (users.isEmpty()) return@mapNotNull null
+            val label = "${waiver.rule} ${waiver.file}(${users.mapNotNull { it.entry.id }.distinct().sorted().joinToString()} が使う契約)"
+            val problems =
+                buildList {
+                    if (waiver.approver == null || !APPROVER.matches(waiver.approver)) add("approver(@name か team-name)がありません")
+                    when {
+                        waiver.created == null -> add("created がありません")
+
+                        waiver.expires.isBefore(waiver.created) -> add("expires が created より前です")
+
+                        waiver.expires.isAfter(
+                            waiver.created.plusDays(ACTIVE_MAX_DAYS),
+                        ) -> add("expires が created から $ACTIVE_MAX_DAYS 日を超えています")
+                    }
+                }
+            problems.takeIf { it.isNotEmpty() }?.let { Violation(FILE, Rule.WAIVER_ACTIVE, "$label の例外: ${it.joinToString("。")}") }
+        }
+
     private fun Waiver.matches(violation: Violation): Boolean =
         violation.rule.id == rule && violation.file == file && contains in violation.message
 
@@ -92,10 +127,16 @@ object Waivers {
         val missing = REQUIRED.filter { node.text(it).isNullOrBlank() }
         val rule = node.text("rule").orEmpty()
         val expires = node.text("expires")?.let { runCatchingDate(it) }
+        val createdText = node.text("created")
+        val created = createdText?.let { runCatchingDate(it) }
         val error =
             when {
                 missing.isNotEmpty() -> {
                     "$label: 必須項目がありません: ${missing.joinToString()}"
+                }
+
+                createdText != null && created == null -> {
+                    "$label: created は YYYY-MM-DD で書いてください: $createdText"
                 }
 
                 !rule.startsWith(WAIVABLE_PREFIX) || Rule.entries.none { it.id == rule } -> {
@@ -120,6 +161,8 @@ object Waivers {
                 reason = node.text("reason").orEmpty(),
                 issue = node.text("issue").orEmpty(),
                 expires = expires,
+                approver = node.text("approver"),
+                created = created,
             ) to null
         }
     }
