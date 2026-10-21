@@ -1,0 +1,37 @@
+# テストの Flow: 別の SaaS(項目の名前・入れ子・時刻の形が CRM と違う)の連絡先を、同じ Canonical の Customer に写す。
+# コードを変えずに、この YAML を足すだけで新しいマッピングになることを確かめる(ROADMAP P10 の DoD)。
+id: acme-contact
+version: 1
+description: ACME の連絡先(エポックのミリ秒・国名の対応表・固定値)
+integration: INT-SALES-007
+canonical: sales.Customer
+triggers:
+  - kind: event
+    topic: integration.acme-webhook.received.v1
+    source: acme
+    eventTypes: [contact.changed]
+    record: $.payload.contact
+ordering:
+  key: id
+  version: $.revision
+mapping:
+  id: { from: $.contactId }
+  name: { from: $.profile.fullName, transform: trim }
+  email: { from: $.profile.emailAddress, transform: lowercase }
+  createdAt: { from: $.createdMillis, transform: epoch-millis-instant }
+  updatedAt: { from: $.modifiedMillis, transform: epoch-millis-instant }
+  billingAddress:
+    when: $.postal
+    fields:
+      countryCode: { from: $.postal.countryName, transform: lookup, table: countries }
+      postalCode: { from: $.postal.zip }
+      city: { from: $.postal.town }
+      line1: { from: $.postal.street }
+tables:
+  countries:
+    Japan: JP
+    United States: US
+routes:
+  - when: { field: billingAddress.countryCode, equals: JP }
+    deliver: sales.customer.changed.v1
+  - deliver: sales.customer.changed.v1

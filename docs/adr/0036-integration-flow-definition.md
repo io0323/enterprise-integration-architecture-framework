@@ -59,3 +59,4 @@ Framework 10 章のアンチパターンは、iPaaS の中に業務のロジッ�
 ## 改訂履歴
 - 2026-10-21: P10 ①(#13)で作成した。
 - 2026-10-21: P10 ③ で §4 を直した。`ce_id` は Webhook のイベント ID ではなく、受け取りの記録ごとに Outbox が作る UUIDv7(Outbox の `id` 列と同じ値。ADR-0007)。webhook-id は UUID とは限らないため。重複の判定の効果は同じ(受け口が webhook-id で重複を止める)。
+- 2026-10-21: P10 ④ で integration-flow の中核を実装した。domain と application は JSON・Canonical Model に依存しない(元のレコードは domain の値の木 `SourceValue`、写した結果は `MappedRecord`。Canonical の型への変換は adapters の `CanonicalTypes` が `CanonicalCodec.decode` で行う。ADR-0010 Decision 7)。起動時の検証は §1 の JSON Schema に加えて、ファイル名・振り分けの形・lookup の対応表・Canonical の項目(contract-check の CC-FLOW-002 の Canonical の部分と同じ)を確かめ、すべてのファイルの誤りをまとめて返す。カタログの参照(連携・トピック)は、実行時にカタログを持たないので contract-check だけが確かめる。Flow の定義はイメージに含めた contracts/flows を既定とし、`INTEGRATION_FLOW_FLOWS_DIR` でディレクトリを指定できる(YAML を足して再起動するだけで新しいマッピングを足せる)。`integration-flow validate` で起動の前に確かめられる。写せない値(変換に合わない形・対応表にない値)は `FlowMappingError`(NonRetryable。取り込みの側で DLQ)で、メッセージには項目の場所だけを入れる。
