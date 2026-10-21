@@ -166,6 +166,8 @@ REST のエラーは RFC 9457 の Problem Details(`application/problem+json`)で
 | `internal-error` | 500 | 想定外のエラー |
 | `unauthorized` | 401 | トークンがない・不正(理由は返さない。ADR-0019 §5) |
 | `forbidden` | 403 | スコープが足りない |
+| `webhook-signature-invalid` | 401 | Webhook の署名が一致しない(記録しない。ADR-0035 §2) |
+| `webhook-timestamp-out-of-range` | 401 | Webhook の署名の時刻が前後 5 分を外れた(リプレイ。記録しない。送り手は新しい時刻で署名し直す。ADR-0035 §2) |
 | `about:blank` | 405 / 413 / 415 | 状態コード以上の意味がない応答 |
 | `about:blank` | 502 / 504 | ゲートウェイが返す(サービスに接続できない / 上流のタイムアウト。504 は結果が分からない。ADR-0023) |
 
