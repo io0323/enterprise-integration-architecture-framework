@@ -19,6 +19,10 @@ private const val COMMAND_CONTRACT = "contracts/asyncapi/inventory-commands.v1.y
 private const val COMMAND_CATALOG = "contracts/catalog/INT-INVENTORY-001.yaml"
 private const val REASON_FIELD =
     ",\n    { \"name\": \"reason\", \"type\": \"string\", \"doc\": \"取消理由の要約。個人情報を含めない\" }"
+private const val WEBHOOK = "contracts/openapi/crm-webhook.v1.yaml"
+private const val EXTERNAL_API = "contracts/external/crm-api.v1.yaml"
+private const val EXTERNAL_CATALOG = "contracts/catalog/INT-SALES-006.yaml"
+private const val FLOW = "contracts/flows/crm-customer.v1.flow.yaml"
 private const val REFUND_FIELD = """{ "name": "refundAmount", "type": "long" },"""
 
 /**
@@ -103,6 +107,19 @@ private val cases =
             replace(OPENAPI, "        \"429\":\n          \$ref: \"#/components/responses/TooManyRequests\"\n", "")
         },
         Case("security がない・空の要件・空配列(fixture: api-security)", setOf("CC-API-003")) { overlay("api-security") },
+        Case("Webhook の受け口に x-eia-webhook がない(Idempotency-Key を求める)", setOf("CC-API-001")) {
+            replace(WEBHOOK, "      x-eia-webhook: true\n", "")
+        },
+        Case("Webhook の受け口に署名のヘッダ(webhook-timestamp)がない", setOf("CC-API-004")) {
+            replace(WEBHOOK, "        - \$ref: \"#/components/parameters/WebhookTimestamp\"\n", "")
+        },
+        Case("Webhook の受け口の security が署名の方式ではない", setOf("CC-API-004")) {
+            replace(
+                WEBHOOK,
+                "      type: apiKey\n      in: header\n      name: webhook-signature",
+                "      type: apiKey\n      in: query\n      name: signature",
+            )
+        },
         // --- Event ---
         Case("ヘッダに traceparent がない", setOf("CC-EVENT-001")) {
             replace(ASYNCAPI, "ce_specversion, traceparent, correlationid]", "ce_specversion, correlationid]")
@@ -132,6 +149,58 @@ private val cases =
             replace(CATALOG_EVENTS, ", group: batch-etl.order-ingest", "")
         },
         Case("カタログ未登録の契約", setOf("CC-CATALOG-006")) { overlay("unregistered-contract") },
+        // Flow の connector は external の連携でなければならないので、CC-FLOW-002 も出る
+        Case("外部の契約を使う連携に external がない", setOf("CC-CATALOG-007", "CC-FLOW-002")) {
+            replace(EXTERNAL_CATALOG, "external: { vendor: Mock CRM(saas-mock), source: services/saas-mock(CRM API v1) }\n", "")
+        },
+        Case("外部の契約がカタログに登録されていない", setOf("CC-CATALOG-006", "CC-FLOW-002")) {
+            delete(EXTERNAL_CATALOG)
+        },
+        Case("外部の契約のファイル名の版と info.version が違う(構造とファイル名は外部の契約にも当てる)", setOf("CC-NAMING-009")) {
+            replace(EXTERNAL_API, "  version: 1.0.0", "  version: 2.0.0")
+        },
+        // --- Flow(ADR-0036) ---
+        Case("Flow にスクリプト(スキーマにない項目)を書く", setOf("CC-FLOW-001")) {
+            replace(FLOW, "routes:\n", "script: \"if (x) y\"\nroutes:\n")
+        },
+        Case("Flow の transform に一覧にない変換を書く", setOf("CC-FLOW-001")) {
+            replace(FLOW, "transform: trim", "transform: javascript")
+        },
+        Case("Flow のファイル名が id と version に合わない", setOf("CC-FLOW-001")) {
+            replace(FLOW, "version: 1\n", "version: 2\n")
+        },
+        Case("Flow の既定の届け先(when のない route)が最後ではない", setOf("CC-FLOW-001")) {
+            replace(
+                FLOW,
+                "  - deliver: sales.customer.changed.v1\n",
+                "  - deliver: sales.customer.changed.v1\n  - when: { field: id, equals: x }\n    deliver: sales.customer.changed.v1\n",
+            )
+        },
+        Case("Flow の integration・topic・deliver・connector がカタログにない", setOf("CC-FLOW-002")) {
+            replace(FLOW, "integration: INT-SALES-007", "integration: INT-SALES-099")
+                .replace(FLOW, "topic: integration.crm-webhook.received.v1", "topic: integration.crm-webhook.unknown.v1")
+                .replace(FLOW, "connector: INT-SALES-006", "connector: INT-SALES-002")
+        },
+        Case("Flow の deliver が integration の channels にない", setOf("CC-FLOW-002")) {
+            replace(FLOW, "  - deliver: sales.customer.changed.v1", "  - deliver: sales.order.created.v1")
+        },
+        Case("Flow の mapping が Canonical にない項目に書き、必須の項目(email)がない", setOf("CC-FLOW-002")) {
+            replace(FLOW, "  email: { from: \$.email, transform: lowercase }\n", "  mail: { from: \$.email }\n")
+        },
+        Case("Flow の入れ子の型(billingAddress)を項目 1 つで書き、ordering の key が Canonical にない", setOf("CC-FLOW-002")) {
+            replace(
+                FLOW,
+                "  billingAddress:\n    when: \$.address\n    fields:\n",
+                "  billingAddress: { from: \$.address }\n  ignored:\n    fields:\n",
+            ).replace(FLOW, "  key: id\n", "  key: customerId\n")
+        },
+        Case("Flow の lookup の table が tables にない", setOf("CC-FLOW-002")) {
+            replace(
+                FLOW,
+                "{ from: \$.address.country, transform: uppercase }",
+                "{ from: \$.address.country, transform: lookup, table: countries }",
+            )
+        },
         // --- Command(ADR-0006) ---
         Case("コマンドトピックを 1 つのカタログで 2 サービスが購読", setOf("CC-COMMAND-001")) {
             replace(

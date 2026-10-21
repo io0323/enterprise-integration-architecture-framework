@@ -9,14 +9,22 @@ import io.swagger.v3.oas.models.Operation
 import io.swagger.v3.oas.models.PathItem
 import io.swagger.v3.oas.models.parameters.Parameter
 import io.swagger.v3.oas.models.security.SecurityRequirement
+import io.swagger.v3.oas.models.security.SecurityScheme
 import io.swagger.v3.parser.OpenAPIV3Parser
 import io.swagger.v3.parser.core.models.ParseOptions
 
-/** OpenAPI の構造(swagger-parser)・命名・必須装備(Idempotency-Key / 429 / security)の検査。 */
+/**
+ * OpenAPI の構造(swagger-parser)・命名・必須装備(Idempotency-Key / 429 / security)の検査。
+ * Webhook の受け口(`x-eia-webhook: true`)は、Idempotency-Key の代わりに署名のヘッダと署名の方式を検査する(ADR-0035)。
+ * 外部の契約(contracts/external)は、構造とファイル名だけを検査する([checkExternal])。
+ */
 object OpenApiRules {
     private const val IDEMPOTENCY_KEY = "Idempotency-Key"
     private const val RETRY_AFTER = "Retry-After"
     private const val TOO_MANY_REQUESTS = "429"
+    private const val WEBHOOK_EXTENSION = "x-eia-webhook"
+    private const val SIGNATURE_HEADER = "webhook-signature"
+    private val WEBHOOK_HEADERS = listOf("webhook-id", "webhook-timestamp", SIGNATURE_HEADER)
 
     /** 検査結果と、他の検査(カタログとの domain 照合)で使う servers の domain。 */
     class Result(
@@ -39,6 +47,15 @@ object OpenApiRules {
         }
         return Result(violations, domains)
     }
+
+    /**
+     * 外部の契約(ベンダーが持ち主の API の写し。ADR-0035 §8)。こちらからは変えられないので、自社の API の規則(命名・Idempotency-Key・
+     * 429・security)は当てず、構造(OpenAPI として正しい)とファイル名({name}.v{n}.yaml)だけを検査する。
+     */
+    fun checkExternal(contracts: Contracts): List<Violation> =
+        contracts.externalOpenApis.flatMap { document ->
+            checkContractFileName(document) + parse(document).messages.map { Violation(document.path, Rule.STRUCT_OPENAPI, it) }
+        }
 
     private class Parsed(
         val api: OpenAPI?,
@@ -78,10 +95,12 @@ object OpenApiRules {
                 item.readOperationsMap().flatMap { (method, operation) ->
                     val label = "${method.name} $route"
                     val parameters = item.parameters.orEmpty() + operation.parameters.orEmpty()
+                    val security = operation.security ?: api.security
+                    val webhook = operation.extensions?.get(WEBHOOK_EXTENSION) == true
                     listOfNotNull(
-                        checkIdempotencyKey(label, method, parameters),
+                        if (webhook) checkWebhook(label, parameters, security, api) else checkIdempotencyKey(label, method, parameters),
                         checkRateLimit(label, operation),
-                        checkSecurity(label, operation.security ?: api.security),
+                        checkSecurity(label, security),
                     ).map { (rule, message) -> Violation(path, rule, message) }
                 }
         }
@@ -96,6 +115,30 @@ object OpenApiRules {
         } else {
             null
         }
+
+    /** Webhook の受け口: 署名の 3 つのヘッダが required で、security に署名の方式(apiKey・header・webhook-signature)がある。 */
+    private fun checkWebhook(
+        label: String,
+        parameters: List<Parameter>,
+        security: List<SecurityRequirement>?,
+        api: OpenAPI,
+    ): Pair<Rule, String>? {
+        val headers = parameters.filter { it.`in` == "header" && it.required == true }.map { it.name.lowercase() }.toSet()
+        val missing = WEBHOOK_HEADERS.filterNot { it in headers }
+        val schemes = api.components?.securitySchemes.orEmpty()
+        val signed =
+            security.orEmpty().flatMap { it.keys }.any { name ->
+                schemes[name]?.let {
+                    it.type == SecurityScheme.Type.APIKEY && it.`in` == SecurityScheme.In.HEADER && it.name.equals(SIGNATURE_HEADER, true)
+                } == true
+            }
+        val problems =
+            listOfNotNull(
+                missing.takeIf { it.isNotEmpty() }?.let { "必須の ${it.joinToString()} ヘッダがありません" },
+                "security に署名の方式(apiKey・in: header・name: $SIGNATURE_HEADER)がありません".takeUnless { signed },
+            )
+        return problems.takeIf { it.isNotEmpty() }?.let { Rule.API_WEBHOOK to "$label(Webhook の受け口)の${it.joinToString("。")}" }
+    }
 
     private fun isIdempotencyKey(parameter: Parameter): Boolean =
         parameter.`in` == "header" && parameter.name.equals(IDEMPOTENCY_KEY, ignoreCase = true) && parameter.required == true

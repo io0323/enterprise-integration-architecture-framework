@@ -13,6 +13,7 @@ import kotlin.io.path.isRegularFile
  * @param addressesByAsyncApi AsyncAPI ファイルごとの channel の address([AsyncApiRules] の結果)
  * @param domainsByOpenApi OpenAPI ファイルごとの servers の domain([OpenApiRules] の結果)
  */
+@Suppress("TooManyFunctions") // カタログの規則ごとに 1 つの関数にする
 class CatalogRules(
     private val contracts: Contracts,
     private val addressesByAsyncApi: Map<String, List<String>>,
@@ -23,6 +24,7 @@ class CatalogRules(
             contracts.catalogs.flatMap { checkEntry(it) } +
             checkDuplicateIds() +
             checkUnregisteredContracts() +
+            checkExternal() +
             checkCommandTopics()
 
     private fun checkSchema(): List<Violation> {
@@ -147,10 +149,16 @@ class CatalogRules(
 
     private fun checkUnregisteredContracts(): List<Violation> {
         val registered = contracts.catalogs.mapNotNull { it.entry.contract }.toSet()
-        return (contracts.openApis + contracts.asyncApis)
+        return (contracts.openApis + contracts.asyncApis + contracts.externalOpenApis)
             .filter { it.path !in registered }
             .map { Violation(it.path, Rule.CATALOG_UNREGISTERED, "この契約を contract に指定したカタログがありません") }
     }
+
+    /** 外部の契約(contracts/external)を使う連携は、external(ベンダーと出典)を書く(ADR-0035 §8)。 */
+    private fun checkExternal(): List<Violation> =
+        contracts.catalogs
+            .filter { it.entry.contract?.startsWith(Contracts.EXTERNAL_DIR) == true && it.tree.get("external") == null }
+            .map { Violation(it.path, Rule.CATALOG_EXTERNAL, "外部の契約 ${it.entry.contract} を使うのに external がありません") }
 
     /** ADR-0006: コマンドトピックは pattern: queue で、購読は受信サービスの 1 Consumer Group({service}.command)だけ。 */
     private fun checkCommandTopics(): List<Violation> {
