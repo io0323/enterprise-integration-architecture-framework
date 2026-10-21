@@ -39,6 +39,19 @@ class Workspace private constructor(
         return this
     }
 
+    /** [path] のカタログの `lifecycle: ...` の行を [line] にする(今の状態によらない。状態ごとの項目の行も [line] に含めてよい)。 */
+    fun setLifecycle(
+        path: String,
+        line: String,
+    ): Workspace {
+        val file = root.resolve(path)
+        val text = file.readText()
+        val lifecycle = Regex("(?m)^lifecycle: [a-z]+$")
+        check(lifecycle.containsMatchIn(text)) { "$path に lifecycle の行がありません" }
+        file.writeText(text.replace(lifecycle, Regex.escapeReplacement(line)))
+        return this
+    }
+
     fun delete(path: String): Workspace {
         root.resolve(path).deleteExisting()
         return this
