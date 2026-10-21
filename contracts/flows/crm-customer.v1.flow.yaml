@@ -1,0 +1,40 @@
+# CRM の顧客を Canonical Model の Customer に変えて、sales.customer.changed.v1 に出す(INT-SALES-007。ADR-0036)。
+# 形式は contracts/flows/flow.v1.schema.json。integration-flow が起動時に検証する。
+id: crm-customer
+version: 1
+description: CRM の顧客の作成・変更を、Webhook と定期の同期の両方から取り込む
+integration: INT-SALES-007
+canonical: sales.Customer
+triggers:
+  # Webhook(webhook-receiver が署名を検証して記録し、社内の取り込みのトピックに出したもの)
+  - kind: event
+    topic: integration.crm-webhook.received.v1
+    source: crm
+    eventTypes: [customer.created, customer.updated]
+    record: $.data
+  # 定期の同期(Webhook の取りこぼしの補い。Connector がページングと 429 を扱う)
+  - kind: poll
+    connector: INT-SALES-006
+    resource: customers
+    every: PT15M
+# Webhook と定期の同期は、同じ新旧の記録を使う(どちらから来ても、記録より古い版は出さない)
+ordering:
+  key: id
+  version: $.version
+mapping:
+  id: { from: $.id }
+  name: { from: $.display_name, transform: trim }
+  email: { from: $.email, transform: lowercase }
+  createdAt: { from: $.created_at, transform: iso-instant }
+  updatedAt: { from: $.updated_at, transform: iso-instant }
+  billingAddress:
+    when: $.address
+    fields:
+      countryCode: { from: $.address.country, transform: uppercase }
+      postalCode: { from: $.address.postal_code }
+      region: { from: $.address.region }
+      city: { from: $.address.city }
+      line1: { from: $.address.line1 }
+      line2: { from: $.address.line2 }
+routes:
+  - deliver: sales.customer.changed.v1

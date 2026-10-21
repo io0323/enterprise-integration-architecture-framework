@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eia.io/contracts/flows/flow.v1.schema.json",
+  "title": "Integration Flow v1",
+  "description": "iPaaS 風の Flow の定義(Framework 10・ADR-0036)。integration-flow が起動時にこのスキーマで検証し、誤りがあれば起動しない。contract-check も検査する(CC-FLOW-*)。Flow でできることは、取り込み(trigger)・Canonical Model への対応(mapping)・振り分け(routes)・届け先の指定だけ。任意のスクリプトや式は書けない(業務のロジックを Flow に書かない。Framework 10.4 のアンチパターン)。足りない変換は、Flow ではなくコードの側(Canonical の変換)に足す。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "version", "integration", "canonical", "triggers", "ordering", "mapping", "routes"],
+  "properties": {
+    "id": {
+      "description": "Flow の ID(ファイル名は {id}.v{version}.flow.yaml)。1 Flow = 1 連携の目的(Framework 10.2)",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,62}$"
+    },
+    "version": { "type": "integer", "minimum": 1 },
+    "description": { "type": "string" },
+    "integration": {
+      "description": "この Flow が出すイベントの連携(カタログの ID)。routes の deliver はこの連携の channels のどれか",
+      "type": "string",
+      "pattern": "^INT-[A-Z][A-Z0-9]*-[0-9]{3}$"
+    },
+    "canonical": {
+      "description": "変換先の Canonical Model の型(shared/canonical-model)。SaaS から SaaS へは直接つながない(Framework 10.2)",
+      "enum": ["sales.Customer"]
+    },
+    "triggers": {
+      "description": "取り込みの元。Webhook(社内の取り込みのトピック)と SaaS の API の定期の取得。どちらも同じ新旧の記録(ordering)を使う",
+      "type": "array",
+      "minItems": 1,
+      "items": { "oneOf": [{ "$ref": "#/$defs/eventTrigger" }, { "$ref": "#/$defs/pollTrigger" }] }
+    },
+    "ordering": {
+      "description": "新旧の判定。キーごとに最新の版を記録し、記録より古い版は出さない(Webhook の順序は保証されない)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "version"],
+      "properties": {
+        "key": { "description": "Canonical のキーの項目", "$ref": "#/$defs/canonicalPath" },
+        "version": { "description": "元のレコードの版(整数)の場所", "$ref": "#/$defs/sourcePath" }
+      }
+    },
+    "mapping": {
+      "description": "Canonical の項目ごとの値の取り方。入れ子の型は入れ子のオブジェクトで書く",
+      "$ref": "#/$defs/mappingObject"
+    },
+    "tables": {
+      "description": "transform: lookup で使う対応表(値の置き換えだけ)",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "minProperties": 1,
+        "additionalProperties": { "type": "string" }
+      }
+    },
+    "routes": {
+      "description": "振り分け。上から順に最初に一致した route の deliver に出す。最後は when のない route(どれにも一致しないときの届け先)",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/route" }
+    }
+  },
+  "$defs": {
+    "sourcePath": {
+      "description": "元のレコード(JSON)の中の場所。$ と、.項目名 の並びだけ(配列の添字・フィルタ・関数は使えない)",
+      "type": "string",
+      "pattern": "^\\$(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+    },
+    "canonicalPath": {
+      "description": "Canonical の項目の場所(例 billingAddress.countryCode)",
+      "type": "string",
+      "pattern": "^[a-z][A-Za-z0-9]*(\\.[a-z][A-Za-z0-9]*)*$"
+    },
+    "topic": { "type": "string", "pattern": "^[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*\\.v[1-9][0-9]*$" },
+    "eventTrigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "topic", "source", "eventTypes", "record"],
+      "properties": {
+        "kind": { "const": "event" },
+        "topic": { "description": "社内の取り込みのトピック", "$ref": "#/$defs/topic" },
+        "source": { "description": "WebhookReceived の source", "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "eventTypes": {
+          "description": "取り込む Webhook の種類(本文の type)。ほかの種類は取り込まずに数える",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "record": { "description": "本文の中の元のレコードの場所(例 $.data)", "$ref": "#/$defs/sourcePath" }
+      }
+    },
+    "pollTrigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "connector", "resource", "every"],
+      "properties": {
+        "kind": { "const": "poll" },
+        "connector": {
+          "description": "SaaS の API の連携(カタログの ID。external の連携)。Connector がページング・Rate Limit・Resilience を扱う",
+          "type": "string",
+          "pattern": "^INT-[A-Z][A-Z0-9]*-[0-9]{3}$"
+        },
+        "resource": { "description": "Connector の取得の対象", "enum": ["customers"] },
+        "every": { "description": "取得の間隔(ISO 8601 の期間。例 PT15M)", "type": "string", "pattern": "^PT([0-9]+H)?([0-9]+M)?([0-9]+S)?$" }
+      }
+    },
+    "mappingObject": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^[a-z][A-Za-z0-9]*$" },
+      "additionalProperties": {
+        "oneOf": [{ "$ref": "#/$defs/mappingRule" }, { "$ref": "#/$defs/mappingNested" }]
+      }
+    },
+    "mappingNested": {
+      "description": "入れ子の型(例 billingAddress)。when が元のレコードにないときは、入れ子の型全体を null にする",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fields"],
+      "properties": {
+        "when": { "$ref": "#/$defs/sourcePath" },
+        "fields": { "$ref": "#/$defs/mappingObject" }
+      }
+    },
+    "mappingRule": {
+      "description": "1 つの項目の値の取り方。transform は決まった一覧からだけ選ぶ",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "from": { "$ref": "#/$defs/sourcePath" },
+        "transform": {
+          "description": "copy(既定)・trim・lowercase・uppercase・iso-instant(ISO 8601 の日時)・epoch-millis-instant・lookup(tables の対応表)・constant(value の固定値)",
+          "enum": ["copy", "trim", "lowercase", "uppercase", "iso-instant", "epoch-millis-instant", "lookup", "constant"]
+        },
+        "table": { "description": "transform: lookup の対応表の名前", "type": "string" },
+        "value": { "description": "transform: constant の値", "type": "string" }
+      },
+      "allOf": [
+        { "if": { "properties": { "transform": { "const": "constant" } }, "required": ["transform"] }, "then": { "required": ["value"], "not": { "required": ["from"] } }, "else": { "required": ["from"] } },
+        { "if": { "properties": { "transform": { "const": "lookup" } }, "required": ["transform"] }, "then": { "required": ["table"] } }
+      ]
+    },
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deliver"],
+      "properties": {
+        "when": {
+          "description": "Canonical の項目の等号の条件だけ(式は書けない)",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["field", "equals"],
+          "properties": {
+            "field": { "$ref": "#/$defs/canonicalPath" },
+            "equals": { "type": "string" }
+          }
+        },
+        "deliver": { "description": "届け先のトピック(integration の channels のどれか)", "$ref": "#/$defs/topic" }
+      }
+    }
+  }
+}

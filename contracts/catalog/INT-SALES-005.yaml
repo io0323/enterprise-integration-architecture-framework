@@ -1,0 +1,16 @@
+id: INT-SALES-005
+name: CRM Webhook
+description: CRM(SaaS)が顧客の変更を通知する Webhook の受け口。署名で認証し、記録してすぐに 2xx を返す(ADR-0035)
+style: webhook
+pattern: pub-sub
+provider: { owner: team-integration, system: webhook-receiver }
+senders:
+  - { owner: team-integration, system: crm-saas }
+consumers: []
+contract: contracts/openapi/crm-webhook.v1.yaml
+# 送り手は外部の SaaS(受け口の契約はこちらが持つ)
+external: { vendor: Mock CRM(saas-mock), source: services/saas-mock(Standard Webhooks の署名) }
+tier: 2
+dataClassification: confidential
+slo: { availability: "99.9", latencyP99: "1s" }
+lifecycle: design

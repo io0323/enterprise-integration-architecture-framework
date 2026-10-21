@@ -1,0 +1,171 @@
+openapi: 3.1.0
+info:
+  title: CRM API(外部の契約の写し)
+  version: 1.0.0
+  summary: CRM(SaaS)の顧客の API(INT-SALES-006)。持ち主は CRM のベンダーで、こちらは変えられない
+  description: |
+    **外部の契約**(ADR-0035 §8)。CRM のベンダーが公開する API のうち、こちらが使う部分の写し。ローカルでは saas-mock がこの契約を実装する。
+    contract-check は、自社の API の規則(Idempotency-Key・`/{domain}`・429 など)を当てない。構造の検証とライフサイクルの検査は当てる。
+    ベンダーが破壊的変更をしたら、この写しを直す。そのとき contract-check は違反ではなく警告(`CC-EXTERNAL-001`)を出すので、
+    取り込みの側(integration-flow の Connector と Flow の定義)を合わせる。
+
+    - 認証は API トークン(`Authorization: Bearer`)。トークンは SecretProvider から読む。
+    - 一覧はカーソルでページングする(`cursor`・`limit`)。次のページがなければ `next_cursor` は null。
+    - Rate Limit を超えると `429` と `Retry-After`(秒)。呼び出し側は待ってから再試行する(Framework 10.2 の API Mediation)。
+    - 応答の未知の項目は無視する(Tolerant Reader)。ベンダーは予告なく項目を足すことがある。
+  contact:
+    name: CRM vendor(ローカルは saas-mock。team-integration が窓口)
+servers:
+  - url: http://localhost:19280
+    description: ローカル(saas-mock)
+security:
+  - bearer: []
+paths:
+  /v1/customers:
+    get:
+      operationId: listCustomers
+      summary: 顧客の一覧(カーソルでページング)
+      parameters:
+        - name: cursor
+          in: query
+          required: false
+          description: 前のページの `next_cursor`。最初のページは付けない
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: updated_since
+          in: query
+          required: false
+          description: この時刻の後に変わった顧客だけ(ISO 8601)
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: 顧客の 1 ページ
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerPage"
+        "401":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/Error"
+  /v1/customers/{id}:
+    get:
+      operationId: getCustomer
+      summary: 顧客を 1 件
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 顧客
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      description: CRM が発行する API トークン
+  schemas:
+    CustomerPage:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Customer"
+        next_cursor:
+          type: [string, "null"]
+      additionalProperties: true
+    Customer:
+      description: CRM の顧客。未知の項目は無視する
+      type: object
+      required: [id, display_name, email, created_at, updated_at, version]
+      properties:
+        id:
+          type: string
+        display_name:
+          type: string
+        email:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        version:
+          type: integer
+          description: 顧客の版。変更のたびに 1 増える(新旧の判断に使う)
+        address:
+          $ref: "#/components/schemas/Address"
+      additionalProperties: true
+    Address:
+      type: object
+      required: [country, postal_code, city, line1]
+      properties:
+        country:
+          type: string
+          description: ISO 3166-1 alpha-2
+        postal_code:
+          type: string
+        region:
+          type: string
+        city:
+          type: string
+        line1:
+          type: string
+        line2:
+          type: string
+      additionalProperties: true
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+      additionalProperties: true
+  responses:
+    Error:
+      description: エラー
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    TooManyRequests:
+      description: Rate Limit 超過
+      headers:
+        Retry-After:
+          description: 再試行までの秒数
+          schema:
+            type: integer
+            minimum: 0
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"

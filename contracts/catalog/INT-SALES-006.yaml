@@ -1,0 +1,15 @@
+id: INT-SALES-006
+name: CRM Customer API
+description: CRM(SaaS)の顧客の API。integration-flow の Connector が定期の同期で読む(ページング・Rate Limit。ADR-0035)
+style: rest
+pattern: request-reply
+# 契約の持ち主はベンダー。owner は連携に責任を持つ社内のチーム(ADR-0035 §8)
+provider: { owner: team-integration, system: crm-saas }
+consumers:
+  - { owner: team-integration, system: integration-flow }
+contract: contracts/external/crm-api.v1.yaml
+external: { vendor: Mock CRM(saas-mock), source: services/saas-mock(CRM API v1) }
+tier: 3
+dataClassification: confidential
+slo: { availability: "99.5", latencyP99: "2s" }
+lifecycle: design
