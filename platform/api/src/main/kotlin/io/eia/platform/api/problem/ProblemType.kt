@@ -61,6 +61,19 @@ public class ProblemType private constructor(
         public val UNAUTHORIZED: ProblemType = of("unauthorized", 401, "Unauthorized", null)
         public val FORBIDDEN: ProblemType = of("forbidden", 403, "Forbidden", null)
 
+        /** Webhook の署名が一致しない(ADR-0035 §2)。どの鍵と比べたかは返さない。 */
+        public val WEBHOOK_SIGNATURE_INVALID: ProblemType =
+            of("webhook-signature-invalid", 401, "Webhook signature invalid", "The webhook signature does not match.")
+
+        /** Webhook の署名の時刻が受け口の時刻から許容の幅(前後 5 分)を外れた(リプレイ。ADR-0035 §2)。送り手は新しい時刻で署名し直す。 */
+        public val WEBHOOK_TIMESTAMP_OUT_OF_RANGE: ProblemType =
+            of(
+                "webhook-timestamp-out-of-range",
+                401,
+                "Webhook timestamp out of range",
+                "The webhook timestamp is outside the accepted window. Re-sign the webhook with the current time.",
+            )
+
         /** 登録済みの種類(INTEGRATION_STANDARDS §6 の一覧と一致させる)。 */
         public val ALL: List<ProblemType> =
             listOf(
@@ -77,6 +90,8 @@ public class ProblemType private constructor(
                 INTERNAL_ERROR,
                 UNAUTHORIZED,
                 FORBIDDEN,
+                WEBHOOK_SIGNATURE_INVALID,
+                WEBHOOK_TIMESTAMP_OUT_OF_RANGE,
             )
 
         /** `about:blank`。`title` は状態コードの理由句([title])にする(RFC 9457 §4.2.1)。 */
