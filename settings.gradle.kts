@@ -35,6 +35,7 @@ include(
     ":platform:schema-registry",
     ":platform:security",
     ":platform:test-support",
+    ":platform:webhook",
     ":services:order:domain",
     ":services:order:application",
     ":services:order:adapters",
