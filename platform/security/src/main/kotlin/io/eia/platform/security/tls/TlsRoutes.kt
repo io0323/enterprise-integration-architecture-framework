@@ -1,4 +1,4 @@
-package io.eia.order.app
+package io.eia.platform.security.tls
 
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.RouteSelector
@@ -6,10 +6,10 @@ import io.ktor.server.routing.RouteSelectorEvaluation
 import io.ktor.server.routing.RoutingResolveContext
 
 /** TLS の接続(API のポート)で受けたリクエストだけに当たるルート。 */
-internal fun Route.overTls(build: Route.() -> Unit): Route = createChild(SchemeSelector("https")).apply(build)
+public fun Route.overTls(build: Route.() -> Unit): Route = createChild(SchemeSelector("https")).apply(build)
 
 /** 平文の接続(ヘルスチェックのポート)で受けたリクエストだけに当たるルート。 */
-internal fun Route.overPlaintext(build: Route.() -> Unit): Route = createChild(SchemeSelector("http")).apply(build)
+public fun Route.overPlaintext(build: Route.() -> Unit): Route = createChild(SchemeSelector("http")).apply(build)
 
 /**
  * 接続の種類で分けるルートの条件。Ktor の Netty(HTTP/1.1)は、パイプラインに TLS の処理があれば `https` を返す。

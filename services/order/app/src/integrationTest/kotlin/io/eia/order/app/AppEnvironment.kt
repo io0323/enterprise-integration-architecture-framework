@@ -17,6 +17,7 @@ import io.eia.platform.schemaregistry.ApicurioRegistryClient
 import io.eia.platform.schemaregistry.SchemaRegistryConfig
 import io.eia.platform.testsupport.ApicurioRegistryContainer
 import io.eia.platform.testsupport.InfraImages
+import io.eia.platform.testsupport.TestPki
 import io.eia.shared.kernel.Result
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
@@ -139,9 +140,9 @@ internal class AppEnvironment(
     /** サーバ証明書と鍵、クライアント証明書を検証する CA のファイル。 */
     fun tlsEnv(server: TestPki.Issued): Map<String, String> =
         mapOf(
-            TlsFiles.CERT to server.certFile.toString(),
-            TlsFiles.KEY to server.keyFile.toString(),
-            TlsFiles.CLIENT_CA to pki.caFile.toString(),
+            OrderConfig.TLS.cert to server.certFile.toString(),
+            OrderConfig.TLS.key to server.keyFile.toString(),
+            OrderConfig.TLS.clientCa to pki.caFile.toString(),
         )
 
     fun token(clientId: String = "client-a"): String {

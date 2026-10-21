@@ -1,6 +1,6 @@
 @file:Suppress("MagicNumber") // 鍵の長さ・有効期間
 
-package io.eia.order.app
+package io.eia.platform.testsupport
 
 import org.bouncycastle.asn1.x500.X500Name
 import org.bouncycastle.asn1.x509.BasicConstraints
@@ -38,27 +38,27 @@ import kotlin.time.Instant
  * テスト用の CA と証明書(infra/local/scripts/gen-dev-certs.sh と同じ形: EC P-256、PKCS#8 の鍵、SAN の DNS 名)。
  * ファイルは一時ディレクトリに書き、終わったら消す。
  */
-internal class TestPki(
+public class TestPki(
     name: String = "EIAF Test CA",
     caValidFrom: Instant = Clock.System.now() - 1.days,
 ) : AutoCloseable {
     private val dir: Path = Files.createTempDirectory("eiaf-pki")
     private val caKey: KeyPair = keyPair()
-    val ca: X509Certificate =
+    public val ca: X509Certificate =
         sign(X500Name("CN=$name"), caKey.public, caKey, X500Name("CN=$name"), isCa = true, validFrom = caValidFrom)
 
     /** CA の PEM。 */
-    val caFile: Path = write("ca.crt") { it.writeObject(ca) }
+    public val caFile: Path = write("ca.crt") { it.writeObject(ca) }
 
     /** この CA で署名した証明書と鍵(PEM のファイル)。 */
-    inner class Issued(
-        val key: KeyPair,
-        val cert: X509Certificate,
-        val certFile: Path,
-        val keyFile: Path,
+    public inner class Issued(
+        public val key: KeyPair,
+        public val cert: X509Certificate,
+        public val certFile: Path,
+        public val keyFile: Path,
     ) {
         /** この証明書をクライアント証明書として出し、[trusted] の CA でサーバを検証する [SSLContext]。 */
-        fun clientContext(trusted: TestPki): SSLContext {
+        public fun clientContext(trusted: TestPki): SSLContext {
             val password = "test".toCharArray()
             val keyStore =
                 KeyStore.getInstance("PKCS12").apply {
@@ -71,7 +71,7 @@ internal class TestPki(
     }
 
     /** SAN に [dnsNames] を持つ証明書(サーバにもクライアントにも使える)。 */
-    fun issue(
+    public fun issue(
         commonName: String,
         dnsNames: List<String>,
         validFrom: Instant = Clock.System.now() - 1.days,
@@ -95,7 +95,7 @@ internal class TestPki(
     }
 
     /** CA だけを信頼し、クライアント証明書を出さない [SSLContext]。 */
-    fun anonymousClientContext(): SSLContext = SSLContext.getInstance("TLS").apply { init(null, trustManagers(), SecureRandom()) }
+    public fun anonymousClientContext(): SSLContext = SSLContext.getInstance("TLS").apply { init(null, trustManagers(), SecureRandom()) }
 
     private fun trustManagers() =
         TrustManagerFactory

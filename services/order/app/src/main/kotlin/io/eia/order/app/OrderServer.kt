@@ -27,6 +27,10 @@ import io.eia.platform.security.jwt.prefetchUntilLoaded
 import io.eia.platform.security.ktor.eiaJwt
 import io.eia.platform.security.secret.EnvSecretProvider
 import io.eia.platform.security.secret.Secret
+import io.eia.platform.security.tls.ServerTls
+import io.eia.platform.security.tls.mutualTlsConnectors
+import io.eia.platform.security.tls.overPlaintext
+import io.eia.platform.security.tls.overTls
 import io.eia.shared.kernel.FieldViolation
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.ValidationError
@@ -42,9 +46,7 @@ import io.ktor.server.auth.Authentication
 import io.ktor.server.auth.authenticate
 import io.ktor.server.engine.ConnectorType
 import io.ktor.server.engine.EmbeddedServer
-import io.ktor.server.engine.connector
 import io.ktor.server.engine.embeddedServer
-import io.ktor.server.engine.sslConnector
 import io.ktor.server.netty.Netty
 import io.ktor.server.netty.NettyApplicationEngine
 import io.ktor.server.response.respondText
@@ -81,7 +83,7 @@ import kotlin.time.Duration
  *
  * コネクタは 2 つ(ADR-0024 §6):
  * - API のポート([OrderConfig.httpsPort]): mTLS だけで受ける。クライアント証明書は必須で、開発用 CA の署名と、SAN の許可の一覧
- *   ([ClientCertificateAllowList])を確かめる。API のルートはこのポートにだけある。
+ *   (platform/security の `ClientCertificateAllowList`)を確かめる。API のルートはこのポートにだけある。
  * - ヘルスチェックのポート([OrderConfig.healthPort]): 平文で、`/health/live` と `/health/ready` だけを返す(認証しない)。
  *   コンテナのヘルスチェック用で、コンテナの外には公開しない。
  */
@@ -134,8 +136,6 @@ internal class OrderServer private constructor(
         private const val TIMEOUT_MILLIS = 5_000L
         private const val READY_TIMEOUT_SECONDS = 2
 
-        /** Framework 12.2: TLS 1.2 以上。 */
-        private val TLS_PROTOCOLS = listOf("TLSv1.3", "TLSv1.2")
         private val logger = LoggerFactory.getLogger(OrderServer::class.java)
 
         /**
@@ -151,7 +151,9 @@ internal class OrderServer private constructor(
                         val runtime = Observability.init(observability)
                         val koin = koinApplication { modules(orderModule(config, appPassword, runtime, secrets)) }.koin
                         val server =
-                            embeddedServer(Netty, configure = { connectors(config, tls) }) { orderApplication(koin, config) }
+                            embeddedServer(Netty, configure = {
+                                mutualTlsConnectors(config.httpsPort, config.healthPort, tls, config.allowedClients)
+                            }) { orderApplication(koin, config) }
                                 .start(wait = false)
                         val (replies, thread) = startSagaReplies(koin)
                         logger.info("order-service を起動しました")
@@ -159,25 +161,6 @@ internal class OrderServer private constructor(
                     }
                 }
             }
-
-        /** API のポート(mTLS)とヘルスチェックのポート(平文)。ADR-0024 §6。 */
-        private fun NettyApplicationEngine.Configuration.connectors(
-            config: OrderConfig,
-            tls: ServerTls,
-        ) {
-            connector { port = config.healthPort }
-            sslConnector(tls.keyStore, ServerTls.KEY_ALIAS, tls::password, tls::password) {
-                port = config.httpsPort
-                // trustStore を設定すると、Ktor はクライアント証明書を必須にする(needClientAuth)
-                trustStore = tls.trustStore
-                enabledProtocols = TLS_PROTOCOLS
-            }
-            // 許可の一覧の確認は HTTP/1.1 のパイプラインに置く(ゲートウェイとの間は HTTP/1.1)
-            enableHttp2 = false
-            channelPipelineConfig = {
-                if (get("ssl") != null) addAfter("ssl", ClientCertificateAllowList.NAME, ClientCertificateAllowList(config.allowedClients))
-            }
-        }
 
         /** serve の設定とアプリのロールのパスワード。所有者のパスワードがあれば、設定の誤りにする。 */
         private fun serveInputs(env: Map<String, String>): Result<Pair<OrderConfig, Secret>, ValidationError> {

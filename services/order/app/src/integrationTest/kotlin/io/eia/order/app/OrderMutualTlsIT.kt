@@ -2,6 +2,7 @@
 
 package io.eia.order.app
 
+import io.eia.platform.testsupport.TestPki
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.ValidationError
 import io.kotest.assertions.throwables.shouldThrow
@@ -100,7 +101,7 @@ class OrderMutualTlsIT :
             test("サーバ証明書が期限切れなら起動せず、原因と直し方(make certs)を示す") {
                 val expired = environment.pki.issue("order-service", listOf("localhost"), validFrom = Clock.System.now() - 40.days)
                 val message = OrderServer.start(environment.serveEnv("unused") + environment.tlsEnv(expired)).refused()
-                message shouldContain TlsFiles.CERT
+                message shouldContain OrderConfig.TLS.cert
                 message shouldContain "有効期限が切れています"
                 message shouldContain "make certs"
             }
@@ -109,23 +110,27 @@ class OrderMutualTlsIT :
                 TestPki("Expired CA", caValidFrom = Clock.System.now() - 40.days).use { expired ->
                     val message =
                         OrderServer
-                            .start(environment.serveEnv("unused", mapOf(TlsFiles.CLIENT_CA to expired.caFile.toString())))
+                            .start(environment.serveEnv("unused", mapOf(OrderConfig.TLS.clientCa to expired.caFile.toString())))
                             .refused()
-                    message shouldContain TlsFiles.CLIENT_CA
+                    message shouldContain OrderConfig.TLS.clientCa
                     message shouldContain "有効期限が切れています"
                 }
             }
 
             test("TLS のファイルの設定がなければ起動しない") {
-                val env = environment.serveEnv("unused") - setOf(TlsFiles.CERT, TlsFiles.KEY, TlsFiles.CLIENT_CA)
+                val env = environment.serveEnv("unused") - setOf(OrderConfig.TLS.cert, OrderConfig.TLS.key, OrderConfig.TLS.clientCa)
                 val message = OrderServer.start(env).refused()
-                listOf(TlsFiles.CERT, TlsFiles.KEY, TlsFiles.CLIENT_CA).forEach { message shouldContain it }
+                listOf(OrderConfig.TLS.cert, OrderConfig.TLS.key, OrderConfig.TLS.clientCa).forEach { message shouldContain it }
             }
 
             test("鍵が PKCS#8 の PEM でなければ起動せず、直し方を示す") {
                 val broken = Files.createTempFile("broken", ".key").also { Files.writeString(it, "not a key") }
                 try {
-                    val message = OrderServer.start(environment.serveEnv("unused", mapOf(TlsFiles.KEY to broken.toString()))).refused()
+                    val message =
+                        OrderServer
+                            .start(
+                                environment.serveEnv("unused", mapOf(OrderConfig.TLS.key to broken.toString())),
+                            ).refused()
                     message shouldContain "形式が不正"
                     message shouldContain "make certs"
                 } finally {

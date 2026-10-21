@@ -1,4 +1,4 @@
-package io.eia.order.app
+package io.eia.platform.security.tls
 
 import io.eia.shared.kernel.FieldViolation
 import io.eia.shared.kernel.Result
@@ -25,58 +25,60 @@ import kotlin.time.Instant
 import kotlin.time.toKotlinInstant
 
 /**
- * API のポートの mTLS の鍵と証明書(ADR-0024 §6)。PEM のファイルからメモリ上の [KeyStore] を作る(キーストアのパスワードという
+ * API のポートの mTLS の鍵と証明書(ADR-0008・ADR-0024 §6)。PEM のファイルからメモリ上の [KeyStore] を作る(キーストアのパスワードという
  * 秘密情報を増やさないため。パスワードはプロセスの中で乱数から作る)。
  *
  * 起動時に有効期限を確かめる。サーバ証明書か CA が期限切れ(またはまだ有効でない)なら起動しない。原因と直し方
  * (`make certs`。docs/runbooks/dev-certificates.md)をエラーに書く。残りが [EXPIRY_WARNING] を切っていれば WARN を残す。
  */
-internal class ServerTls private constructor(
-    val keyStore: KeyStore,
-    val trustStore: KeyStore,
+public class ServerTls private constructor(
+    public val keyStore: KeyStore,
+    public val trustStore: KeyStore,
     private val password: CharArray,
 ) {
     /** Ktor の `sslConnector` に渡すパスワード(Ktor は使った後に配列を消すので、毎回複製を返す)。 */
-    fun password(): CharArray = password.copyOf()
+    public fun password(): CharArray = password.copyOf()
 
-    companion object {
-        const val KEY_ALIAS = "order-service"
+    public companion object {
+        public const val KEY_ALIAS: String = "server"
 
         /** 残りがこれを切ったら WARN を残す(`make up` / `make certs` が作り直す境界と同じ。gen-dev-certs.sh)。 */
-        val EXPIRY_WARNING: Duration = 7.days
+        public val EXPIRY_WARNING: Duration = 7.days
 
         private const val PASSWORD_BYTES = 24
         private const val RENEW_HINT = "make certs で作り直してください(docs/runbooks/dev-certificates.md)"
         private val logger = LoggerFactory.getLogger(ServerTls::class.java)
 
-        fun load(
+        /** 誤り(ファイルの設定がない・読めない・形式が不正・期限切れ)は、環境変数の名前([TlsFiles.variables])と直し方を書いて返す。 */
+        public fun load(
             files: TlsFiles,
             now: Instant = Clock.System.now(),
         ): Result<ServerTls, ValidationError> {
+            val names = files.variables
             val missing =
-                listOf(TlsFiles.CERT to files.cert, TlsFiles.KEY to files.key, TlsFiles.CLIENT_CA to files.clientCa)
+                listOf(names.cert to files.cert, names.key to files.key, names.clientCa to files.clientCa)
                     .filter { it.second == null }
                     .map { FieldViolation(it.first, "serve には必須です") }
             if (missing.isNotEmpty()) return err(ValidationError(missing))
             return try {
-                build(Path.of(files.cert!!), Path.of(files.key!!), Path.of(files.clientCa!!), now)
+                build(files, now)
             } catch (e: IOException) {
-                err(ValidationError.of("ORDER_TLS_*", "証明書か鍵のファイルを読めません(${e::class.simpleName})。$RENEW_HINT"))
+                err(ValidationError.of(names.all, "証明書か鍵のファイルを読めません(${e::class.simpleName})。$RENEW_HINT"))
             } catch (e: GeneralSecurityException) {
-                err(ValidationError.of("ORDER_TLS_*", "証明書か鍵の形式が不正です(${e::class.simpleName})。$RENEW_HINT"))
+                err(ValidationError.of(names.all, "証明書か鍵の形式が不正です(${e::class.simpleName})。$RENEW_HINT"))
             }
         }
 
         private fun build(
-            certFile: Path,
-            keyFile: Path,
-            caFile: Path,
+            files: TlsFiles,
             now: Instant,
         ): Result<ServerTls, ValidationError> {
-            val chain = certificates(certFile)
-            val cas = certificates(caFile)
+            val chain = certificates(Path.of(checkNotNull(files.cert)))
+            val cas = certificates(Path.of(checkNotNull(files.clientCa)))
+            val keyFile = Path.of(checkNotNull(files.key))
+            val names = files.variables
             val violations =
-                validity(TlsFiles.CERT, chain.firstOrNull(), now) + cas.flatMap { validity(TlsFiles.CLIENT_CA, it, now) }
+                validity(names.cert, chain.firstOrNull(), now) + cas.flatMap { validity(names.clientCa, it, now) }
             if (violations.isNotEmpty()) return err(ValidationError(violations))
 
             val password = randomPassword()
