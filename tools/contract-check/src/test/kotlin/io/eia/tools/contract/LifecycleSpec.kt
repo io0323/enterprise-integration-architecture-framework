@@ -43,7 +43,12 @@ class LifecycleSpec :
 
         test("状態を 1 段階ずつ進めるのは違反にならない(design → active・active → deprecated)") {
             val base = Workspace.ofRepositoryContracts()
-            ids(check(base, Workspace.ofRepositoryContracts().lifecycle(FILE, DESIGN, ACTIVE))).shouldBeEmpty()
+            ids(
+                check(
+                    Workspace.ofRepositoryContracts().setLifecycle(FILE, DESIGN),
+                    Workspace.ofRepositoryContracts().setLifecycle(FILE, ACTIVE),
+                ),
+            ).shouldBeEmpty()
             ids(check(base, Workspace.ofRepositoryContracts().lifecycle(EVENTS, ACTIVE, deprecated()))).shouldBeEmpty()
         }
 
@@ -53,7 +58,9 @@ class LifecycleSpec :
                 ids(check(base, Workspace.ofRepositoryContracts().lifecycle(EVENTS, ACTIVE, RETIRED))) shouldBe setOf("CC-LIFECYCLE-001")
             }
             withClue("design → deprecated(2 段階)") {
-                ids(check(base, Workspace.ofRepositoryContracts().lifecycle(FILE, DESIGN, deprecated()))) shouldBe setOf("CC-LIFECYCLE-001")
+                val designBase = Workspace.ofRepositoryContracts().setLifecycle(FILE, DESIGN)
+                ids(check(designBase, Workspace.ofRepositoryContracts().setLifecycle(FILE, deprecated()))) shouldBe
+                    setOf("CC-LIFECYCLE-001")
             }
             withClue("active → design(戻す)") {
                 ids(check(base, Workspace.ofRepositoryContracts().lifecycle(EVENTS, ACTIVE, DESIGN))) shouldBe setOf("CC-LIFECYCLE-001")
@@ -80,25 +87,21 @@ class LifecycleSpec :
 
         test("新しい連携は proposed か design で登録する。既存の連携の後からの登録(onboarding)だけ active で始めてよい") {
             val base = Workspace.ofRepositoryContracts().delete(FILE)
-            ids(check(base, Workspace.ofRepositoryContracts())).shouldBeEmpty()
+            ids(check(base, Workspace.ofRepositoryContracts().setLifecycle(FILE, DESIGN))).shouldBeEmpty()
             withClue("active で登録(onboarding なし)") {
-                ids(check(base, Workspace.ofRepositoryContracts().lifecycle(FILE, DESIGN, ACTIVE))) shouldBe setOf("CC-LIFECYCLE-001")
+                ids(check(base, Workspace.ofRepositoryContracts().setLifecycle(FILE, ACTIVE))) shouldBe setOf("CC-LIFECYCLE-001")
             }
             withClue("active で登録(onboarding に reason がない。スキーマの必須項目でもある)") {
-                val current = Workspace.ofRepositoryContracts().lifecycle(FILE, DESIGN, "$ACTIVE\nonboarding: { kind: existing }")
+                val current = Workspace.ofRepositoryContracts().setLifecycle(FILE, "$ACTIVE\nonboarding: { kind: existing }")
                 ids(check(base, current)) shouldBe setOf("CC-LIFECYCLE-001", "CC-CATALOG-001")
             }
             withClue("active で登録(既存の連携の後からの登録)") {
                 val current =
-                    Workspace.ofRepositoryContracts().lifecycle(
-                        FILE,
-                        DESIGN,
-                        "$ACTIVE\nonboarding: { kind: existing, reason: 2024 年から動いている }",
-                    )
+                    Workspace.ofRepositoryContracts().setLifecycle(FILE, "$ACTIVE\nonboarding: { kind: existing, reason: 2024 年から動いている }")
                 ids(check(base, current)).shouldBeEmpty()
             }
             withClue("deprecated で登録") {
-                ids(check(base, Workspace.ofRepositoryContracts().lifecycle(FILE, DESIGN, deprecated()))) shouldBe setOf("CC-LIFECYCLE-001")
+                ids(check(base, Workspace.ofRepositoryContracts().setLifecycle(FILE, deprecated()))) shouldBe setOf("CC-LIFECYCLE-001")
             }
         }
 
@@ -114,7 +117,7 @@ class LifecycleSpec :
             withClue("active のエントリだけを消す(契約は登録されていない状態になる)") {
                 ids(check(base, Workspace.ofRepositoryContracts().delete(EVENTS))) shouldBe setOf("CC-LIFECYCLE-002", "CC-CATALOG-006")
             }
-            val retiredBase = Workspace.ofRepositoryContracts().lifecycle(FILE, DESIGN, RETIRED)
+            val retiredBase = Workspace.ofRepositoryContracts().setLifecycle(FILE, RETIRED)
             ids(check(retiredBase, Workspace.ofRepositoryContracts().delete(FILE).delete(FILE_CONTRACT))).shouldBeEmpty()
         }
 
@@ -170,19 +173,21 @@ class LifecycleSpec :
 
         test("互換性と状態の連動: 比較元で設計中の連携だけが使う契約は、破壊的変更を許可して報告する。active なら違反") {
             val breaking = { workspace: Workspace -> workspace.replace(FILE_CONTRACT, "    type: int64", "    type: string") }
-            val designResult = check(Workspace.ofRepositoryContracts(), breaking(Workspace.ofRepositoryContracts()))
+            val designBase = Workspace.ofRepositoryContracts().setLifecycle(FILE, DESIGN)
+            val designResult = check(designBase, breaking(Workspace.ofRepositoryContracts().setLifecycle(FILE, DESIGN)))
             designResult.violations.shouldBeEmpty()
             designResult.designAllowed.map { it.rule.id to it.file } shouldBe listOf("CC-COMPAT-003" to FILE_CONTRACT)
             Report.text(designResult) shouldContain "設計中の連携の契約なので許可した互換性の違反が 1 件あります"
             Report.markdown(designResult) shouldContain "### 設計中の連携の契約なので許可した互換性の違反"
 
-            val activeBase = Workspace.ofRepositoryContracts().lifecycle(FILE, DESIGN, ACTIVE)
-            val activeResult = check(activeBase, breaking(Workspace.ofRepositoryContracts().lifecycle(FILE, DESIGN, ACTIVE)))
+            val activeBase = Workspace.ofRepositoryContracts().setLifecycle(FILE, ACTIVE)
+            val activeResult = check(activeBase, breaking(Workspace.ofRepositoryContracts().setLifecycle(FILE, ACTIVE)))
             ids(activeResult) shouldBe setOf("CC-COMPAT-003")
             activeResult.designAllowed.shouldBeEmpty()
 
             withClue("比較元の状態で決める(同じ PR で design に戻しても許可しない)") {
-                ids(check(activeBase, breaking(Workspace.ofRepositoryContracts()))) shouldBe setOf("CC-COMPAT-003", "CC-LIFECYCLE-001")
+                ids(check(activeBase, breaking(Workspace.ofRepositoryContracts().setLifecycle(FILE, DESIGN)))) shouldBe
+                    setOf("CC-COMPAT-003", "CC-LIFECYCLE-001")
             }
         }
 

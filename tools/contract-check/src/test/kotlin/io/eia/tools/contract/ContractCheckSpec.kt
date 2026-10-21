@@ -34,10 +34,10 @@ private class Case(
 )
 
 /**
- * 日次の売上ファイル(INT-SALES-004)を active にする。設計中(design)の連携だけが使う契約は破壊的変更を許すので(ADR-0013 §7)、
- * ファイルの仕様の互換性の違反のサンプルは、比較元と変更後の両方で active にして検査する。
+ * 日次の売上ファイル(INT-SALES-004)を active にする(今の状態によらない)。設計中(design)の連携だけが使う契約は破壊的変更を
+ * 許すので(ADR-0013 §7)、ファイルの仕様の互換性の違反のサンプルは、比較元と変更後の両方で active にして検査する。
  */
-private fun Workspace.fileIntegrationActive(): Workspace = replace(CATALOG_FILE, "lifecycle: design", "lifecycle: active")
+private fun Workspace.fileIntegrationActive(): Workspace = setLifecycle(CATALOG_FILE, "lifecycle: active")
 
 private val cases =
     listOf(
