@@ -34,6 +34,7 @@ internal object PlatformDependencyRules {
      * - messaging-kafka → observability: PRODUCER の span と Correlation ID(ADR-0025 §4・ADR-0018 §2)
      * - outbox → messaging-kafka: 記録のトピック・ヘッダ・ペイロード(EventTopic・EventMetadata・AvroEventSerializer。ADR-0007)
      * - outbox → observability: 記録を作るときの PRODUCER の span と Correlation ID(ADR-0018 §2)
+     * - webhook → security: 署名の鍵を Secret で受け取る(値を伏せる。ADR-0035 §2・ADR-0019 §6)
      */
     val ALLOWED: Map<String, Set<String>> =
         mapOf(
@@ -44,6 +45,7 @@ internal object PlatformDependencyRules {
             "messaging-kafka" to setOf("schema-registry", "observability"),
             "outbox" to setOf("messaging-kafka", "observability"),
             "security" to setOf("reliability", "api"),
+            "webhook" to setOf("security"),
         )
 
     private const val PLATFORM_PACKAGE = "io.eia.platform"
