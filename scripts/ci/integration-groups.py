@@ -9,7 +9,8 @@
 - sales: 全体のカバレッジの集約(ルートの build.gradle.kts の kover(...))の対象。全体の閾値(:koverVerify)は、集約の対象の
   統合テストを同じ Gradle の実行で測る必要があるので、集約の対象はすべてこのグループに入れる。
 - platform: platform/*
-- participants: 注文 Saga の参加者(inventory・payment・shipping)、分析のバッチ(batch-etl)、ファイル授受(file-exchange)と tools/*
+- participants: 注文 Saga の参加者(inventory・payment・shipping)、分析のバッチ(batch-etl)、ファイル授受(file-exchange)、
+  SaaS 連携(webhook-receiver)と tools/*
 
 統合テストを持たないモジュールの閾値は、build ジョブ(./gradlew build)で検証する。
 """
@@ -30,6 +31,7 @@ GROUPS: dict[str, list[str]] = {
         "services/shipping/",
         "services/batch-etl/",
         "services/file-exchange/",
+        "services/webhook-receiver/",
         "tools/",
     ],
 }

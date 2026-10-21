@@ -1,0 +1,3 @@
+# イメージに入れるのは installDist の出力だけ(ソースやほかのビルド成果物を送らない)
+*
+!build/install/app/lib/
