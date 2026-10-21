@@ -22,7 +22,8 @@
 |---|---|---|---|
 | traceparent | ○ | ○ | W3C Trace Context |
 | X-Correlation-Id / correlationid | ○ | ○ | 業務トランザクション ID(入口で採番) |
-| Idempotency-Key | POST 必須 | — | 24h 保持 |
+| Idempotency-Key | POST 必須 | — | 24h 保持(Webhook の受け口は webhook-id で代える) |
+| webhook-id, webhook-timestamp, webhook-signature | Webhook の受け口で必須 | — | Standard Webhooks の署名(ADR-0035 §2) |
 | ce_id, ce_source, ce_type, ce_time, ce_specversion | — | ○ | CloudEvents binary mode |
 
 ### DLQ のヘッダ(Framework 6.5。ADR-0026 §7)
@@ -53,6 +54,14 @@ DLQ のトピックは、元のメッセージと同じ機密区分として扱�
 - 部品は `platform/api` の `respondIdempotently`(判定は `IdempotencyHandler`、保存先は `IdempotencyStore` の Port)。キーの範囲はクライアント(`azp`)ごと。
 - 同じキーの再送: 内容(指紋 = メソッド・パス・正規化した本文)が同じなら保存した応答を返し `Idempotent-Replayed: true` を付ける。違えば 422。処理中なら 409 と `Retry-After`。キーがない・不正なら 400。
 - 5xx・429・408 は保存せず、業務の更新も取り消す(同じキーで再試行できる)。これが成り立つのは、副作用がすべて同じトランザクションの中にある場合だけ。**イベントは Outbox(ADR-0007)を通して発行する。**
+
+### Webhook の署名(ADR-0035 §2)
+- SaaS から受ける Webhook は、Standard Webhooks の形の署名で認証する(JWT ではない)。
+  - `webhook-id`: イベント ID(再送でも同じ)。重複の判定のキー。
+  - `webhook-timestamp`: 署名した時刻(UNIX 秒)。受け口の時刻から前後 5 分を外れたら拒否する(リプレイ)。正当な再送は新しい時刻で署名し直す。
+  - `webhook-signature`: `v1,<base64(HMAC-SHA256(secret, "{webhook-id}.{webhook-timestamp}.{本文のバイト列}"))>` を空白区切りで 1 つ以上。
+- 受け口は、本文を解析する前に生のバイト列で署名を検証し、定数時間で比べる。鍵の差し替えの間は新旧 2 つの鍵を受け付ける。
+- 受け口の OpenAPI の操作には `x-eia-webhook: true` を付ける(contract-check の `CC-API-004`)。
 
 ### File manifest(`contracts/files/manifest.v1.schema.json`)
 必須項目: `file`, `recordCount`, `sha256`, `schemaVersion`, `createdAt`(UTC), `traceparent`, `correlationId`。
@@ -130,6 +139,10 @@ lifecycle: active       # proposed | design | active | deprecated | retired
     - inventory.stock.cmd-reserve.v1
   ```
 - `contracts/` の OpenAPI / AsyncAPI は、どれかのカタログの `contract` に登録されていなければならない(カタログ未登録の連携の禁止。Framework 16.1)。
+- **外部の契約**(SaaS のベンダーなどが持ち主の API の写し)は `contracts/external/` に置き、カタログに `external: { vendor, source }` を書く(ADR-0035 §8)。
+  owner は連携に責任を持つ社内のチーム。contract-check は自社の API の規則を当てず、ベンダーの破壊的変更は警告(`CC-EXTERNAL-001`)にする。
+- **個人情報を運ぶ連携** は `dataRetention`(ISO 8601 の期間。例 `P7D`)を書き、トピックの retention などの設定と一致させる。
+- **iPaaS 風の Flow の定義** は `contracts/flows/{id}.v{n}.flow.yaml`(形式は `flow.v1.schema.json`。ADR-0036)。Flow でできるのは取り込み・Canonical への対応・振り分け・届け先の指定だけ。
 
 ## 6. エラー応答(Problem Details)
 REST のエラーは RFC 9457 の Problem Details(`application/problem+json`)で返す。部品は `platform/api` の `installProblemDetails` / `respondError` / `respondProblem`(ADR-0022 §2)。
