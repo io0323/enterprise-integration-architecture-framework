@@ -41,6 +41,7 @@ include(
     ":services:order:adapters",
     ":services:order:app",
     ":services:legacy-sim:app",
+    ":services:saas-mock:app",
     ":services:legacy-order-acl:domain",
     ":services:legacy-order-acl:application",
     ":services:legacy-order-acl:adapters",
