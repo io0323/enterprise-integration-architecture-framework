@@ -61,6 +61,7 @@ flowchart BT
   | `platform:outbox` | `platform:messaging-kafka` | 記録のトピック・ヘッダ・ペイロード(`EventTopic`・`EventMetadata`・`AvroEventSerializer`。ADR-0007) |
   | `platform:outbox` | `platform:observability` | 記録を作るときの PRODUCER の span と Correlation ID(ADR-0018 §2) |
   | `platform:file-transfer` | `platform:security` | S3 の資格情報を `SecretProvider` から取る(ADR-0032 §1・ADR-0019 §6) |
+  | `platform:webhook` | `platform:security` | 署名の鍵を `Secret` で受け取る(値を伏せる。ADR-0035 §2・ADR-0019 §6) |
 - Kafka のクライアントと avro4k を本番コードで使ってよいのは `platform:messaging-kafka` と `services:*:adapters`・`app` だけ(`org.apache.avro` は tools も可)。Apicurio の公式のライブラリはテストだけ(ADR-0025 §5。Konsist の `messagingLibrariesOnlyInAllowedModules`)。
 - AWS SDK を本番コードで使ってよいのは `platform:file-transfer` と `platform:audit` のアンカー(`anchor` パッケージ)だけ。Parquet と Hadoop は `platform:file-transfer` だけ(計測の `tools/parquet-bench` を除く)。SFTP のクライアント(sshj)と OpenPGP(bcpg)は `platform:file-transfer` だけ(テスト用の鍵を作る `platform:test-support` を除く。ADR-0032 §8。Konsist の `transferSecurityOnlyInFileTransfer`)。依存の宣言(`libs.aws.*`・`libs.parquet.*`・`libs.hadoop.*`・`libs.sshj`・`libs.bouncycastle.pg`)も同じ範囲に限り、Hadoop は `compileOnly` だけにする(ADR-0032 §6・ADR-0033 §3。Konsist の `awsSdkOnlyInAllowedModules`・`parquetOnlyInFileTransfer`・`LibraryDeclarationRules`。実行時のクラスパスは `platform:file-transfer` の `verifyNoHadoopAtRuntime` でも検査する)。
 - `platform:test-support` はテストのソースセット(`test` / `integrationTest` など)からだけ参照する。
@@ -107,6 +108,15 @@ services/legacy-sim/app/
   Dockerfile                               migrate / simulate(make up PROFILE=cdc・make legacy-simulate)
 ```
 
+**例外: SaaS の模擬(`services/saas-mock`)も `app` の 1 モジュールだけ**(ADR-0035)。自分たちの業務のサービスではなく外部のシステム(CRM)の代わりで、外部の契約(`contracts/external/crm-api.v1.yaml`)を実装するだけの業務のロジックを持たない。状態はメモリの上だけ(再起動で消える)。
+```
+services/saas-mock/app/
+  src/main/kotlin/io/eia/saasmock/app/   Main.kt, SaasMockServer.kt(起動・Webhook を送るループ), SaasMockConfig.kt, SaasMock.kt(CRM の API。ページング・Rate Limit),
+                                          AdminRoutes.kt(管理の API: 顧客の作成・変更・Webhook の状態と送り直し・Rate Limit の変更), HttpSupport.kt(トークンの認証・エラーの本文),
+                                          CrmCustomers.kt(顧客と版), RateLimiter.kt(Token Bucket。429 と Retry-After), WebhookDispatcher.kt(署名・再送のたびに新しい時刻で署名し直す・鍵の差し替えの間は新旧の両方で署名)
+  Dockerfile                             make up PROFILE=saas(P10 ⑥)
+```
+
 **永続化の方針**(全サービスで揃える):
 - Exposed はトランザクションの管理に使い、ロックの意味が重要な SQL(楽観的ロック、`ON CONFLICT` など)は PreparedStatement で直接書く(`platform/audit` と同じ書き方。ADR-0017)。
 - マイグレーションは DB の所有者のロール(`{service}`)で適用し、アプリはマイグレーションが権限を付けたロール(`{service}_app`。所有者の権限を持たない)で接続する。監査の表(`AuditSchema`)も同じ DB に適用する。
@@ -130,7 +140,7 @@ services/legacy-sim/app/
 | legacy-order-acl | レガシーの受注の CDC の Anti-Corruption Layer(状態を持たない変換・DLQ。P06 ⑤b。ADR-0026)。4 モジュール。domain に変換の規則(`LegacyOrderTranslation`)、application にユースケースと発行の Port、adapters に Debezium の Envelope の型・読み取りの処理(`LegacyChangeHandler`。読み取り・コミット・DLQ は platform/messaging-kafka の `EventConsumer` の外部のトピックの購読。#88)・発行(`KafkaLegacyOrderStatePublisher`)、app に起動とヘルスチェック。照合(P06 ⑥。ADR-0027): domain に `LegacyOrderFingerprint`、application に `ReconcileLegacyOrdersUseCase` と Port(`LegacySource`・`PublishedLegacyOrders`)、adapters に `reconcile/`(`JdbcLegacySource`・`KafkaPublishedLegacyOrders`・`ReconcileMetrics`)、app に定期の照合(`ReconcileJob`)と `reconcile` のサブコマンド。再同期(P06 ⑥b): application に `ResyncLegacyOrdersUseCase`(上限 100 件)、adapters に `JdbcSnapshotRequests`(signal 表)・`KafkaReconcileTombstones`(照合の tombstone)。レガシーの DB は読み取り専用のロールで読む(ADR-0027 §1 の例外) | CDC → Kafka(`sales.legacy-order.changed.v1`。INT-SALES-003) |
 | batch-etl | 分析基盤への ELT/ETL(ADR-0031)と日次の売上ファイルの送り手(P09)。注文のイベントを日次の DAG で取り込み(住所はロードの前に地域に変える ETL)、日本時間の日次のパーティションを SQL で置換して作る(ELT)。遅れて届いたデータは 31 日前まで作り直す。週次の Full 照合(order-service の日次の集計を Gateway 経由で読み、件数とハッシュを比べる。38 日分)。日次の DAG の完了の後に、日次の売上ファイル(INT-SALES-004。Parquet / CSV + gzip を S3 互換ストレージに置く。ADR-0031 §8)を書く。コマンドは `migrate`・`serve`(毎日 01:00 JST に前日の分、毎週月曜 07:00 JST に照合)・`run <yyyy-MM-dd> [--restart]`・`reconcile <yyyy-MM-dd> [--restart]`・`sales-file <yyyy-MM-dd> [--restart]`・`skip-lost-events [--confirm]`(保持期間を超えた回復。ADR-0031 §7)。取り込みの遅れを保持期間に対して監視する | Batch, File(S3 互換ストレージ) |
 | file-exchange | ファイル授受(ADR-0032)。P09 ⑤a: 受け口(S3 互換ストレージの `inbox/sales-daily/`)のマニフェストの到着で DAG `file-exchange.receive`(パーティションはファイル名。データファイルがなくても起動)を動かし、検査 → 移動の決定を `received_file` に記録 → archive / quarantine に移す(記録が移動中なら検査をせずに続ける)。serve の中の見回りが、受け取り済みの名前で届いたファイルを送り直し(`duplicate`)・名前の使い回し(`name_reused`)として quarantine の番号ごとの場所に移す(受け取りの実行と同じロック・記録の状態・部分一意索引で排他)。domain に受け取りの記録と理由の規則、application に受け取り・見回りのユースケースと Port(`Inbox`・`ReceivedFiles`・`FileLocks`)、adapters に `S3Inbox`(platform/file-transfer)・`JdbcReceivedFiles`・`BatchFileLocks`・契約の形(`SalesDailyLayout`)、app に起動・見回り・コマンド(`migrate`・`serve`・`receive <名前> [--restart]`・`sweep`)。P09 ⑤b: 受け取りの後のステップ `deliver` で、合格のファイルを取引先の台帳(取引先の ID ごとの送り先・ホスト鍵・PGP の公開鍵。`PartnerRegistry`)に従い、PGP で暗号化・署名して SFTP で送る(`SftpPartnerOutbox`。取引先ごとの Resilience `sftp-{ID}`)。配送の記録 `delivery`(SENDING → SENT)と、送る前の正式名の確認で冪等 | MFT (S3 互換ストレージ/SFTP) |
-| saas-mock / webhook-receiver / integration-flow | SaaS 連携(P10。ADR-0035・ADR-0036)。saas-mock: CRM の模擬(外部の契約 `contracts/external/crm-api.v1.yaml` を実装。ページング・Rate Limit・署名した Webhook の送信)。webhook-receiver: 署名の検証・受け取りの記録と Outbox(同じトランザクション)・すぐに 2xx。integration-flow: Flow の定義(`contracts/flows`)に従い、取り込みのトピックと SaaS の API の定期の同期から Canonical の顧客のイベントを出す | REST, Webhook, Kafka(Outbox) |
+| saas-mock / webhook-receiver / integration-flow | SaaS 連携(P10。ADR-0035・ADR-0036)。saas-mock(P10 ②): CRM の模擬(外部の契約 `contracts/external/crm-api.v1.yaml` を実装。カーソルのページング・Rate Limit(429 と `Retry-After`)・署名した Webhook の送信(Standard Webhooks。再送のたびに新しい時刻で署名し直す・鍵の差し替えの間は新旧の両方で署名・再送の間隔を設定できる・`webhookDelay` で順序の逆転を作る)・管理の API(E2E が顧客を作る・変える)。1 モジュール)。webhook-receiver: 署名の検証・受け取りの記録と Outbox(同じトランザクション)・すぐに 2xx。integration-flow: Flow の定義(`contracts/flows`)に従い、取り込みのトピックと SaaS の API の定期の同期から Canonical の顧客のイベントを出す | REST, Webhook, Kafka(Outbox) |
 | iot-bridge | MQTT→Kafka | MQTT, Kafka |
 | b2b-gateway | EDI | SFTP, EDIFACT |
 | bff-graphql | フロント集約 | GraphQL |
@@ -149,6 +159,7 @@ services/legacy-sim/app/
 | batch | 軽量 DAG ランナー(ADR-0030): DAG の Kotlin DSL(`dag { step(...) }`)、実行(`BatchRunner`。DAG とパーティションごとに advisory lock で 1 つだけ・成功したステップを飛ばす再開(`RunMode.RESUME`)とやり直し(`RESTART`)・依存のないステップの並列・ステップのリトライ(既定 3 回))、Checkpoint と Watermark(`StepContext`。結果と同じトランザクションで書く `JdbcBatchStore.writeCheckpoint(connection, ...)`)、起動(`BatchScheduler`: 時刻・前段の DAG の完了・`.manifest.json` の到着(置き場は platform/file-transfer の `ObjectReader`))、traceparent の引き継ぎ(起動の情報を実行の記録に保存)、SLA の遅延の予測(`SlaMonitor`。p90 と前段の待ちを含む予測・`eia.batch.sla.slack`)、メトリクス(`BatchMetrics`)。記録はスキーマ `batch`(`BatchSchema`) | P08 |
 | file-transfer | ファイル連携の部品(ADR-0032・ADR-0033)。P09 ③a: S3 互換ストレージの置き場(`ObjectReader` / `ObjectStore`・`S3ObjectStore`。用途ごとに権限を絞った identity で使う)、マニフェスト(`FileManifest`)、データファイルの形(`FileLayout`・`FileName`。契約の `contracts/files/*.yaml` をコードにしたもの)、書き出し(`FilePublisher`: Parquet(zstd。Hadoop なし)・CSV + gzip をローカルに書いて件数と SHA-256 を求め、データファイル → マニフェストの順に置く)、受け側の検査(`FileVerifier`: マニフェスト・名前・スキーマの版・形式・欠損・大きさ・SHA-256・列と件数。判定だけを返す)、移動(`FileMover`: archive / quarantine。コピーしてから消す。どこで落ちても同じ移動の呼び直しで収まる)。③b: PGP(`PgpKeys`・`PgpFiles`: 取引先の公開鍵で暗号化・自社の鍵で署名、自社の鍵で復号・取引先の署名を検証)、SFTP の送信(`SftpSender`: sshj。暗号の方式の絞り込み(`SftpAlgorithms`)・事前に登録したホスト鍵だけ(`KnownHosts`)・一時名から正式名へ)。sshj と OpenPGP はこのモジュールだけで使う(Konsist) | P09 |
 | schema-registry | Apicurio Registry 3 の REST クライアント(`ApicurioRegistryClient`: 内容からの contentId の解決・ID からのスキーマの取得・登録)、起動時のスキーマ ID の解決(`SchemaIdBook`。リクエストの処理中はレジストリに問い合わせず、未解決の間は `/health/ready` を失敗にする)、書き手のスキーマのキャッシュ(`WriterSchemas`)(ADR-0025 §2・§3)。契約の登録は `tools/schema-publish`(`make schemas`)だけが行い、サービスは自動登録しない | P06 |
+| webhook | Webhook の署名(Standard Webhooks。ADR-0035 §2)。送り手の署名(`StandardWebhooks.signatureHeader`。鍵の差し替えの間は新旧の両方で署名)と受け口の検証(`WebhookVerifier`。本文を解析する前に生のバイト列で検証・定数時間の比較・署名の時刻の許容(既定は前後 5 分)・鍵の差し替えの間は 2 つの鍵を受け付ける・拒否の理由 `WebhookRejection`)。送り手は saas-mock、受け口は webhook-receiver(P10 ③) | P10 |
 
 ## 5. テスト戦略
 | レベル | 対象 | ツール |
