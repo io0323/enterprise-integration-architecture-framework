@@ -1,0 +1,15 @@
+{
+  "type": "record",
+  "name": "WebhookReceived",
+  "namespace": "io.eia.events.integration",
+  "doc": "SaaS の Webhook を受け取った(integration.crm-webhook.received.v1。INT-INTEGRATION-001)。webhook-receiver が署名を検証して記録し、Outbox で出す。社内の取り込み専用(integration-flow だけが読む。Webhook を社内に直接配らない。Framework 10.2)。本文は受け取ったバイト列のまま運ぶ(解析・変換は integration-flow)。個人情報を含むので confidential、保持期間は 7 日(ADR-0035 §3)。",
+  "fields": [
+    { "name": "webhookId", "type": "string", "doc": "送り手が付けたイベント ID(webhook-id)。重複の判定のキー" },
+    { "name": "source", "type": "string", "doc": "送り手(例 crm)。integration-flow の Flow の trigger が選ぶのに使う" },
+    { "name": "signedAt", "type": { "type": "long", "logicalType": "timestamp-micros" }, "doc": "送り手が署名した時刻(webhook-timestamp)。再送のたびに新しくなる" },
+    { "name": "receivedAt", "type": { "type": "long", "logicalType": "timestamp-micros" }, "doc": "受け口が受け取った時刻" },
+    { "name": "contentType", "type": "string", "doc": "本文の Content-Type(例 application/json)" },
+    { "name": "bodySha256", "type": "string", "doc": "本文の SHA-256(小文字の 16 進)。受け取りの記録と照合できる" },
+    { "name": "body", "type": "bytes", "doc": "署名を検証した本文のバイト列(解析していない)" }
+  ]
+}

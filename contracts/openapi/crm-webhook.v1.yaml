@@ -1,0 +1,179 @@
+openapi: 3.1.0
+info:
+  title: CRM Webhook Receiver
+  version: 1.0.0
+  summary: CRM(SaaS)からの Webhook の受け口(INT-SALES-005)
+  description: |
+    CRM(SaaS。ローカルは saas-mock)が顧客の変更を通知する Webhook の受け口(Framework 10.2・ADR-0035)。
+    Gateway 公開パスは `/sales/v1/webhooks/crm`、サービス内部パスは `/v1/webhooks/crm`(ADR-0005)。
+
+    - **認証は JWT ではなく署名**(Standard Webhooks の形)。`webhook-signature` は `v1,<base64>` を空白区切りで 1 つ以上並べたもの。
+      署名は `{webhook-id}.{webhook-timestamp}.{受け取った本文のバイト列}` の HMAC-SHA256(鍵は CRM と共有した秘密)。
+      受け口は **本文を解析する前に、受け取った生のバイト列で** 署名を検証し、定数時間で比べる。
+    - `webhook-timestamp`(UNIX 秒)が受け口の時刻から前後 5 分を外れたら、再送の攻撃(リプレイ)として拒否する(401)。
+      正しい再送は、送り手が再送のたびに新しい時刻で署名し直す(Standard Webhooks の決まり)。
+    - 鍵の差し替えの間は、新旧 2 つの鍵のどちらで署名されていても受け付ける。
+    - 受け取った Webhook は、イベント ID(`webhook-id`)で重複を判定し、記録してから **すぐに 204 を返す**。処理は後で行う
+      (社内の取り込みのトピック `integration.crm-webhook.received.v1` に Outbox で出す。INT-INTEGRATION-001)。
+      同じ `webhook-id` の再送にも 204 を返し、二度は取り込まない。
+    - 送り手は 2xx 以外を受けると再送する。受け口は、本文を検証しないで受け付けるので、本文の形の誤りでは 2xx を返す
+      (取り込みの側で隔離する。Webhook を拒否し続けて送り手の再送を増やさない)。
+    - Webhook の順序は保証されない。取り込みの側が、本文の版(`data.version`)で新旧を判断する。
+    - エラーは RFC 9457 Problem Details(`application/problem+json`)。Rate Limit は送り手(IP)ごと。超過時は `429` と `Retry-After`(Framework 5.6)。
+  contact:
+    name: team-integration
+servers:
+  - url: http://localhost:19080/sales
+    description: ローカル(APISIX)
+tags:
+  - name: webhooks
+paths:
+  /v1/webhooks/crm:
+    post:
+      tags: [webhooks]
+      operationId: receiveCrmWebhook
+      summary: CRM の Webhook を受け取る
+      description: 署名と時刻を確かめ、イベント ID で重複を判定して記録し、204 を返す。処理は非同期。
+      x-eia-webhook: true
+      security:
+        - webhookSignature: []
+      parameters:
+        - $ref: "#/components/parameters/WebhookId"
+        - $ref: "#/components/parameters/WebhookTimestamp"
+        - $ref: "#/components/parameters/WebhookSignature"
+      requestBody:
+        required: true
+        description: CRM のイベント。受け口は解析せずに、署名を検証したバイト列のまま取り込みのトピックに出す
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CrmEvent"
+      responses:
+        "204":
+          description: 受け付けた(新しく記録した、または同じ `webhook-id` を記録済み)
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/ContentTooLarge"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+components:
+  securitySchemes:
+    webhookSignature:
+      type: apiKey
+      in: header
+      name: webhook-signature
+      description: |
+        Standard Webhooks の署名(`v1,<base64(HMAC-SHA256(secret, "{webhook-id}.{webhook-timestamp}.{body}"))>`)。
+        鍵は CRM と共有した秘密(SecretProvider から読む。差し替えの間は新旧 2 つ)。
+  parameters:
+    WebhookId:
+      name: webhook-id
+      in: header
+      required: true
+      description: イベント ID(送り手が付ける。再送でも同じ)。重複の判定に使う
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: "^[A-Za-z0-9_.:-]+$"
+    WebhookTimestamp:
+      name: webhook-timestamp
+      in: header
+      required: true
+      description: 署名した時刻(UNIX 秒)。再送のたびに新しくなる
+      schema:
+        type: string
+        pattern: "^[0-9]{1,12}$"
+    WebhookSignature:
+      name: webhook-signature
+      in: header
+      required: true
+      description: "`v1,<base64>` を空白区切りで 1 つ以上"
+      schema:
+        type: string
+        maxLength: 1024
+  schemas:
+    CrmEvent:
+      description: |
+        CRM のイベント(Standard Webhooks の本文の形)。未知の項目は無視する(Tolerant Reader)。
+        `data` は CRM の顧客(INT-SALES-006 の Customer と同じ形)。
+      type: object
+      required: [type, timestamp, data]
+      properties:
+        type:
+          type: string
+          description: イベントの種類(`customer.created` / `customer.updated` など)
+          examples: [customer.updated]
+        timestamp:
+          type: string
+          format: date-time
+        data:
+          type: object
+          description: CRM の顧客。項目は contracts/external/crm-api.v1.yaml の Customer
+      additionalProperties: true
+    Problem:
+      type: object
+      description: RFC 9457 Problem Details
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        correlationId:
+          type: string
+  headers:
+    RetryAfter:
+      description: 再試行までの秒数
+      schema:
+        type: integer
+        minimum: 0
+  responses:
+    BadRequest:
+      description: 署名のヘッダがない・形式が不正(`bad-request`)
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Unauthorized:
+      description: |
+        署名が一致しない(`webhook-signature-invalid`)、または時刻が許容の幅を外れた(`webhook-timestamp-out-of-range`)。
+        どちらも記録しない
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    ContentTooLarge:
+      description: 本文が上限(256 KiB)を超えた
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    TooManyRequests:
+      description: Rate Limit 超過
+      headers:
+        Retry-After:
+          $ref: "#/components/headers/RetryAfter"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    ServiceUnavailable:
+      description: 記録の DB を使えない(`service-unavailable`)。送り手は再送する。記録していないので、重複にはならない
+      headers:
+        Retry-After:
+          $ref: "#/components/headers/RetryAfter"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"

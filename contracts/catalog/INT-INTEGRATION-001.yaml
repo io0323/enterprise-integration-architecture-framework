@@ -1,0 +1,17 @@
+id: INT-INTEGRATION-001
+name: CRM Webhook Ingest
+description: 受け取った CRM の Webhook を、社内の取り込みのトピックに出す。読むのは integration-flow だけ(Webhook を社内に直接配らない。ADR-0035)
+style: event
+pattern: pub-sub
+provider: { owner: team-integration, system: webhook-receiver }
+consumers:
+  - { owner: team-integration, system: integration-flow, group: integration-flow.webhook-ingest }
+contract: contracts/asyncapi/crm-webhook-ingest.v1.yaml
+channels:
+  - integration.crm-webhook.received.v1
+tier: 2
+# 本文(顧客の名前・メール)をそのまま運ぶ。保持期間はトピックの retention.ms と一致させる(infra/local/kafka/topics.conf)
+dataClassification: confidential
+dataRetention: P7D
+slo: { availability: "99.9", latencyP99: "5s" }
+lifecycle: design

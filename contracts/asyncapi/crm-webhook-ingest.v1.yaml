@@ -1,0 +1,71 @@
+asyncapi: 3.0.0
+info:
+  title: CRM Webhook Ingest
+  version: 1.0.0
+  description: |
+    webhook-receiver が、署名を検証して受け取った CRM の Webhook を、社内の取り込みのトピックに出す(INT-INTEGRATION-001。ADR-0035)。
+    **社内の取り込み専用**: 読むのは integration-flow だけ(Webhook を社内に直接配らない。Framework 10.2)。
+    受け取りの記録と同じトランザクションで Outbox に書き、Debezium で発行する(ADR-0007)。パーティションキーは webhook-id。
+    本文は受け取ったバイト列のまま運ぶ。**個人情報(顧客の名前・メール)を含むので confidential、保持期間は 7 日**
+    (取り込みが止まったときの再処理に足りる長さ。ADR-0035 §3)。ce_id は webhook-id(重複の判定。integration-flow は platform/inbox で冪等に処理する)。
+    処理できないメッセージは `{topic}.dlq` に隔離する(Framework 6.5)。
+  contact:
+    name: team-integration
+defaultContentType: avro/binary
+servers:
+  local:
+    host: localhost:19092
+    protocol: kafka
+    description: ローカル(P03 の docker compose。ホスト用の EXTERNAL リスナー。コンテナ内からは kafka:9092)
+channels:
+  crmWebhookReceived:
+    address: integration.crm-webhook.received.v1
+    messages:
+      webhookReceived:
+        $ref: "#/components/messages/WebhookReceived"
+operations:
+  publishCrmWebhookReceived:
+    action: send
+    channel:
+      $ref: "#/channels/crmWebhookReceived"
+    messages:
+      - $ref: "#/channels/crmWebhookReceived/messages/webhookReceived"
+components:
+  messages:
+    WebhookReceived:
+      name: WebhookReceived
+      title: Webhook の受け取り
+      contentType: avro/binary
+      headers:
+        $ref: "#/components/schemas/StandardHeaders"
+      payload:
+        schemaFormat: application/vnd.apache.avro+json;version=1.9.0
+        schema:
+          $ref: "../avro/integration/WebhookReceived.avsc"
+  schemas:
+    StandardHeaders:
+      type: object
+      description: 全イベント共通のヘッダ(INTEGRATION_STANDARDS §2)
+      required: [ce_id, ce_source, ce_type, ce_time, ce_specversion, traceparent, correlationid]
+      properties:
+        ce_id:
+          type: string
+          description: イベント ID(冪等消費のキー)
+        ce_source:
+          type: string
+          description: 発行元
+        ce_type:
+          type: string
+          description: イベント種別。トピック名から `.v{n}` を除いた値
+        ce_time:
+          type: string
+          format: date-time
+        ce_specversion:
+          type: string
+          const: "1.0"
+        traceparent:
+          type: string
+          description: W3C Trace Context
+        correlationid:
+          type: string
+          description: 業務トランザクション ID

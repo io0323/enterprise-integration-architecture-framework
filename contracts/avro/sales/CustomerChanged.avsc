@@ -1,0 +1,45 @@
+{
+  "type": "record",
+  "name": "CustomerChanged",
+  "namespace": "io.eia.events.sales",
+  "doc": "顧客が作られた・変わった(sales.customer.changed.v1。INT-SALES-007)。integration-flow が SaaS(CRM)の顧客を Canonical Model の Customer に変えて出す(Framework 10.2・15。ADR-0036)。変更の後の顧客の全体を運ぶ。Canonical Model の Customer と項目を一致させる(ADR-0012)。パーティションキーは顧客 ID。",
+  "fields": [
+    {
+      "name": "customer",
+      "type": {
+        "type": "record",
+        "name": "Customer",
+        "doc": "Canonical Model: io.eia.shared.canonical.sales.Customer",
+        "fields": [
+          { "name": "id", "type": "string" },
+          { "name": "name", "type": "string" },
+          { "name": "email", "type": "string" },
+          { "name": "createdAt", "type": { "type": "long", "logicalType": "timestamp-micros" } },
+          { "name": "updatedAt", "type": { "type": "long", "logicalType": "timestamp-micros" } },
+          {
+            "name": "billingAddress",
+            "type": [
+              "null",
+              {
+                "type": "record",
+                "name": "Address",
+                "namespace": "io.eia.events.common",
+                "fields": [
+                  { "name": "countryCode", "type": "string", "doc": "ISO 3166-1 alpha-2" },
+                  { "name": "postalCode", "type": "string" },
+                  { "name": "city", "type": "string" },
+                  { "name": "line1", "type": "string" },
+                  { "name": "region", "type": ["null", "string"], "default": null },
+                  { "name": "line2", "type": ["null", "string"], "default": null }
+                ]
+              }
+            ],
+            "default": null
+          }
+        ]
+      }
+    },
+    { "name": "sourceSystem", "type": "string", "doc": "元の SaaS(例 crm)" },
+    { "name": "sourceVersion", "type": "long", "doc": "元の SaaS の顧客の版。消費者は、同じ顧客で版の小さいものを古いとして扱える(順序は保証しない)" }
+  ]
+}

@@ -1,0 +1,14 @@
+id: INT-SALES-007
+name: Customer Events
+description: CRM の顧客を Canonical Model の Customer に変えて出す。Webhook と定期の同期の両方から、顧客ごとに新しい版だけを出す(ADR-0036)
+style: event
+pattern: pub-sub
+provider: { owner: team-integration, system: integration-flow }
+consumers: []
+contract: contracts/asyncapi/customer-events.v1.yaml
+channels:
+  - sales.customer.changed.v1
+tier: 2
+dataClassification: confidential
+slo: { availability: "99.9", latencyP99: "30s" }
+lifecycle: design
