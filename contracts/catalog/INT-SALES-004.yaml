@@ -13,4 +13,4 @@ tier: 2
 dataClassification: internal
 # 前日の分を翌朝(日次の SLA の 06:00 JST の後)に出す。latencyP99 は業務の日の終わりから受け手が受け取るまで
 slo: { availability: "99.9", latencyP99: "8h" }
-lifecycle: design
+lifecycle: active
