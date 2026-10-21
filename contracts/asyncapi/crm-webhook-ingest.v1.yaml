@@ -7,7 +7,8 @@ info:
     **社内の取り込み専用**: 読むのは integration-flow だけ(Webhook を社内に直接配らない。Framework 10.2)。
     受け取りの記録と同じトランザクションで Outbox に書き、Debezium で発行する(ADR-0007)。パーティションキーは webhook-id。
     本文は受け取ったバイト列のまま運ぶ。**個人情報(顧客の名前・メール)を含むので confidential、保持期間は 7 日**
-    (取り込みが止まったときの再処理に足りる長さ。ADR-0035 §3)。ce_id は webhook-id(重複の判定。integration-flow は platform/inbox で冪等に処理する)。
+    (取り込みが止まったときの再処理に足りる長さ。ADR-0035 §3)。ce_id は受け取りの記録ごとに 1 つ(UUIDv7。同じ webhook-id の再送は
+    記録しないので、1 つの Webhook の ce_id は 1 つ。integration-flow は ce_id で platform/inbox を使って冪等に処理する。ADR-0036 §4)。
     処理できないメッセージは `{topic}.dlq` に隔離する(Framework 6.5)。
   contact:
     name: team-integration

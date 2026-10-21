@@ -35,7 +35,8 @@ Framework 10 章のアンチパターンは、iPaaS の中に業務のロジッ�
 - 記録より古い版・同じ版は出さずに数える(メトリクス)。
 
 ### 4. 取り込みの冪等
-- 取り込みのトピックの購読は、platform/inbox(`processed_message`)で冪等にする(ADR-0028)。キーは CloudEvents の `ce_id`(= Webhook のイベント ID)。
+- 取り込みのトピックの購読は、platform/inbox(`processed_message`)で冪等にする(ADR-0028)。キーは CloudEvents の `ce_id`。
+  `ce_id` は webhook-receiver の Outbox が受け取りの記録ごとに 1 つ作る(UUIDv7)。同じ webhook-id の再送は記録しないので、1 つの Webhook の `ce_id` は 1 つになる(Debezium の再送は同じ `ce_id`)。
 
 ### 5. 最初の Flow
 - `crm-customer`: CRM の顧客を Canonical の `sales.Customer` に変えて、`sales.customer.changed.v1`(INT-SALES-007)に出す。
@@ -57,3 +58,4 @@ Framework 10 章のアンチパターンは、iPaaS の中に業務のロジッ�
 
 ## 改訂履歴
 - 2026-10-21: P10 ①(#13)で作成した。
+- 2026-10-21: P10 ③ で §4 を直した。`ce_id` は Webhook のイベント ID ではなく、受け取りの記録ごとに Outbox が作る UUIDv7(Outbox の `id` 列と同じ値。ADR-0007)。webhook-id は UUID とは限らないため。重複の判定の効果は同じ(受け口が webhook-id で重複を止める)。
