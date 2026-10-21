@@ -3,6 +3,8 @@ package io.eia.order.app
 import io.eia.order.application.usecase.SagaTimeouts
 import io.eia.platform.security.secret.SecretName
 import io.eia.platform.security.secret.SecretProvider
+import io.eia.platform.security.tls.TlsFiles
+import io.eia.platform.security.tls.TlsVariables
 import io.eia.shared.kernel.FieldViolation
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.ValidationError
@@ -72,6 +74,9 @@ internal data class OrderConfig(
         val OWNER_PASSWORD = SecretName("ORDER_DB_PASSWORD")
         val APP_PASSWORD = SecretName("ORDER_APP_DB_PASSWORD")
         const val SCHEMA_REGISTRY_URL = "ORDER_SCHEMA_REGISTRY_URL"
+
+        /** API のポートの mTLS の環境変数(`ORDER_TLS_*`。ADR-0024 §6)。 */
+        val TLS = TlsVariables("ORDER")
         private const val DEFAULT_HTTPS_PORT = 8443
         private const val DEFAULT_HEALTH_PORT = 8081
         private const val DEFAULT_STALL_AFTER_RESENDS = 5
@@ -87,18 +92,8 @@ internal data class OrderConfig(
                     schemaRegistryUrl = reader.optional(SCHEMA_REGISTRY_URL),
                     httpsPort = reader.port("ORDER_HTTPS_PORT", DEFAULT_HTTPS_PORT),
                     healthPort = reader.port("ORDER_HEALTH_PORT", DEFAULT_HEALTH_PORT),
-                    tls =
-                        TlsFiles(
-                            cert = reader.optional(TlsFiles.CERT),
-                            key = reader.optional(TlsFiles.KEY),
-                            clientCa = reader.optional(TlsFiles.CLIENT_CA),
-                        ),
-                    allowedClients =
-                        (reader.optional("ORDER_TLS_ALLOWED_CLIENTS") ?: "apisix")
-                            .split(',')
-                            .map { it.trim() }
-                            .filter { it.isNotEmpty() }
-                            .toSet(),
+                    tls = TLS.files(env),
+                    allowedClients = TLS.allowedClients(env),
                     issuer = reader.optional("OIDC_ISSUER"),
                     jwksUri = reader.optional("OIDC_JWKS_URI")?.let(URI::create),
                     audience = reader.optional("ORDER_API_AUDIENCE") ?: "order-api",
@@ -122,7 +117,7 @@ internal data class OrderConfig(
                         ),
                     sagaScanInterval = reader.duration("ORDER_SAGA_TIMEOUT_SCAN_INTERVAL", 5.seconds),
                 )
-            if (config.allowedClients.isEmpty()) reader.violation("ORDER_TLS_ALLOWED_CLIENTS", "1 つ以上の名前が必要です")
+            if (config.allowedClients.isEmpty()) reader.violation(TLS.allowedClients, "1 つ以上の名前が必要です")
             if (config.httpsPort != 0 && config.httpsPort == config.healthPort) {
                 reader.violation("ORDER_HEALTH_PORT", "ORDER_HTTPS_PORT と別のポートにしてください")
             }
@@ -160,19 +155,6 @@ internal data class AuditAnchorConfig(
         /** order のアンカーの書込み用の identity(`eiaf-audit-order`。ADR-0017 §7)。 */
         val ACCESS_KEY = SecretName("ORDER_AUDIT_S3_ACCESS_KEY")
         val SECRET_KEY = SecretName("ORDER_AUDIT_S3_SECRET_KEY")
-    }
-}
-
-/** TLS のファイルのパス(serve で必須。migrate では使わない)。 */
-internal data class TlsFiles(
-    val cert: String?,
-    val key: String?,
-    val clientCa: String?,
-) {
-    companion object {
-        const val CERT = "ORDER_TLS_CERT_FILE"
-        const val KEY = "ORDER_TLS_KEY_FILE"
-        const val CLIENT_CA = "ORDER_TLS_CLIENT_CA_FILE"
     }
 }
 

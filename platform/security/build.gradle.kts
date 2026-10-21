@@ -11,6 +11,8 @@ dependencies {
     // 401 / 403 / 503 を Problem Details で返す(ADR-0019 §5・ADR-0022 §2)
     implementation(project(":platform:api"))
     api(libs.ktor.server.auth)
+    // API のポートの mTLS(ゲートウェイ → サービス。ADR-0008・ADR-0024 §6)。クライアント証明書の SAN の確認は Netty のパイプラインで行う
+    api(libs.ktor.server.netty)
     api(libs.ktor.client.core)
     api(libs.opentelemetry.api)
     implementation(libs.nimbus.jose.jwt)
@@ -23,6 +25,9 @@ dependencies {
     testImplementation(libs.opentelemetry.sdk.testing)
     // ログとエラーのメッセージに鍵・トークンが出ないことを、② のマスキング(EiaLogEncoder)と組み合わせて確かめる
     testImplementation(project(":platform:observability"))
+
+    // mTLS のテストの CA と証明書(TestPki)
+    testImplementation(project(":platform:test-support"))
 
     integrationTestImplementation(project(":platform:test-support"))
     integrationTestImplementation(libs.ktor.client.cio)

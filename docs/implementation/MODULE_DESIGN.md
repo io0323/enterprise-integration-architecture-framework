@@ -95,7 +95,7 @@ services/order/
   app/src/main/kotlin/io/eia/order/app/                       # package io.eia.order.app
     Main.kt(migrate / serve), OrderCommands.kt, OrderServer.kt(Netty), OrderModule.kt(Koin), OrderConfig.kt   # ADR-0024
                     # P07: OrderServer が返信の読み取り(1 スレッド)と期限切れの定期のジョブを動かす。ORDER_KAFKA_BOOTSTRAP がなければ返信を読まない
-    ServerTls.kt(PEM の鍵と証明書・有効期限), ClientCertificateAllowList.kt(SAN の許可の一覧), TlsRoutes.kt(ポートの分け方)   # ADR-0024 §6
+    # API の mTLS(ADR-0024 §6)は platform/security の tls パッケージ(ServerTls・ClientCertificateAllowList・mutualTlsConnectors・overTls / overPlaintext)を使う
   app/Dockerfile                                              # distroless の nonroot。ADR-0024 §7
 ```
 
@@ -148,9 +148,9 @@ services/saas-mock/app/
 | platform | 役割 | フェーズ |
 |---|---|---|
 | observability | OTel の初期化・Ktor の Server / Client プラグイン(traceparent・Correlation ID の伝搬、RED メトリクス)・構造化 JSON ログ・マスキング(ADR-0018)。OTel SDK を使ってよいのはこのモジュールと `services/*/app` だけ(ADR-0004 §4。Konsist) | P04a |
-| security | JWT の検証(JWKS)・スコープの認可(`eiaJwt` / `requireScopes`)・Client Credentials のトークン取得・`SecretProvider`(ADR-0008・ADR-0019)。Nimbus JOSE+JWT を使ってよいのはこのモジュールだけ(Konsist) | P04a |
+| security | JWT の検証(JWKS)・スコープの認可(`eiaJwt` / `requireScopes`)・Client Credentials のトークン取得・`SecretProvider`(ADR-0008・ADR-0019)・API のポートの mTLS(`tls` パッケージ: PEM から作る `ServerTls`(有効期限の確認)・SAN の許可の一覧 `ClientCertificateAllowList`・2 つのコネクタ `mutualTlsConnectors`・ルートの分け方 `overTls` / `overPlaintext`・環境変数の名前 `TlsVariables`(`{PREFIX}_TLS_*`)。ADR-0024 §6)。Nimbus JOSE+JWT を使ってよいのはこのモジュールだけ(Konsist) | P04a |
 | audit | 監査記録: 追記専用のテーブル(アプリ用のロールは INSERT / SELECT だけ。トリガーでも拒否)とハッシュチェーン、S3 互換ストレージの Object Lock(COMPLIANCE)へのアンカー、チェーンとアンカーの検証(ADR-0017)。検査は `tools/audit-verify`(`make audit-verify`)。`java.time` と `java.sql` を使う JVM の部品なので、services の application に Port(例 `AuditTrail`)を置き、adapters で `AuditLog.appendAudit`(業務と同じ Exposed のトランザクション)に写す | P04a |
-| test-support | テスト専用。`infra/local/images.env` のイメージを Testcontainers で使う `InfraImages`(ADR-0016 §5)と、compose と同じ構成のコンテナ(`SeaweedFsContainer`・`SftpServerContainer`・`ApicurioRegistryContainer`・`KafkaConnectContainer`。Connect のイメージは docker の CLI で組み立てる)、テスト用の SSH・PGP の鍵(`TestKeys`)。test / integrationTest からだけ参照する(Konsist) | P04a |
+| test-support | テスト専用。mTLS のテストの CA と証明書(`TestPki`。gen-dev-certs.sh と同じ形)。`infra/local/images.env` のイメージを Testcontainers で使う `InfraImages`(ADR-0016 §5)と、compose と同じ構成のコンテナ(`SeaweedFsContainer`・`SftpServerContainer`・`ApicurioRegistryContainer`・`KafkaConnectContainer`。Connect のイメージは docker の CLI で組み立てる)、テスト用の SSH・PGP の鍵(`TestKeys`)。test / integrationTest からだけ参照する(Konsist) | P04a |
 | api | REST の共通部品: Problem Details(RFC 9457。`installProblemDetails` / `respondError`。`type` の一覧は INTEGRATION_STANDARDS §6)と Idempotency-Key(`respondIdempotently` / `IdempotencyHandler` / Port `IdempotencyStore`。PostgreSQL の実装は各サービスの adapters)(ADR-0022) | P05 |
 | reliability | `shared/resilience` の JVM 向けアダプタ: OTel のメトリクス(`ResilienceMetrics`)、Ktor Client の結果の Retryable / NonRetryable への分類(`HttpCallClassifier`)、`Retry-After` の解析(ADR-0021 §7・§11)。OTel は API だけを使う | P04b |
 | inbox | 冪等消費の記録(ADR-0028 §3)。`Inbox.markProcessed` / `markProcessedIn`(業務と同じ Exposed のトランザクションで `inbox.processed_message` に `(consumer_group, ce_id)` を `INSERT ... ON CONFLICT DO NOTHING`。重複なら `DUPLICATE`。自動コミットでは書かない)、`Inbox.purgeExpired`(DB の時計で保持期間(既定 14 日)を過ぎた行を古い順に消す)、`InboxSchema`(スキーマ `inbox`・権限。サービスの migrate で所有者が適用する)。Kafka にも他の platform にも依存しない | P07 |

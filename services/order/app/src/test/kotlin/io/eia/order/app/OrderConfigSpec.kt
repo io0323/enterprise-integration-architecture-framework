@@ -1,6 +1,7 @@
 package io.eia.order.app
 
 import io.eia.platform.security.secret.EnvSecretProvider
+import io.eia.platform.security.tls.TlsFiles
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.ValidationError
 import io.kotest.core.spec.style.FunSpec
@@ -22,7 +23,7 @@ class OrderConfigSpec :
             config.httpsPort shouldBe 8443
             config.healthPort shouldBe 8081
             config.allowedClients shouldBe setOf("apisix")
-            config.tls shouldBe TlsFiles(null, null, null)
+            config.tls shouldBe TlsFiles(OrderConfig.TLS, null, null, null)
             config.audience shouldBe "order-api"
             config.requestBudget shouldBe 10.seconds
             config.idempotencyLease shouldBe 60.seconds
@@ -96,7 +97,7 @@ class OrderConfigSpec :
                             ),
                     ).shouldBeInstanceOf<Result.Ok<OrderConfig>>()
                     .value
-            config.tls shouldBe TlsFiles("/certs/order-service.crt", "/certs/order-service.key", "/certs/ca.crt")
+            config.tls shouldBe TlsFiles(OrderConfig.TLS, "/certs/order-service.crt", "/certs/order-service.key", "/certs/ca.crt")
         }
 
         context("監査のアンカーの保存(ADR-0017 §5)") {

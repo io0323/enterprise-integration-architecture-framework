@@ -1,4 +1,4 @@
-package io.eia.order.app
+package io.eia.platform.security.tls
 
 import io.netty.channel.ChannelHandlerContext
 import io.netty.channel.ChannelInboundHandlerAdapter
@@ -10,7 +10,7 @@ import java.security.cert.X509Certificate
 import javax.net.ssl.SSLPeerUnverifiedException
 
 /**
- * mTLS のクライアントの許可の一覧(ADR-0024 §6)。Netty のパイプラインで、TLS の処理(`ssl`)の直後に置く。
+ * mTLS のクライアントの許可の一覧(ADR-0008・ADR-0024 §6)。Netty のパイプラインで、TLS の処理(`ssl`)の直後に置く。
  *
  * 証明書の署名の検証(開発用 CA で署名されているか・期限)は Ktor の `sslConnector` の trustStore が行う(クライアント証明書は必須)。
  * ここでは、さらに、クライアント証明書の SAN の DNS 名が [allowed] のどれかであることを確かめる。同じ CA が ほかのサービスの
@@ -18,7 +18,7 @@ import javax.net.ssl.SSLPeerUnverifiedException
  *
  * 許可されていなければ、HTTP の処理に渡す前に接続を閉じる。ハンドシェイクが終わる前に届いたデータも渡さない。
  */
-internal class ClientCertificateAllowList(
+public class ClientCertificateAllowList(
     private val allowed: Set<String>,
 ) : ChannelInboundHandlerAdapter() {
     private var verified = false
@@ -67,13 +67,13 @@ internal class ClientCertificateAllowList(
         return peer != null && dnsNames(peer).any { it in allowed }
     }
 
-    companion object {
-        const val NAME = "eia-client-allow-list"
+    public companion object {
+        public const val NAME: String = "eia-client-allow-list"
         private const val DNS_NAME = 2
         private val logger = LoggerFactory.getLogger(ClientCertificateAllowList::class.java)
 
         /** SAN の DNS 名(RFC 5280 §4.2.1.6 の dNSName)。 */
-        fun dnsNames(cert: X509Certificate): List<String> =
+        public fun dnsNames(cert: X509Certificate): List<String> =
             cert.subjectAlternativeNames
                 .orEmpty()
                 .filter { it.size >= 2 && it[0] == DNS_NAME }

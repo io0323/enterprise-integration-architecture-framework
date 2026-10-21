@@ -126,3 +126,4 @@ P05 ④b-2 で、最初のサービス(order-service)を起動できる形にす
 - 2026-10-01: P05 ⑤c で、ゲートウェイの上流のタイムアウトを 15 秒にした(§3 の表。ADR-0023 §1)。
 - 2026-10-01: P05 ⑦a の前に、応答を返し始めた後に予算が切れた要求を、エラー(`error.type=timeout`)ではなく、別のカウンタ `eia.http.server.deadline_overruns` で数えることにした(§3。RED の Errors はクライアントが受け取った結果に合わせる)。
 - 2026-10-07: P06 ③a で、`migrate` が Outbox の表と publication も作るようにし(Debezium のロールは `ORDER_CDC_DB_USER`。既定 `debezium`)、`serve` に `ORDER_SCHEMA_REGISTRY_URL`(必須)を加えた。`/health/ready` は、DB に加えて書き込むイベントのスキーマ ID をすべて解決し終えたときだけ UP にする(§4。ADR-0025 §3)。解決は起動の後に繰り返すので、起動の直後は 503 のことがある。compose では `order-service` が `schema-publish`(契約の登録)の完了を待って起動する。
+- 2026-10-21: P10 ③ の前に、§6 の実装(`ServerTls`・`ClientCertificateAllowList`・コネクタの設定・ルートの分け方)を order の app から platform/security の `tls` パッケージに移した(webhook-receiver も同じ mTLS で受けるため)。環境変数の名前はサービスごとの接頭辞から作る(`{PREFIX}_TLS_CERT_FILE` など。order は `ORDER`)。キーストアの別名は `server` にした(プロセスの中だけで使う名前)。振る舞いは変えていない。テストの CA と証明書(`TestPki`)は platform/test-support に移した。

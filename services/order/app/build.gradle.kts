@@ -30,7 +30,6 @@ dependencies {
     integrationTestImplementation(libs.testcontainers.postgresql)
     integrationTestImplementation(libs.postgresql)
     integrationTestImplementation(libs.nimbus.jose.jwt)
-    integrationTestImplementation(libs.bouncycastle.pkix)
     integrationTestImplementation(libs.kotlinx.coroutines.core)
     // 統合テストで Schema Registry を立て、契約を登録する
     integrationTestImplementation(libs.ktor.client.cio)
