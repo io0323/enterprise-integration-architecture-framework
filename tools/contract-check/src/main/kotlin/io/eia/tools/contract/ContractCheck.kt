@@ -9,6 +9,7 @@ import io.eia.tools.contract.rules.CatalogRules
 import io.eia.tools.contract.rules.ContractUsage
 import io.eia.tools.contract.rules.FileCompatibility
 import io.eia.tools.contract.rules.FileRules
+import io.eia.tools.contract.rules.FlowRules
 import io.eia.tools.contract.rules.LifecycleRules
 import io.eia.tools.contract.rules.OpenApiCompatibility
 import io.eia.tools.contract.rules.OpenApiRules
@@ -61,8 +62,10 @@ class ContractCheck(
                 }.orEmpty()
         val lifecycle = LifecycleRules(contracts, baseline, today)
         // 比較元で設計中(proposed・design)の連携だけが使う契約は、破壊的変更を許す(消費者がまだいない。ADR-0013 §7)
+        // 外部の契約(contracts/external)の破壊的変更は、こちらでは止められないので警告にする(ADR-0035 §8。CC-EXTERNAL-001)
+        val (externalChanges, ours) = compatibility.partition { it.file.startsWith(Contracts.EXTERNAL_DIR) && it.rule != Rule.TOOL_FAILURE }
         val designUsage = baseline?.let(ContractUsage::of).orEmpty()
-        val (designAllowed, enforced) = compatibility.partition { inDesignOnly(designUsage[it.file]) }
+        val (designAllowed, enforced) = ours.partition { it.rule.id.startsWith(COMPAT_PREFIX) && inDesignOnly(designUsage[it.file]) }
         val (waivers, waiverViolations) = Waivers.load(root)
         val waived = Waivers.apply(enforced, waivers, today)
         val violations =
@@ -72,6 +75,8 @@ class ContractCheck(
                 openApi.violations +
                 asyncApi.violations +
                 AvroRules.checkNaming(contracts) +
+                OpenApiRules.checkExternal(contracts) +
+                FlowRules(contracts).check() +
                 CatalogRules(contracts, asyncApi.addressesByFile, openApi.domainsByFile).check() +
                 FileRules.check(contracts) +
                 checkCanonical(contracts) +
@@ -82,7 +87,9 @@ class ContractCheck(
             baselineUsed = baseline != null,
             waived = waived.waived,
             unusedWaivers = waived.unused,
-            warnings = lifecycle.warnings().sortedWith(compareBy({ it.file }, { it.rule.id })),
+            warnings =
+                (lifecycle.warnings() + externalChanges.map { Violation(it.file, Rule.EXTERNAL_BREAKING, it.message) })
+                    .sortedWith(compareBy({ it.file }, { it.rule.id })),
             designAllowed = designAllowed.sortedWith(compareBy({ it.file }, { it.rule.id })),
         )
     }
@@ -114,3 +121,4 @@ class ContractCheck(
 }
 
 private val DESIGN_STATES = setOf("proposed", "design")
+private const val COMPAT_PREFIX = "CC-COMPAT-"

@@ -24,8 +24,10 @@ class OpenApiCompatibility(
         current: Contracts,
         baseline: Contracts,
     ): List<Violation> {
-        val previous = baseline.openApis.associateBy { it.path }
-        val pairs = current.openApis.mapNotNull { document -> previous[document.path]?.let { it.file to document } }
+        // 外部の契約(contracts/external)も比べる。結果は ContractCheck が警告(CC-EXTERNAL-001)に移す(ADR-0035 §8)
+        val previous = (baseline.openApis + baseline.externalOpenApis).associateBy { it.path }
+        val pairs =
+            (current.openApis + current.externalOpenApis).mapNotNull { document -> previous[document.path]?.let { it.file to document } }
         return when {
             pairs.isEmpty() -> {
                 emptyList()

@@ -63,6 +63,7 @@ ID は `CC-{区分}-{連番}`。定義は `src/main/kotlin/io/eia/tools/contract
 | `CC-API-001` | POST は Idempotency-Key ヘッダが必須 | 5.4 | POST の parameters に Idempotency-Key(in: header、required: true)を追加する |
 | `CC-API-002` | 全 operation に 429 + Retry-After の応答がある | 5.6 | responses に 429 を追加し、headers に Retry-After を定義する |
 | `CC-API-003` | 全 operation に security が定義されている(匿名アクセスを許さない) | 12 | operation かトップレベルに security(OAuth2 のスコープ)を定義する。空の要件 {} は使わない |
+| `CC-API-004` | Webhook の受け口(x-eia-webhook: true)は、署名のヘッダ(webhook-id・webhook-timestamp・webhook-signature)と署名の方式を定義する | 10.2, 12, ADR-0035 | 3 つのヘッダを required の header で定義し、security に apiKey(in: header、name: webhook-signature)の方式を指定する。Idempotency-Key の代わりに webhook-id で重複を判定する |
 | `CC-EVENT-001` | メッセージのヘッダに CloudEvents(ce_*)・traceparent・correlationid が必須で定義されている | 6.3, 14 | headers に ce_id, ce_source, ce_type, ce_time, ce_specversion, traceparent, correlationid を required で定義する |
 | `CC-EVENT-002` | メッセージの payload は contracts/avro の Avro スキーマを参照する | 6.3 | payload を schemaFormat: application/vnd.apache.avro+json と、存在する .avsc への $ref にする |
 | `CC-CATALOG-001` | カタログがカタログスキーマに適合する(Owner・Tier・SLO・機密区分など) | 16.1 | contracts/catalog/catalog.schema.json の必須項目と値を満たす |
@@ -71,6 +72,7 @@ ID は `CC-{区分}-{連番}`。定義は `src/main/kotlin/io/eia/tools/contract
 | `CC-CATALOG-004` | カタログの channels と AsyncAPI の channel が一致する | 16.1 | AsyncAPI の channels[*].address をすべて catalog の channels に列挙する(過不足なし) |
 | `CC-CATALOG-005` | event / cdc の consumer は group(Consumer Group)を持つ | 6.4 | consumers[*].group に {service}.{purpose} を書く |
 | `CC-CATALOG-006` | OpenAPI / AsyncAPI の契約はカタログに登録されている | 16.1 | contracts/catalog/{id}.yaml を追加し、contract にこのファイルを指定する |
+| `CC-CATALOG-007` | 外部の契約(contracts/external)を使う連携は external(ベンダーと出典)を書く | 16.1, ADR-0035 | external: { vendor: <ベンダー>, source: <仕様の出典> } を書く。owner は連携に責任を持つ社内のチーム |
 | `CC-COMMAND-001` | Command Topic の購読者は受信サービスの 1 Consumer Group({service}.command)だけ | 6.2, ADR-0006 | 購読を 1 つにする。複数の系が知るべき事実なら Domain Event として別トピックで発行する |
 | `CC-COMMAND-002` | Command Topic は pattern: queue、pattern: queue は Command Topic のみ | 6.7, ADR-0006 | cmd- トピックを含む連携は pattern: queue にし、イベントトピックとは別の連携として登録する |
 | `CC-FILE-001` | manifest スキーマが標準の必須項目を required に含む | 9, INTEGRATION_STANDARDS §2 | required に file, recordCount, sha256, schemaVersion, createdAt, traceparent, correlationId を含める |
@@ -80,6 +82,7 @@ ID は `CC-{区分}-{連番}`。定義は `src/main/kotlin/io/eia/tools/contract
 | `CC-COMPAT-001` | Avro スキーマが main の版に対して FULL 互換(BACKWARD かつ FORWARD) | 6.3, 13, 15.3, ADR-0014 | 追加・削除できるのは default 付きの項目だけ。必須項目の追加・削除、型変更、リネーム、enum 値の増減は新しいバージョンのトピック(.v{n+1})で行う |
 | `CC-COMPAT-002` | OpenAPI に main の版からの破壊的変更がない(oasdiff) | 5.3 | 互換な変更(任意項目の追加など)にするか、/v{n+1} を新設して並行提供する |
 | `CC-COMPAT-003` | ファイルの仕様が main の版に対して互換(列の削除・型や必須性の変更・並べ替え・enum の変更・形式の変更がない) | 9, 15.3 | 足してよいのは、末尾の任意(nullable: true)の列と、新しい形式だけ。ほかの変更は新しい版のファイル({system}_{dataset}.v{n+1}.yaml)で行う |
+| `CC-EXTERNAL-001` | 外部の契約(contracts/external)の破壊的変更(警告。ジョブは失敗させない) | 10.4, 16.1, ADR-0035 | ベンダーの変更に合わせて、取り込みの側(Connector・Flow の定義)を直す。カタログの external.source に変更の出典を書く |
 | `CC-WAIVER-001` | 互換性検査の例外リストの形式が正しい | 16.1, ADR-0013 | 各例外に rule(CC-COMPAT-*)・file・contains・reason・issue・expires(YYYY-MM-DD)を書く |
 | `CC-WAIVER-002` | 期限切れの互換性検査の例外が残っていない | 16.1, ADR-0013 | 例外が不要になっていれば削除する。まだ必要なら理由を Issue に残して expires を延ばす |
 | `CC-WAIVER-003` | active・deprecated の連携の契約への例外は、承認者と作成日を書き、期限は作成日から 14 日以内 | 16.1, ADR-0013 | approver(@name か team-name)と created(YYYY-MM-DD)を書き、expires を created から 14 日以内にする。長く要るなら、例外ではなく新しい版(v{n+1})で並行提供する |
@@ -88,9 +91,17 @@ ID は `CC-{区分}-{連番}`。定義は `src/main/kotlin/io/eia/tools/contract
 | `CC-LIFECYCLE-003` | retired 以外の連携が使う契約のファイル(OpenAPI・AsyncAPI・ファイルの仕様と、AsyncAPI が参照する Avro)を消さない | 16.1, ADR-0034 | その契約を使う連携を retired にしてから消す。新しい版は別のファイル(v{n+1})で足し、古い版の連携を廃止の手順に乗せる |
 | `CC-LIFECYCLE-004` | retired に進めるのは、deprecated の移行の期限(deprecation.sunset)の後だけ | 16.1, ADR-0034 | 移行の期限を待つ。消費者の移行が終わって早めるときは、通知(deprecation.notice)で合意してから sunset を前に直す |
 | `CC-LIFECYCLE-005` | 移行の期限を過ぎた deprecated の連携(警告。ジョブは失敗させない) | 16, ADR-0034 | 消費者の移行を確かめて retired に進める。移行が終わらないなら、理由を Issue に残して sunset を延ばす |
+| `CC-FLOW-001` | Flow の定義が Flow のスキーマに適合し、ファイル名が {id}.v{version}.flow.yaml | 10, ADR-0036 | contracts/flows/flow.v{n}.schema.json の形に合わせる。Flow でできるのは取り込み・対応・振り分け・届け先の指定だけ(スクリプトは書けない) |
+| `CC-FLOW-002` | Flow の定義が参照する連携・トピック・対応表が存在する | 10.2, 16.1, ADR-0036 | integration と connector にカタログの ID を、topic と deliver にカタログの channels のトピックを書く。deliver は integration の channels、connector は external の連携、lookup の table は tables にあるものにする |
 | `CC-CANON-001` | Canonical Model(Kotlin)と Avro スキーマの項目が一致する | 15.1, ADR-0012 | ADR-0012 の変換規則に従って、項目名・必須性・型を Canonical Model と揃える |
 | `CC-CANON-002` | Canonical Model に対応づけた Avro の型が存在する | 15.1, ADR-0012 | CanonicalBindings の対応表か、contracts/avro の型名を直す |
 | `CC-TOOL-001` | 検査ツール(oasdiff)を実行できる | 19 | --oasdiff に oasdiff の実行ファイルを指定する(./gradlew :tools:contract-check:run は自動で取得する) |
+
+## Webhook の受け口・外部の契約・Flow の定義(ADR-0035・ADR-0036)
+
+- **Webhook の受け口**(自社の OpenAPI の操作に `x-eia-webhook: true`)は、Idempotency-Key の代わりに、署名の 3 つのヘッダ(`webhook-id`・`webhook-timestamp`・`webhook-signature`。required)と、security の署名の方式(`apiKey`・`in: header`・`name: webhook-signature`)を検査する(`CC-API-004`)。429 は従来どおり必須。
+- **外部の契約**(`contracts/external/`。SaaS のベンダーが持ち主の API の写し)には、自社の API の規則(命名・Idempotency-Key・429・security)を当てない。構造(`CC-STRUCT-002`)・ファイル名(`CC-NAMING-009`)・登録(`CC-CATALOG-006`)・ライフサイクルの検査は当てる。使う連携は `external` が必須(`CC-CATALOG-007`)。比較元に対する破壊的変更は、違反ではなく警告(`CC-EXTERNAL-001`。Step Summary に出る)。
+- **Flow の定義**(`contracts/flows/{id}.v{version}.flow.yaml`)は、`flow.v1.schema.json` への適合・ファイル名・振り分けの形(`CC-FLOW-001`)と、参照(カタログの連携・トピック・対応表。mapping が Canonical Model の項目だけで、必須の項目をすべて書いていること。`CC-FLOW-002`)を検査する。
 
 ## 連携のライフサイクルの検査(`CC-LIFECYCLE-*`。ADR-0034)
 

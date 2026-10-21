@@ -108,6 +108,21 @@
         "reason": { "type": "string", "minLength": 1 }
       }
     },
+    "external": {
+      "description": "外部(SaaS のベンダーなど)が持ち主の連携・契約(ADR-0035 §8)。owner は連携に責任を持つ社内のチーム。contracts/external の契約を使う連携では必須(CC-CATALOG-007)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vendor", "source"],
+      "properties": {
+        "vendor": { "description": "契約の持ち主(ベンダー名)", "type": "string", "minLength": 1 },
+        "source": { "description": "契約の出典(ベンダーの仕様の URL や版。変更を追う手がかり)", "type": "string", "minLength": 1 }
+      }
+    },
+    "dataRetention": {
+      "description": "この連携が運ぶデータの保持期間(ISO 8601 の期間。例 P7D)。トピックの retention などの設定と一致させる。個人情報を運ぶ連携では書く",
+      "type": "string",
+      "pattern": "^P(?!$)([0-9]+Y)?([0-9]+M)?([0-9]+W)?([0-9]+D)?$"
+    },
     "reactivation": {
       "description": "廃止の取り消し(deprecated から active に戻す。ADR-0034)",
       "type": "object",

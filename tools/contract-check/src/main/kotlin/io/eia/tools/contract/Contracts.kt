@@ -68,6 +68,11 @@ data class Contracts(
     val fileSpecs: List<String>,
     val fileSpecDocuments: List<ContractDocument> = emptyList(),
     val fileSpecSchemas: List<ContractDocument> = emptyList(),
+    // 外部(SaaS のベンダーなど)が持ち主の OpenAPI の写し(contracts/external。ADR-0035 §8)
+    val externalOpenApis: List<ContractDocument> = emptyList(),
+    // iPaaS 風の Flow の定義(contracts/flows の {id}.v{n}.flow.yaml)と、その形式(flow.v{n}.schema.json。ADR-0036)
+    val flows: List<ContractDocument> = emptyList(),
+    val flowSchemas: List<ContractDocument> = emptyList(),
     val loadViolations: List<Violation>,
 ) {
     fun relative(file: Path): String = root.relativize(file).invariantSeparatorsPathString
@@ -75,6 +80,8 @@ data class Contracts(
     companion object {
         const val CONTRACTS_DIR = "contracts"
         const val CATALOG_SCHEMA = "contracts/catalog/catalog.schema.json"
+        const val EXTERNAL_DIR = "contracts/external/"
+        const val FLOW_SUFFIX = ".flow.yaml"
 
         private val yaml = YAMLMapper.builder().build()
         private val json = JsonMapper.builder().build()
@@ -125,6 +132,12 @@ data class Contracts(
                 // ファイルの仕様({system}_{dataset}.v{n}.yaml。edi/ は P12)と、その形式のスキーマ(file-spec.v{n}.schema.json)
                 fileSpecDocuments = fileSpecFiles(filesDir).mapNotNull(::readTree),
                 fileSpecSchemas = files(filesDir).filter(::isFileSpecSchema).mapNotNull(::readTree),
+                externalOpenApis = files(contracts.resolve("external")).filter(::isYamlOrJson).mapNotNull(::readTree),
+                flows = files(contracts.resolve("flows")).filter { it.name.endsWith(FLOW_SUFFIX) }.mapNotNull(::readTree),
+                flowSchemas =
+                    files(contracts.resolve("flows"))
+                        .filter { it.name.startsWith("flow.") && it.name.endsWith(".schema.json") }
+                        .mapNotNull(::readTree),
                 loadViolations = violations,
             )
         }

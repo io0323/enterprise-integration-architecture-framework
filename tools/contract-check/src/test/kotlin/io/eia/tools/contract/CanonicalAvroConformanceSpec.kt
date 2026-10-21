@@ -1,5 +1,6 @@
 package io.eia.tools.contract
 
+import io.eia.shared.canonical.sales.Customer
 import io.eia.shared.canonical.sales.Order
 import io.eia.shared.kernel.money.Money
 import io.eia.tools.contract.canonical.CanonicalAvroConformance
@@ -12,6 +13,7 @@ import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.string.shouldContain
 import kotlinx.serialization.Contextual
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.serializer
 import org.apache.avro.Schema
 import kotlin.time.Instant
 
@@ -53,12 +55,16 @@ private fun sampleSchema(
 
 class CanonicalAvroConformanceSpec :
     FunSpec({
-        test("リポジトリの Avro は Canonical Model の Order と一致する") {
+        test("リポジトリの Avro は Canonical Model の Order・Customer と一致する") {
             val contracts = Contracts.load(Workspace.REPOSITORY_ROOT)
-            val order = contracts.avros.flatMap { AvroRules.namedTypes(it.schema) }.single { it.fullName == "io.eia.events.sales.Order" }
+            val named = contracts.avros.flatMap { AvroRules.namedTypes(it.schema) }
+            val order = named.single { it.fullName == "io.eia.events.sales.Order" }
+            val customer = named.single { it.fullName == "io.eia.events.sales.Customer" }
 
             CanonicalAvroConformance.compare(Order.serializer().descriptor, order).shouldBeEmpty()
-            CanonicalBindings.ALL.map { it.avroFullName } shouldContainExactlyInAnyOrder listOf("io.eia.events.sales.Order")
+            CanonicalAvroConformance.compare(serializer<Customer>().descriptor, customer).shouldBeEmpty()
+            CanonicalBindings.ALL.map { it.avroFullName } shouldContainExactlyInAnyOrder
+                listOf("io.eia.events.sales.Order", "io.eia.events.sales.Customer")
         }
 
         test("変換規則(String / Int / List / Map / Money / Instant / nullable + default)に従えば一致する") {

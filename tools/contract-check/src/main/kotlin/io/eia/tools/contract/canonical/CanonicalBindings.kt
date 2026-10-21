@@ -1,7 +1,9 @@
 package io.eia.tools.contract.canonical
 
+import io.eia.shared.canonical.sales.Customer
 import io.eia.shared.canonical.sales.Order
 import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.serializer
 
 /** Canonical Model の型と、それを運ぶ Avro の名前付き型(完全修飾名)の対応。 */
 data class CanonicalBinding(
@@ -17,5 +19,6 @@ object CanonicalBindings {
     val ALL: List<CanonicalBinding> =
         listOf(
             CanonicalBinding(Order.serializer().descriptor, "io.eia.events.sales.Order"),
+            CanonicalBinding(serializer<Customer>().descriptor, "io.eia.events.sales.Customer"),
         )
 }

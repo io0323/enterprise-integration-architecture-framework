@@ -126,6 +126,14 @@ enum class Rule(
         "operation かトップレベルに security(OAuth2 のスコープ)を定義する。空の要件 {} は使わない",
     ),
 
+    API_WEBHOOK(
+        "CC-API-004",
+        "Webhook の受け口(x-eia-webhook: true)は、署名のヘッダ(webhook-id・webhook-timestamp・webhook-signature)と署名の方式を定義する",
+        "10.2, 12, ADR-0035",
+        "3 つのヘッダを required の header で定義し、security に apiKey(in: header、name: webhook-signature)の方式を指定する。" +
+            "Idempotency-Key の代わりに webhook-id で重複を判定する",
+    ),
+
     // --- Event ---
     EVENT_HEADERS(
         "CC-EVENT-001",
@@ -176,6 +184,12 @@ enum class Rule(
         "OpenAPI / AsyncAPI の契約はカタログに登録されている",
         "16.1",
         "contracts/catalog/{id}.yaml を追加し、contract にこのファイルを指定する",
+    ),
+    CATALOG_EXTERNAL(
+        "CC-CATALOG-007",
+        "外部の契約(contracts/external)を使う連携は external(ベンダーと出典)を書く",
+        "16.1, ADR-0035",
+        "external: { vendor: <ベンダー>, source: <仕様の出典> } を書く。owner は連携に責任を持つ社内のチーム",
     ),
 
     // --- Command ---
@@ -238,6 +252,13 @@ enum class Rule(
         "足してよいのは、末尾の任意(nullable: true)の列と、新しい形式だけ。ほかの変更は新しい版のファイル({system}_{dataset}.v{n+1}.yaml)で行う",
     ),
 
+    EXTERNAL_BREAKING(
+        "CC-EXTERNAL-001",
+        "外部の契約(contracts/external)の破壊的変更(警告。ジョブは失敗させない)",
+        "10.4, 16.1, ADR-0035",
+        "ベンダーの変更に合わせて、取り込みの側(Connector・Flow の定義)を直す。カタログの external.source に変更の出典を書く",
+    ),
+
     // --- 互換性検査の例外(contracts/compat-waivers.yaml) ---
     WAIVER_INVALID(
         "CC-WAIVER-001",
@@ -290,6 +311,21 @@ enum class Rule(
         "移行の期限を過ぎた deprecated の連携(警告。ジョブは失敗させない)",
         "16, ADR-0034",
         "消費者の移行を確かめて retired に進める。移行が終わらないなら、理由を Issue に残して sunset を延ばす",
+    ),
+
+    // --- Flow の定義(contracts/flows。ADR-0036) ---
+    FLOW_SCHEMA(
+        "CC-FLOW-001",
+        "Flow の定義が Flow のスキーマに適合し、ファイル名が {id}.v{version}.flow.yaml",
+        "10, ADR-0036",
+        "contracts/flows/flow.v{n}.schema.json の形に合わせる。Flow でできるのは取り込み・対応・振り分け・届け先の指定だけ(スクリプトは書けない)",
+    ),
+    FLOW_REFERENCE(
+        "CC-FLOW-002",
+        "Flow の定義が参照する連携・トピック・対応表が存在する",
+        "10.2, 16.1, ADR-0036",
+        "integration と connector にカタログの ID を、topic と deliver にカタログの channels のトピックを書く。" +
+            "deliver は integration の channels、connector は external の連携、lookup の table は tables にあるものにする",
     ),
 
     // --- Canonical ---
