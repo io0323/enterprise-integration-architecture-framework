@@ -17,14 +17,14 @@ class IntegrationFlowCommandsSpec :
         test("validate: ディレクトリを指定すると、そこの Flow を読む。誤りがあれば 2(起動しない)") {
             val dir = Files.createTempDirectory("flows")
             try {
-                IntegrationFlowCommands.source(mapOf(IntegrationFlowCommands.FLOWS_DIR to dir.toString())) shouldBe
+                IntegrationFlowConfig.flows(mapOf(IntegrationFlowConfig.FLOWS_DIR to dir.toString())) shouldBe
                     FlowSource.Directory(dir)
-                IntegrationFlowCommands.source(mapOf(IntegrationFlowCommands.FLOWS_DIR to " ")) shouldBe FlowSource.Classpath
+                IntegrationFlowConfig.flows(mapOf(IntegrationFlowConfig.FLOWS_DIR to " ")) shouldBe FlowSource.Classpath
                 // 空のディレクトリ
-                IntegrationFlowCommands.run(listOf("validate"), mapOf(IntegrationFlowCommands.FLOWS_DIR to dir.toString())) shouldBe
+                IntegrationFlowCommands.run(listOf("validate"), mapOf(IntegrationFlowConfig.FLOWS_DIR to dir.toString())) shouldBe
                     IntegrationFlowCommands.USAGE
                 dir.resolve("broken.v1.flow.yaml").writeText("id: broken\nversion: 1\n")
-                IntegrationFlowCommands.run(listOf("validate"), mapOf(IntegrationFlowCommands.FLOWS_DIR to dir.toString())) shouldBe
+                IntegrationFlowCommands.run(listOf("validate"), mapOf(IntegrationFlowConfig.FLOWS_DIR to dir.toString())) shouldBe
                     IntegrationFlowCommands.USAGE
             } finally {
                 dir.toFile().deleteRecursively()
