@@ -53,6 +53,7 @@ docker compose -f infra/local/docker-compose.yml --env-file infra/local/images.e
 | `order` | order-migrate・kafka-topics・schema-publish(1 回だけ動いて終わる), order-service, kafka-connect, postgres-exporter, kafka-exporter, seaweedfs, seaweedfs-init | API 連携のサンプル業務サービス(P05。ADR-0024)。SeaweedFS は監査のアンカーの保存先(ADR-0017 §5) |
 | `saga` | inventory-migrate・payment-migrate・shipping-migrate・kafka-topics・schema-publish(1 回だけ動いて終わる), inventory-service, payment-service, shipping-service, kafka-connect, postgres-exporter, kafka-exporter | 注文 Saga の参加者(P07。ADR-0029)。返事は Outbox + Debezium(コネクタ `inventory-outbox`・`payment-outbox`・`shipping-outbox`)で発行する。Orchestrator は order-service(order profile。`make up PROFILE="order saga"` で両方を動かす) |
 | `batch` | batch-etl-migrate・kafka-topics・schema-publish(1 回だけ動いて終わる), batch-etl, kafka-exporter, seaweedfs, seaweedfs-init | 注文の分析のバッチ(P08。ADR-0030・ADR-0031)。注文のイベントを書くのは order-service(`make up PROFILE="order batch"` で両方を動かす)。週次の照合は Gateway 経由で order-service を読む。日次の売上ファイルを SeaweedFS の受け口に置く(P09。置き場が止まっても取り込みの DAG には影響しない) |
+| `saas` | webhook-receiver-migrate・integration-flow-migrate・kafka-topics・schema-publish(1 回だけ動いて終わる), saas-mock, webhook-receiver, integration-flow, kafka-connect, postgres-exporter, kafka-exporter | SaaS(CRM)の顧客の連携(P10。ADR-0035・ADR-0036)。saas-mock が署名した Webhook を Gateway(`/sales/v1/webhooks/crm`)経由で webhook-receiver に送り、取り込みのトピック → integration-flow → `sales.customer.changed.v1`。integration-flow は CRM の API も定期に同期する。発行はコネクタ `webhook-receiver-outbox`・`integration-flow-outbox` |
 
 Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)。
 
@@ -62,7 +63,7 @@ Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)�
 
 | ホスト | コンテナ内のアドレス | サービス | profile | 用途 |
 |---|---|---|---|---|
-| 19080 | `apisix:9080` | APISIX | core | API Gateway(公開パス `/{domain}/v{n}/`。`/sales/v1/*` → order-service(order profile)。ヘルス `/_gateway/health`) |
+| 19080 | `apisix:9080` | APISIX | core | API Gateway(公開パス `/{domain}/v{n}/`。`/sales/v1/*` → order-service(order profile)、`/sales/v1/webhooks/crm` → webhook-receiver(saas profile。署名のルート)。ヘルス `/_gateway/health`) |
 | 19081 | `apicurio:8080` | Apicurio Registry | core | REST API(`/apis/registry/v3`、Confluent 互換 `/apis/ccompat/v7`) |
 | 19083 | `kafka-connect:8083` | Kafka Connect(Debezium) | cdc | Connect REST API |
 | 19090 | `prometheus:9090` | Prometheus | core | UI / API(OTLP 受信 `/api/v1/otlp`) |
@@ -71,6 +72,7 @@ Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)�
 | 19180 | `keycloak:8080` | Keycloak | core | OIDC(realm `eiaf`)。管理コンソール `/admin` |
 | 19222 | `sftp:2222` | SFTP(社内向け) | file | 利用者 `eiaf-file`、公開鍵認証のみ |
 | 19223 | `sftp-b2b:2222` | SFTP(取引先向け) | b2b, file | 利用者 `partner01`、公開鍵認証のみ。ホスト鍵は `secrets/sftp-b2b-host-key`(known_hosts は `secrets/sftp-b2b.known_hosts`) |
+| 19280 | `saas-mock:8080` | saas-mock(CRM の模擬) | saas | CRM の API(`/v1/customers`。Bearer `SAAS_MOCK_API_TOKEN`)と管理の API(`/admin/*`。Bearer `SAAS_MOCK_ADMIN_TOKEN`)。ヘルス `/health/ready` |
 | 19300 | `grafana:3000` | Grafana | core | UI(利用者 `admin`) |
 | 19310 | `loki:3100` | Loki | core | API |
 | 19317 | `otel-collector:4317` | OTel Collector | core | OTLP gRPC |
@@ -80,6 +82,7 @@ Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)�
 | 19432 | `postgres:5432` | PostgreSQL | core | サービス別 DB |
 | 19433 | `toxiproxy:19433` | PostgreSQL(Toxiproxy 経由) | chaos | 障害注入用 |
 | 19443 | `order-service:8443` | order-service | order | API(`/v1/...`)。**mTLS だけ**(クライアント証明書は開発用 CA の署名で、SAN が `apisix`)。mTLS なしの接続を拒否することの検査と調査用。ヘルスチェック(8081。平文)は公開しない |
+| 19444 | `webhook-receiver:8443` | webhook-receiver | saas | Webhook の受け口(`/v1/webhooks/crm`)。**mTLS だけ**(SAN `apisix`)。mTLS なしの接続を拒否することの検査用。送り手は Gateway の `/sales/v1/webhooks/crm` に送る |
 | 19474 | `toxiproxy:8474` | Toxiproxy | chaos | 管理 API(toxic の追加・削除) |
 | 19883 | `mosquitto:1883` | Mosquitto | iot | MQTT(匿名接続は不可) |
 
@@ -107,6 +110,9 @@ Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)�
 | S3(ファイル授受) | `eiaf-file-exchange`。バケット `eiaf-file-exchange` の Read / List / Write(検査と移動)。バケットの管理操作はできない | `FILE_EXCHANGE_S3_ACCESS_KEY` / `FILE_EXCHANGE_S3_SECRET_KEY` |
 | SFTP | `eiaf-file` / `partner01` | 秘密鍵 `secrets/sftp-file` / `secrets/sftp-b2b` |
 | PGP(開発用) | 自社 `eiaf`・取引先の代わり `partner01`(`make pgp-keys` が GnuPG で作る) | `secrets/pgp-{eiaf,partner01}.{pub.asc,sec.asc,passphrase}` |
+| PostgreSQL(SaaS 連携) | `webhook_receiver` / `webhook_receiver_app`、`integration_flow` / `integration_flow_app` | `WEBHOOK_RECEIVER_DB_PASSWORD` / `WEBHOOK_RECEIVER_APP_DB_PASSWORD`、`INTEGRATION_FLOW_DB_PASSWORD` / `INTEGRATION_FLOW_APP_DB_PASSWORD`。**P10 ⑥ より前に作ったボリュームには無いので、`make clean` が必要** |
+| CRM の API(saas-mock) | API トークン(integration-flow の定期の同期)・管理のトークン(make verify・E2E) | `SAAS_MOCK_API_TOKEN`(integration-flow には `INTEGRATION_FLOW_CRM_API_TOKEN` として渡す)・`SAAS_MOCK_ADMIN_TOKEN` |
+| Webhook の署名の鍵(CRM) | 送り手(saas-mock)と受け口(webhook-receiver)が共有する。Standard Webhooks の形(`whsec_`) | ファイル `secrets/crm-webhook/{sender,receiver}-current`(差し替えの間は `sender-next`・`receiver-previous`)。要求のたびに読むので、差し替えに再起動は要らない(`docs/runbooks/webhook-secret-rotation.md`) |
 
 トークンの取得例:
 
@@ -163,6 +169,10 @@ curl -s -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token
   - 監視は Grafana の **File — Sales daily**(uid `eiaf-file`)と `prometheus/rules/file-exchange.rules.yml`。手順は `docs/runbooks/file-exchange.md`。
   - `make verify PROFILE=file` は、バケットの権限(両方の identity の管理操作の拒否)・ホスト鍵の固定・売上ファイルの受け取りから配送まで・
     GnuPG での復号と署名の検証・メトリクス・アラート・ダッシュボードを確かめる。
+- **SaaS(CRM)の顧客の連携(ADR-0035・ADR-0036)**: `make up PROFILE=saas` が installDist の後に、`webhook-receiver-migrate`・`integration-flow-migrate`(所有者の資格情報。業務の表・`inbox`・`outbox`・Debezium の CONNECT)→ 各サービス(アプリのロール)の順に動かし、起動の後にコネクタ `webhook-receiver-outbox`・`integration-flow-outbox` を登録する。
+  - saas-mock は CRM の模擬(状態はメモリの上だけ)。顧客の作成・変更(管理の API)で、署名した Webhook を Gateway の署名のルート(JWT ではない。接続元ごとの Rate Limit 120 回/分・本文の上限 256 KiB)に送る。webhook-receiver は署名を検証し、受け取りの記録(本文は持たない)と取り込みのトピック `integration.crm-webhook.received.v1`(confidential・保持 7 日。`kafka/topics.conf`)への Outbox を書いて 204 を返す。
+  - integration-flow は取り込みのトピックを読み、Flow の定義(`contracts/flows`)で Canonical の `Customer` にして `sales.customer.changed.v1` に出す。CRM の API を 1 分ごと(`INTEGRATION_FLOW_POLL_INTERVAL`。Flow の既定は 15 分)に同期し、Webhook と同じ新旧の記録で古い版を出さない。
+  - `make verify PROFILE=saas` は、コネクタ・トピックの保持期間・CRM の API の認証とページング・受け口の mTLS・署名のない / 違う鍵の Webhook の拒否・本文の上限・顧客の作成から Canonical のイベントまで・定期の同期・メトリクス・アラートのルール・ダッシュボード **SaaS — CRM customers**(uid `eiaf-saas`)・Gateway の Rate Limit を確かめる。対応は `docs/runbooks/saas-integration.md`、鍵の差し替えは `docs/runbooks/webhook-secret-rotation.md`。
 - **Toxiproxy**: 起動時に `kafka-host`(19094)、`kafka-internal`(19095)、`postgres`(19433)の proxy を作る(`toxiproxy/toxiproxy.json`)。
 
 ## イメージの更新

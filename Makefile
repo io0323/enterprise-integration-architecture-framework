@@ -1,10 +1,10 @@
 # EIAF ローカル開発用コマンド(CLAUDE.md §7)
 GRADLE := ./gradlew
 
-.PHONY: help setup build check arch-test contract-check schemas alerts-test integration-test format env not-root certs pgp-keys order-dist legacy-dist saga-dist batch-dist file-dist up down logs ps verify stats clean e2e audit-verify legacy-simulate dlq-replay batch-etl file-exchange
+.PHONY: help setup build check arch-test contract-check schemas alerts-test integration-test format env not-root certs pgp-keys order-dist legacy-dist saga-dist batch-dist file-dist saas-dist up down logs ps verify stats clean e2e audit-verify legacy-simulate dlq-replay batch-etl file-exchange
 
 # ローカル基盤(infra/local。ADR-0016)
-# PROFILE: core / cdc / iot / file / b2b / chaos / order / saga / batch。core は常に含まれる(積み上げ方式)。空白区切りで複数指定できる。
+# PROFILE: core / cdc / iot / file / b2b / chaos / order / saga / batch / saas。core は常に含まれる(積み上げ方式)。空白区切りで複数指定できる。
 PROFILE ?= core
 INFRA := infra/local
 # E2E=1: E2E 用の設定(tests/e2e/e2e.env。待ち時間を短くする)を足して起動する(例: make up PROFILE="order cdc saga batch file" E2E=1)
@@ -18,7 +18,7 @@ EIAF_UID := $(shell id -u)
 EIAF_GID := $(shell id -g)
 export EIAF_UID EIAF_GID
 # 開発用の証明書(infra/local/certs)を読むコンテナ。証明書を作り直したら(certs/.renewed)、make up で作り直す
-CERT_CONSUMERS := order-service apisix
+CERT_CONSUMERS := order-service apisix webhook-receiver
 
 help: ## コマンド一覧
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -87,7 +87,10 @@ batch-dist: ## 分析のバッチ(batch-etl)と schema-publish のイメージ�
 file-dist: ## ファイル授受(file-exchange)のイメージの中身(installDist)を作る(ADR-0032)
 	$(GRADLE) :services:file-exchange:app:installDist
 
-up: not-root env certs $(if $(filter order,$(PROFILE)),order-dist) $(if $(filter cdc,$(PROFILE)),legacy-dist) $(if $(filter saga,$(PROFILE)),saga-dist) $(if $(filter batch,$(PROFILE)),batch-dist) $(if $(filter file,$(PROFILE)),file-dist pgp-keys) ## ローカル基盤を起動し、全コンテナが healthy になるまで待つ(例: make up PROFILE=cdc)
+saas-dist: ## SaaS 連携(saas-mock・webhook-receiver・integration-flow)と schema-publish のイメージの中身(installDist)を作る(ADR-0035・ADR-0036)
+	$(GRADLE) :services:saas-mock:app:installDist :services:webhook-receiver:app:installDist :services:integration-flow:app:installDist :tools:schema-publish:installDist
+
+up: not-root env certs $(if $(filter order,$(PROFILE)),order-dist) $(if $(filter cdc,$(PROFILE)),legacy-dist) $(if $(filter saga,$(PROFILE)),saga-dist) $(if $(filter batch,$(PROFILE)),batch-dist) $(if $(filter file,$(PROFILE)),file-dist pgp-keys) $(if $(filter saas,$(PROFILE)),saas-dist) ## ローカル基盤を起動し、全コンテナが healthy になるまで待つ(例: make up PROFILE=cdc)
 	@if [ -f $(INFRA)/certs/.renewed ]; then \
 		$(COMPOSE) --profile '*' rm --stop --force $(CERT_CONSUMERS) >/dev/null 2>&1 || true; \
 		rm -f $(INFRA)/certs/.renewed; \
@@ -99,6 +102,8 @@ up: not-root env certs $(if $(filter order,$(PROFILE)),order-dist) $(if $(filter
 	@if [ -n "$(filter cdc,$(PROFILE))" ]; then $(INFRA)/scripts/connectors.sh legacy-juchu; fi
 	@# 注文 Saga の参加者の返事の発行(Outbox → Debezium。ADR-0029)。各参加者の migrate が Outbox の表・publication・CONNECT を作った後に登録する
 	@if [ -n "$(filter saga,$(PROFILE))" ]; then $(INFRA)/scripts/connectors.sh inventory-outbox payment-outbox shipping-outbox; fi
+	@# SaaS 連携の取り込みのトピックと Canonical の顧客のイベントの発行(Outbox → Debezium。ADR-0035・ADR-0036)
+	@if [ -n "$(filter saas,$(PROFILE))" ]; then $(INFRA)/scripts/connectors.sh webhook-receiver-outbox integration-flow-outbox; fi
 
 down: env ## ローカル基盤を停止する(全 profile。データは残す)
 	$(COMPOSE) --profile '*' down --remove-orphans

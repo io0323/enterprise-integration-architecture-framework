@@ -119,6 +119,62 @@ routes:
         client_cert: "${{GATEWAY_CLIENT_CERT}}"
         client_key: "${{GATEWAY_CLIENT_KEY}}"
 
+  # CRM の Webhook の受け口(INT-SALES-005。ADR-0035 §5)。公開パス /sales/v1/webhooks/crm → webhook-receiver の /v1/webhooks/crm。
+  # JWT ではなく署名で認証するルート(openid-connect を付けない)。署名の検証は受け口が行う(生のバイト列の HMAC・2 つの鍵・時刻)。
+  # /sales/v1/* より優先する(priority)。送り手(接続元の IP)ごとの Rate Limit と、本文の大きさの上限(256 KiB)をここでかける
+  - id: sales-crm-webhook
+    uri: /sales/v1/webhooks/crm
+    methods: [POST]
+    priority: 10
+    plugins:
+      # 本文の上限を超えたら 413(about:blank の Problem Details。config.yaml の error_page)
+      client-control:
+        max_body_size: 262144
+      limit-count:
+        _meta:
+          error_response:
+            type: https://eiaf.example/problems/rate-limited
+            title: Too many requests
+            status: 429
+            detail: The rate limit was exceeded.
+        count: 120
+        time_window: 60
+        key_type: var
+        key: remote_addr
+        rejected_code: 429
+        policy: local
+      proxy-rewrite:
+        regex_uri: ["^/sales(/v1/webhooks/crm)$", "$1"]
+      # ゲートウェイ自身が返した 429 に Retry-After を付ける(sales-order-api と同じ。ADR-0023 §5 の独自のコード 3)
+      serverless-post-function:
+        phase: header_filter
+        functions:
+          - |
+            return function(conf, ctx)
+              if ngx.var.upstream_status then return end
+              local status = ngx.status
+              if status == 429 then
+                ngx.header["Content-Type"] = "application/problem+json"
+                ngx.header["Cache-Control"] = "no-store"
+                local reset = tonumber(ngx.header["X-RateLimit-Reset"])
+                ngx.header["Retry-After"] = tostring(math.max(1, math.ceil(reset or 1)))
+              end
+            end
+    upstream:
+      type: roundrobin
+      scheme: https
+      pass_host: node
+      # 受け口は記録してすぐに 204 を返す。送り手は 2xx 以外で再送するので、ゲートウェイでは再送しない
+      retries: 0
+      # 受け口のリクエストの予算(5 秒)より長くする
+      timeout: {connect: 2, send: 10, read: 10}
+      nodes:
+        "webhook-receiver:8443": 1
+      # mTLS のクライアント証明書(SAN apisix。webhook-receiver の許可の一覧。ADR-0024 §6)
+      tls:
+        client_cert: "${{GATEWAY_CLIENT_CERT}}"
+        client_key: "${{GATEWAY_CLIENT_KEY}}"
+
 global_rules:
   - id: observability
     plugins:

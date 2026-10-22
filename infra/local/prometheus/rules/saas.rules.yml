@@ -1,0 +1,70 @@
+# SaaS 連携(P10。ADR-0035・ADR-0036)のアラート。対応は docs/runbooks/saas-integration.md と docs/runbooks/webhook-secret-rotation.md。
+# 単体テストは saas.test.yml(make alerts-test)。
+#
+# - Webhook の署名の不一致・時刻の範囲外が続くのは、鍵の不一致(差し替えの手順の誤り)か、なりすまし・リプレイの試み
+# - Webhook を記録できない(鍵を読めない・DB)のは、送り手が再送し続けるので早く気づく
+# - 差し替え前の鍵の署名が 1 日を超えて続くのは、送り手がまだ新しい鍵に切り替えていない(差し替えが終わっていない)
+# - Flow で写せない・Canonical の検証を通らないレコードは、Webhook なら DLQ、同期なら Watermark が進まない
+# - CRM の API の Circuit Breaker が開いたまま・同期が成功しないのは、取りこぼしの補いが止まっている
+# 属性にイベント ID・顧客 ID は入れていない(系列が増え続けるため・個人情報)。どれかはログと DB で見る。
+groups:
+  - name: saas
+    rules:
+      # 署名の不一致・時刻の範囲外が 15 分に 5 件を超えた
+      - alert: WebhookSignatureRejected
+        expr: sum by (job, source, reason) (increase(eia_webhook_requests_total{outcome="rejected",reason=~"webhook_signature_invalid|webhook_timestamp_out_of_range"}[15m])) > 5
+        labels:
+          severity: warning
+        annotations:
+          summary: "Webhook({{ $labels.source }})の署名を拒否し続けている(理由 {{ $labels.reason }})"
+          runbook: docs/runbooks/saas-integration.md#webhook-の署名を拒否し続けているとき
+
+      # Webhook を記録できない(鍵を読めない・DB に書けない)。送り手には 503 を返している
+      - alert: WebhookReceiveFailed
+        expr: sum by (job, source, reason) (increase(eia_webhook_requests_total{outcome="failed"}[10m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Webhook({{ $labels.source }})を記録できない(理由 {{ $labels.reason }})"
+          runbook: docs/runbooks/saas-integration.md#webhook-を記録できないとき
+
+      # 差し替え前の鍵の署名が 1 日を超えて続いている(差し替えが終わっていない)
+      - alert: WebhookPreviousKeyStillUsed
+        expr: sum by (job, source) (increase(eia_webhook_requests_total{key="previous"}[1h])) > 0
+        for: 24h
+        labels:
+          severity: info
+        annotations:
+          summary: "Webhook({{ $labels.source }})の送り手が、まだ差し替え前の鍵で署名している"
+          runbook: docs/runbooks/webhook-secret-rotation.md#送り手が新しい鍵に切り替えない
+
+      # Flow で写せない・Canonical の検証を通らないレコードがある(Webhook は DLQ、同期は Watermark が進まない)
+      - alert: FlowRecordsFailed
+        expr: sum by (job, path) (increase(eia_flow_records_total{outcome="failed"}[1h])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Flow で処理できないレコードがある(経路 {{ $labels.path }})"
+          runbook: docs/runbooks/saas-integration.md#flow-で処理できないレコードがあるとき
+
+      # 定期の同期が 30 分の間 1 回も成功していない(CRM の API に届かない・429 が続く・写せないレコード)
+      - alert: FlowSyncNotSucceeding
+        expr: >-
+          sum by (job, flow) (increase(eia_flow_sync_runs_total{outcome!="succeeded"}[30m])) > 0
+          unless sum by (job, flow) (increase(eia_flow_sync_runs_total{outcome="succeeded"}[30m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Flow {{ $labels.flow }} の定期の同期が 30 分の間成功していない"
+          runbook: docs/runbooks/saas-integration.md#定期の同期が成功しないとき
+
+      # CRM の API の Circuit Breaker が 5 分を超えて開いている
+      - alert: SaasCrmCircuitOpen
+        expr: max by (job, eia_dependency_name) (eia_resilience_circuit_breaker_state_ratio{eia_dependency_name="saas-crm", state="open"}) == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CRM の API(saas-crm)の Circuit Breaker が開いている"
+          runbook: docs/runbooks/saas-integration.md#定期の同期が成功しないとき

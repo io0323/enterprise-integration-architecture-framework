@@ -18,6 +18,7 @@ LEAF_DAYS=30
 leaves=(
   "order-service:order-service,localhost"
   "apisix:apisix"
+  "webhook-receiver:webhook-receiver,localhost"
 )
 
 if [[ "$(id -u)" == 0 ]]; then
