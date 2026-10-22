@@ -195,4 +195,53 @@ class SaasMockRoutesSpec :
                 client.post("/admin/webhooks/evt_none/redeliver") { bearerAuth("admin-token") }.status shouldBe HttpStatusCode.NotFound
             }
         }
+
+        test("任意の種類の Webhook を顧客の今の状態で送る(顧客は変えない)。イベント ID は X-Webhook-Id") {
+            val mock = mock()
+            SaasMockServer.seed(mock.customers, 1)
+            withMock(mock) {
+                val sent =
+                    client.post("/admin/customers/cus_seed_00001/events") {
+                        bearerAuth("admin-token")
+                        setBody("""{"type":"customer.reactivated"}""")
+                    }
+                sent.status shouldBe HttpStatusCode.Accepted
+                val status = mock.dispatcher!!.statuses().single()
+                sent.headers["X-Webhook-Id"] shouldBe status.id
+                status.type shouldBe "customer.reactivated"
+                status.customerId shouldBe "cus_seed_00001"
+                status.customerVersion shouldBe 1
+                mock.customers.get("cus_seed_00001")!!.version shouldBe 1
+
+                client
+                    .post("/admin/customers/cus_seed_00001/events") {
+                        bearerAuth("admin-token")
+                        setBody("""{"type":"Bad Type"}""")
+                    }.status shouldBe HttpStatusCode.BadRequest
+                client
+                    .post("/admin/customers/cus_none/events") {
+                        bearerAuth("admin-token")
+                        setBody("""{"type":"customer.reactivated"}""")
+                    }.status shouldBe HttpStatusCode.NotFound
+                client
+                    .post("/admin/customers/cus_seed_00001/events") {
+                        bearerAuth("api-token")
+                        setBody("""{"type":"customer.reactivated"}""")
+                    }.status shouldBe HttpStatusCode.Unauthorized
+                val created =
+                    client.post("/admin/customers") {
+                        bearerAuth("admin-token")
+                        setBody("""{"id":"cus_b","display_name":"B","email":"b@example.com"}""")
+                    }
+                created.headers["X-Webhook-Id"] shouldNotBe null
+            }
+            val disabled = SaasMock(mock.customers, mock.limiter, null, mock.secrets)
+            withMock(disabled) {
+                client
+                    .post("/admin/customers/cus_seed_00001/events") {
+                        bearerAuth("admin-token")
+                        setBody("""{"type":"customer.reactivated"}""")
+                    }.status shouldBe HttpStatusCode.Conflict
+            }
+        }
     })

@@ -589,10 +589,13 @@ services:
       INTEGRATION_FLOW_CRM_API_TOKEN: ${SAAS_MOCK_API_TOKEN:?make env を実行してください}
       # 定期の同期の間隔(Flow の every を上書きする)。ローカルで確かめやすいよう 1 分。E2E では tests/e2e/e2e.env で短くする
       INTEGRATION_FLOW_POLL_INTERVAL: ${INTEGRATION_FLOW_POLL_INTERVAL:-1m}
+      # イメージの Flow に足して読む Flow(既定は空のディレクトリ。E2E では tests/e2e/flows。ADR-0036 の改訂履歴)
+      INTEGRATION_FLOW_EXTRA_FLOWS_DIR: /flows/extra
       OTEL_SERVICE_NAME: integration-flow
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
     volumes:
       - *probe-volume
+      - ${INTEGRATION_FLOW_EXTRA_FLOWS:-./integration-flow/extra-flows}:/flows/extra:ro
     mem_limit: 256m
     healthcheck:
       <<: *healthcheck

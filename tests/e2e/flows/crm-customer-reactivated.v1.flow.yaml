@@ -1,0 +1,35 @@
+# E2E の Flow(P10 ⑦。ADR-0036)。コードを変えずに、Flow の定義を足すだけで新しいマッピングを追加できることを確かめる(ROADMAP P10 の DoD)。
+# CRM が新しい種類の Webhook(customer.reactivated)を送り始めた、という想定。make up ... E2E=1 のときだけ、integration-flow が
+# 追加のディレクトリ(INTEGRATION_FLOW_EXTRA_FLOWS_DIR)として読む。本番の Flow は contracts/flows に置き、契約と同じくレビューする。
+# crm-customer と区別できるよう、名前を大文字にする。新旧の判定の記録は Flow ごと(crm-customer の記録とは別)。
+id: crm-customer-reactivated
+version: 1
+description: CRM の顧客の再開(E2E の Flow)
+integration: INT-SALES-007
+canonical: sales.Customer
+triggers:
+  - kind: event
+    topic: integration.crm-webhook.received.v1
+    source: crm
+    eventTypes: [customer.reactivated]
+    record: $.data
+ordering:
+  key: id
+  version: $.version
+mapping:
+  id: { from: $.id }
+  name: { from: $.display_name, transform: uppercase }
+  email: { from: $.email, transform: lowercase }
+  createdAt: { from: $.created_at, transform: iso-instant }
+  updatedAt: { from: $.updated_at, transform: iso-instant }
+  billingAddress:
+    when: $.address
+    fields:
+      countryCode: { from: $.address.country, transform: uppercase }
+      postalCode: { from: $.address.postal_code }
+      region: { from: $.address.region }
+      city: { from: $.address.city }
+      line1: { from: $.address.line1 }
+      line2: { from: $.address.line2 }
+routes:
+  - deliver: sales.customer.changed.v1

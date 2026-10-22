@@ -86,7 +86,7 @@ class WebhookDispatcherSpec :
                 ?.content shouldBe "cus_1"
             body["data"]?.jsonObject?.containsKey("address") shouldBe false
             dispatcher.statuses().single() shouldBe
-                WebhookDispatcher.Status(id, "customer.created", WebhookDispatcher.State.DELIVERED, 1, 204)
+                WebhookDispatcher.Status(id, "customer.created", "cus_1", 1, WebhookDispatcher.State.DELIVERED, 1, 204)
             dispatcher.dispatchDue() shouldBe 0
         }
 
@@ -125,7 +125,8 @@ class WebhookDispatcherSpec :
             dispatcher.dispatchDue()
             clock.now = start + 1.seconds
             dispatcher.dispatchDue()
-            dispatcher.statuses().single() shouldBe WebhookDispatcher.Status(id, "customer.updated", WebhookDispatcher.State.FAILED, 2, 500)
+            dispatcher.statuses().single() shouldBe
+                WebhookDispatcher.Status(id, "customer.updated", "cus_1", 1, WebhookDispatcher.State.FAILED, 2, 500)
             clock.now = start + 10.minutes
             dispatcher.dispatchDue() shouldBe 0
 

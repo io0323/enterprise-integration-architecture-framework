@@ -43,6 +43,8 @@ class WebhookDispatcher(
     data class Status(
         val id: String,
         val type: String,
+        val customerId: String,
+        val customerVersion: Long,
         val state: State,
         val attempts: Int,
         val lastStatus: Int?,
@@ -53,6 +55,8 @@ class WebhookDispatcher(
     private data class Delivery(
         val id: String,
         val type: String,
+        val customerId: String,
+        val customerVersion: Long,
         val body: ByteArray,
         val state: State,
         val attempts: Int,
@@ -76,7 +80,7 @@ class WebhookDispatcher(
                         put("data", CrmJson.encodeToJsonElement(CrmCustomer.serializer(), customer))
                     },
                 ).toByteArray()
-        deliveries[id] = Delivery(id, type, body, State.PENDING, 0, clock.now() + delay, null)
+        deliveries[id] = Delivery(id, type, customer.id, customer.version, body, State.PENDING, 0, clock.now() + delay, null)
         return id
     }
 
@@ -84,7 +88,11 @@ class WebhookDispatcher(
     fun redeliver(id: String): Boolean =
         deliveries.computeIfPresent(id) { _, delivery -> delivery.copy(state = State.PENDING, nextAt = clock.now()) } != null
 
-    fun statuses(): List<Status> = deliveries.values.sortedBy { it.id }.map { Status(it.id, it.type, it.state, it.attempts, it.lastStatus) }
+    fun statuses(): List<Status> =
+        deliveries.values
+            .sortedBy {
+                it.id
+            }.map { Status(it.id, it.type, it.customerId, it.customerVersion, it.state, it.attempts, it.lastStatus) }
 
     /** 送る時刻の来たイベントを 1 回ずつ送る(常駐のループが呼ぶ)。送った数を返す。 */
     suspend fun dispatchDue(): Int {
