@@ -22,7 +22,7 @@ import kotlin.time.Duration.Companion.seconds
  * | `SAAS_MOCK_PORT` | 8080 | CRM の API・管理の API・`/health/live`・`/health/ready` |
  * | `SAAS_MOCK_API_TOKEN`(または `_FILE`) | なし(必須) | CRM の API の Bearer トークン(連携の側が使う) |
  * | `SAAS_MOCK_ADMIN_TOKEN`(または `_FILE`) | なし(必須) | 管理の API の Bearer トークン(SaaS の画面の代わり。E2E が使う) |
- * | `SAAS_MOCK_WEBHOOK_URL` | なし(なければ Webhook を送らない) | 受け口の URL(例 `http://apisix:9080/integration/v1/webhooks/crm`) |
+ * | `SAAS_MOCK_WEBHOOK_URL` | なし(なければ Webhook を送らない) | 受け口の URL(例 `http://apisix:9080/sales/v1/webhooks/crm`) |
  * | `SAAS_MOCK_WEBHOOK_SECRET`(または `_FILE`) | なし(URL があれば必須) | 署名の鍵 |
  * | `SAAS_MOCK_WEBHOOK_SECRET_NEXT`(または `_FILE`) | なし | 鍵の差し替えの間の次の鍵(あれば新旧の両方で署名する) |
  * | `SAAS_MOCK_WEBHOOK_RETRY` | `5s,30s,2m,10m,1h,3h` | 再送の間隔(カンマ区切り。尽くしたら FAILED) |

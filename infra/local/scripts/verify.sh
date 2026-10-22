@@ -56,7 +56,7 @@ client_token() {
 header_value() { awk -v name="$(tr '[:upper:]' '[:lower:]' <<<"$1")" -F': ' 'tolower($1) == name { sub(/\r$/, "", $2); print $2; exit }'; }
 
 # 1 回だけ動いて終わるコンテナ(終了コード 0 で終わっていれば正常)
-oneshot_services=" order-migrate schema-publish legacy-migrate kafka-topics inventory-migrate payment-migrate shipping-migrate batch-etl-migrate file-exchange-migrate "
+oneshot_services=" order-migrate schema-publish legacy-migrate kafka-topics inventory-migrate payment-migrate shipping-migrate batch-etl-migrate file-exchange-migrate webhook-receiver-migrate integration-flow-migrate "
 
 # ------------------------------------------------------------------ 共通: healthy
 verify_health() {
@@ -1320,6 +1320,116 @@ verify_batch() {
     check "batch-etl: 照合の結果を記録した(前日は MATCH)" \
       equals MATCH batch_sql "select outcome from mart.reconciliation where run_date = '$today' and business_date = '$yesterday'"
   fi
+}
+
+# ------------------------------------------------------------------ saas(P10。ADR-0035・ADR-0036)
+# CRM の模擬 → 署名した Webhook → Gateway(署名のルート)→ webhook-receiver → 取り込みのトピック → integration-flow → Canonical の顧客のイベント。
+# 鍵は値ではなくファイル(secrets/crm-webhook/)。ここでは鍵を読まない(送り手の saas-mock に署名させる。拒否の検査は別の鍵で作る)
+verify_saas() {
+  current="saas"
+  local crm=http://localhost:19280 gw=http://localhost:19080/sales/v1/webhooks/crm connect=http://localhost:19083 id
+  wr_sql() { "${compose[@]}" exec -T postgres psql -U postgres -d webhook_receiver -tAc "$1"; }
+  flow_sql() { "${compose[@]}" exec -T postgres psql -U postgres -d integration_flow -tAc "$1"; }
+  prom_value() {
+    curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode "query=$1" |
+      python3 -c 'import json,sys; r=json.load(sys.stdin)["data"]["result"]; print(r[0]["value"][1] if r else "")'
+  }
+
+  # 発行(Outbox → Debezium)・トピックの保持期間(カタログの dataRetention と一致)
+  local c
+  for c in webhook-receiver-outbox integration-flow-outbox; do
+    check "CDC(saas): コネクタ $c とタスクが RUNNING" bash -c \
+      "curl -fsS $connect/connectors/$c/status | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d[\"connector\"][\"state\"]==\"RUNNING\" and d[\"tasks\"] and all(t[\"state\"]==\"RUNNING\" for t in d[\"tasks\"]) else 1)'"
+  done
+  topic_retention() {
+    kafka_cli /opt/kafka/bin/kafka-configs.sh --bootstrap-server kafka:9092 --entity-type topics --entity-name "$1" --describe 2>/dev/null |
+      grep -o 'retention.ms=[0-9]*' | head -1
+  }
+  check "Kafka: 取り込みのトピック(confidential)の保持期間は 7 日(INT-INTEGRATION-001 の dataRetention: P7D)" \
+    equals retention.ms=604800000 topic_retention integration.crm-webhook.received.v1
+  check "Kafka: 取り込みのトピックの DLQ も保持期間は 7 日" equals retention.ms=604800000 topic_retention integration.crm-webhook.received.v1.dlq
+
+  # CRM の API(外部の契約 crm-api.v1)
+  check "saas-mock: API トークンがなければ 401" equals 401 curl -s -o /dev/null -w '%{http_code}' "$crm/v1/customers"
+  check "saas-mock: API トークンで顧客の一覧をカーソルでページングして読める" bash -c \
+    "curl -fsS -H 'Authorization: Bearer $SAAS_MOCK_API_TOKEN' '$crm/v1/customers?limit=2' | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if len(d[\"data\"])==2 and d[\"next_cursor\"] else 1)'"
+
+  # 受け口は mTLS だけで受ける(Gateway を通らない直接の接続は拒否する)
+  check "webhook-receiver: クライアント証明書のない直接の接続(19444)は、TLS のハンドシェイクで拒否する" \
+    bash -c "! curl -sk --max-time 5 -o /dev/null -X POST https://localhost:19444/v1/webhooks/crm"
+
+  # Gateway の署名のルート: 署名のない・違う鍵の Webhook は拒否し、何も記録しない
+  local receipts_before
+  receipts_before="$(wr_sql 'select count(*) from webhook_receipt' | tr -d '[:space:]')"
+  check "Gateway: 署名のヘッダのない Webhook は 400(Problem Details)" equals 400 \
+    curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{"type":"customer.updated"}' "$gw"
+  local forged
+  forged="$(python3 - <<'PY'
+import base64, hashlib, hmac, os, time
+body = b'{"type":"customer.updated","data":{"id":"cus_forged","version":99}}'
+ts = str(int(time.time()))
+sig = base64.b64encode(hmac.new(os.urandom(24), b"evt_forged." + ts.encode() + b"." + body, hashlib.sha256).digest()).decode()
+print(ts, sig)
+PY
+)"
+  check "Gateway: 違う鍵で署名した Webhook は 401(webhook-signature-invalid)" bash -c \
+    "curl -s -X POST -H 'Content-Type: application/json' -H 'webhook-id: evt_forged' -H 'webhook-timestamp: ${forged% *}' -H 'webhook-signature: v1,${forged#* }' \
+      -d '{\"type\":\"customer.updated\",\"data\":{\"id\":\"cus_forged\",\"version\":99}}' '$gw' | grep -q 'webhook-signature-invalid'"
+  check "Gateway: 256 KiB を超える本文は 413(受け口に届けない)" equals 413 bash -c \
+    "python3 -c 'print(\"x\" * 300000)' | curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data-binary @- '$gw'"
+  check "webhook-receiver: 拒否した Webhook は記録しない" equals "$receipts_before" bash -c "${compose[*]} exec -T postgres psql -U postgres -d webhook_receiver -tAc 'select count(*) from webhook_receipt' | tr -d '[:space:]'"
+  check "webhook-receiver: 受け取りの記録に本文の列がない(個人情報を置かない。ADR-0035 §3)" \
+    equals "body_sha256,received_at,signed_at,source,webhook_id" wr_sql "select string_agg(column_name, ',' order by column_name) from information_schema.columns where table_name = 'webhook_receipt'"
+
+  # 一通り: SaaS の画面の代わり(管理の API)で顧客を作る → 署名した Webhook → … → sales.customer.changed.v1
+  id="cus_verify_$(date -u +%Y%m%d%H%M%S)"
+  check "saas-mock: 管理の API で顧客を作る(customer.created の Webhook を送る)" equals 201 \
+    curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $SAAS_MOCK_ADMIN_TOKEN" -H 'Content-Type: application/json' \
+    -d "{\"id\":\"$id\",\"display_name\":\" Verify Customer \",\"email\":\"Verify@Example.COM\",\"address\":{\"country\":\"jp\",\"postal_code\":\"100-0001\",\"city\":\"Chiyoda\",\"line1\":\"1-1\"}}" \
+    "$crm/admin/customers"
+  # saas-mock は届かなければ 5 秒・30 秒・2 分の後に再送する(新しい時刻で署名し直す)。その再送まで待つ
+  check "webhook-receiver: 署名した Webhook を受け付けて記録した" retry 36 5 bash -c \
+    "[ \"\$(${compose[*]} exec -T postgres psql -U postgres -d webhook_receiver -tAc 'select count(*) from webhook_receipt' | tr -d '[:space:]')\" -gt $receipts_before ]"
+  check "integration-flow: 顧客 $id の版 1 を新旧の判定の記録に入れた" retry 24 5 equals 1 flow_sql "select version from flow_version where record_key = '$id'"
+  customer_event_arrived() { consume sales.customer.changed.v1 1000 8000 | grep -q "$id"; }
+  check "Kafka: sales.customer.changed.v1 に顧客 $id の Canonical のイベントが届いた(Outbox → Debezium)" retry 12 5 customer_event_arrived
+
+  # 定期の同期(1 分ごと)・メトリクス・アラートのルール・ダッシュボード
+  check "Prometheus: integration-flow の定期の同期が成功している(eia_flow_sync_runs_total)" \
+    retry 18 10 bash -c "curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=sum(eia_flow_sync_runs_total{outcome=\"succeeded\"})' | grep -q '\"value\"'"
+  check "Prometheus: webhook-receiver が受け付けた数を出す(recorded・今の鍵)" \
+    retry 18 10 bash -c "curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=sum(eia_webhook_requests_total{outcome=\"recorded\",key=\"current\"})' | grep -q '\"value\"'"
+  check "Prometheus: integration-flow が出したレコードの数を出す(published)" \
+    retry 18 10 bash -c "curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=sum(eia_flow_records_total{outcome=\"published\"})' | grep -q '\"value\"'"
+  check "Prometheus: SaaS 連携のアラートのルールを読み込んでいる" \
+    bash -c "curl -fsS http://localhost:19090/api/v1/rules | python3 -c 'import json,sys; n={r[\"name\"] for g in json.load(sys.stdin)[\"data\"][\"groups\"] for r in g[\"rules\"]}; sys.exit(0 if {\"WebhookSignatureRejected\",\"WebhookReceiveFailed\",\"WebhookPreviousKeyStillUsed\",\"FlowRecordsFailed\",\"FlowSyncNotSucceeding\",\"SaasCrmCircuitOpen\"} <= n else 1)'"
+  local dash result
+  dash="$(curl -fsS -u "admin:$GRAFANA_ADMIN_PASSWORD" http://localhost:19300/api/dashboards/uid/eiaf-saas || true)"
+  if [[ "$(json 'd["meta"]["folderTitle"] + "/" + d["dashboard"]["title"]' <<<"$dash" 2>/dev/null)" == "EIAF/SaaS — CRM customers" ]]; then
+    pass "Grafana: ダッシュボード SaaS — CRM customers(フォルダ EIAF)を provisioning で読み込んでいる"
+    # CRM の API のリトライと拒否・アラートは、平常時は空でよい
+    result="$(dashboard_panels_return_data "$dash" "リトライと拒否" "SaaS 連携のアラート(firing / pending)")"
+    if [[ "$result" == ok ]]; then pass "Grafana: SaaS 連携のダッシュボードの全パネルの式が、Prometheus でデータを返す"; else fail "Grafana: SaaS 連携のパネルの式が想定外: $result"; fi
+  else
+    fail "Grafana: ダッシュボード eiaf-saas を読み込めない"
+  fi
+
+  # 送り手(接続元)ごとの Rate Limit(最後に行う。このホストからの Webhook の枠を使い切るため)
+  gateway_rate_limited() {
+    python3 - "$gw" <<'PY'
+import sys, urllib.error, urllib.request
+for _ in range(150):
+    request = urllib.request.Request(sys.argv[1], data=b"{}", method="POST", headers={"Content-Type": "application/json"})
+    try:
+        urllib.request.urlopen(request, timeout=5)
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            ok = e.headers.get("Retry-After", "").isdigit() and e.headers.get("Content-Type") == "application/problem+json"
+            sys.exit(0 if ok else 1)
+sys.exit(1)
+PY
+  }
+  check "Gateway: Webhook のルートの Rate Limit を超えたら 429 と Retry-After(Problem Details)" gateway_rate_limited
 }
 
 verify_health

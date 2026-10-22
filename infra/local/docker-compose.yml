@@ -1,5 +1,5 @@
 # EIAF ローカル基盤(ADR-0003 / ADR-0015 / ADR-0016)
-# - 起動は Makefile 経由: `make up PROFILE=<core|cdc|iot|file|b2b|chaos|order>`(core は常に含まれる)
+# - 起動は Makefile 経由: `make up PROFILE=<core|cdc|iot|file|b2b|chaos|order|saga|batch|saas>`(core は常に含まれる)
 # - イメージは images.env(タグ + ダイジェスト)、秘密情報は .env(`make env` で生成)から読む。
 # - ホスト側のポートは 127.0.0.1 の 19000〜19999 に割り当てる。一覧は README.md。
 name: eiaf
@@ -93,8 +93,10 @@ services:
       args:
         KAFKA_IMAGE: ${KAFKA_IMAGE:?}
     # cdc: レガシーの受注表の CDC(コネクタ legacy-juchu。ADR-0026)。order: 注文のイベントを Outbox から発行する(ADR-0007)。
-    # saga: Saga の参加者の返事を Outbox から発行する(コネクタ inventory-outbox など。ADR-0029)。コネクタはどれも make up が登録する
-    profiles: [cdc, order, saga]
+    # saga: Saga の参加者の返事を Outbox から発行する(コネクタ inventory-outbox など。ADR-0029)。
+    # saas: 取り込みのトピックと Canonical の顧客のイベントを Outbox から発行する(コネクタ webhook-receiver-outbox・integration-flow-outbox)。
+    # コネクタはどれも make up が登録する
+    profiles: [cdc, order, saga, saas]
     depends_on:
       kafka:
         condition: service_healthy
@@ -115,6 +117,13 @@ services:
         condition: service_completed_successfully
         required: false
       shipping-migrate:
+        condition: service_completed_successfully
+        required: false
+      # saas: 受け口と Flow の Outbox の表・publication・Debezium の CONNECT ができてから起動する(同じ理由)
+      webhook-receiver-migrate:
+        condition: service_completed_successfully
+        required: false
+      integration-flow-migrate:
         condition: service_completed_successfully
         required: false
     environment:
@@ -151,7 +160,7 @@ services:
   # レプリケーションスロット(wal_status・safe_wal_size・位置)と設定(max_slot_wal_keep_size)を出す。接続は pg_monitor だけのユーザー
   postgres-exporter:
     image: ${POSTGRES_EXPORTER_IMAGE:?}
-    profiles: [cdc, order, saga]
+    profiles: [cdc, order, saga, saas]
     depends_on:
       postgres:
         condition: service_healthy
@@ -167,7 +176,7 @@ services:
   # トピックのオフセットと Consumer Group の lag(P06 ④。P07 の Consumer の DLQ・lag のアラートにも使う。ADR-0028 §5)
   kafka-exporter:
     image: ${KAFKA_EXPORTER_IMAGE:?}
-    profiles: [cdc, order, saga, batch]
+    profiles: [cdc, order, saga, batch, saas]
     command: ["--kafka.server=kafka:9092"]
     depends_on:
       kafka:
@@ -218,8 +227,8 @@ services:
   kafka-topics:
     image: ${KAFKA_IMAGE:?}
     # cdc: ACL の出力と DLQ。order: 注文 Saga のコマンド・返信と DLQ。saga: 参加者のコマンドの DLQ(ADR-0028・ADR-0029)。
-    # batch: 注文のイベント(保持 14 日)と DLQ(ADR-0031 §7)
-    profiles: [cdc, order, saga, batch]
+    # batch: 注文のイベント(保持 14 日)と DLQ(ADR-0031 §7)。saas: 取り込みのトピック(保持 7 日)・Canonical の顧客のイベントと DLQ(ADR-0035 §3)
+    profiles: [cdc, order, saga, batch, saas]
     entrypoint: ["/bin/bash", "/topics/create-topics.sh", "kafka:9092", "/topics/topics.conf"]
     depends_on:
       kafka:
@@ -437,6 +446,153 @@ services:
       - ./secrets/pgp-partner01.pub.asc:/secrets/pgp-partner01.pub.asc:ro
       - ./secrets/sftp-b2b.known_hosts:/secrets/sftp-b2b.known_hosts:ro
       - ./secrets/sftp-b2b:/secrets/sftp-b2b:ro
+    mem_limit: 256m
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "/probe/bin/wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/health/ready"]
+
+  # ---------------------------------------------------------------- saas(P10。ADR-0035・ADR-0036)
+  # SaaS(CRM)の模擬。外部の契約 contracts/external/crm-api.v1.yaml を実装し、顧客の変更を署名した Webhook で Gateway に送る。
+  # 状態はメモリの上だけ(再起動で消える)。ホストの 19280 は CRM の API と管理の API(make verify・E2E が顧客を作る・変える)。
+  # 署名の鍵はファイル(secrets/crm-webhook/sender-*)を送るたびに読む(差し替えに再起動は要らない。docs/runbooks/webhook-secret-rotation.md)
+  saas-mock:
+    build:
+      context: ../../services/saas-mock/app
+      args:
+        JAVA_RUNTIME_IMAGE: ${JAVA_RUNTIME_IMAGE:?}
+    profiles: [saas]
+    user: "${EIAF_UID:-65532}:${EIAF_GID:-65532}"
+    depends_on:
+      apisix:
+        condition: service_healthy
+    environment:
+      SAAS_MOCK_API_TOKEN: ${SAAS_MOCK_API_TOKEN:?make env を実行してください}
+      SAAS_MOCK_ADMIN_TOKEN: ${SAAS_MOCK_ADMIN_TOKEN:?make env を実行してください}
+      # Gateway の公開パス(ADR-0035 §5)。署名のルートで受け口(webhook-receiver)に届く
+      SAAS_MOCK_WEBHOOK_URL: http://apisix:9080/sales/v1/webhooks/crm
+      SAAS_MOCK_WEBHOOK_SECRET_FILE: /secrets/crm-webhook/sender-current
+      SAAS_MOCK_WEBHOOK_SECRET_NEXT_FILE: /secrets/crm-webhook/sender-next
+      # 再送の間隔(既定は 5s,30s,2m,10m,1h,3h)。E2E では tests/e2e/e2e.env で短くする
+      SAAS_MOCK_WEBHOOK_RETRY: ${SAAS_MOCK_WEBHOOK_RETRY:-5s,30s,2m,10m,1h,3h}
+      SAAS_MOCK_RATE_LIMIT: ${SAAS_MOCK_RATE_LIMIT:-20/1s}
+      SAAS_MOCK_SEED_CUSTOMERS: "5"
+    ports:
+      - 127.0.0.1:19280:8080
+    volumes:
+      - *probe-volume
+      - ./secrets/crm-webhook:/secrets/crm-webhook:ro
+    mem_limit: 256m
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "/probe/bin/wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health/ready"]
+
+  webhook-receiver-migrate:
+    build: &webhook-receiver-build
+      context: ../../services/webhook-receiver/app
+      args:
+        JAVA_RUNTIME_IMAGE: ${JAVA_RUNTIME_IMAGE:?}
+    profiles: [saas]
+    command: ["migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      WEBHOOK_RECEIVER_DB_URL: jdbc:postgresql://postgres:5432/webhook_receiver
+      WEBHOOK_RECEIVER_DB_PASSWORD: ${WEBHOOK_RECEIVER_DB_PASSWORD:?make env を実行してください}
+      OTEL_SERVICE_NAME: webhook-receiver
+    mem_limit: 256m
+    restart: "no"
+
+  # CRM の Webhook の受け口(INT-SALES-005)。署名を検証し、受け取りの記録と取り込みのトピックへの Outbox を同じトランザクションで書いて 204 を返す。
+  # 発行は Debezium(コネクタ webhook-receiver-outbox)。API(8443)は Gateway の証明書の mTLS だけで受ける(ADR-0024 §6)。
+  # ホストの 19444 は、mTLS なしの直接接続を拒否することの検査(make verify)のためだけに公開する。
+  # 署名の鍵はファイル(secrets/crm-webhook/receiver-*)を要求のたびに読む。鍵と証明書(0600)を読めるよう、ホストの利用者の uid で動かす
+  webhook-receiver:
+    build: *webhook-receiver-build
+    profiles: [saas]
+    command: ["serve"]
+    user: "${EIAF_UID:-65532}:${EIAF_GID:-65532}"
+    depends_on:
+      webhook-receiver-migrate:
+        condition: service_completed_successfully
+      schema-publish:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_healthy
+    environment:
+      WEBHOOK_RECEIVER_DB_URL: jdbc:postgresql://postgres:5432/webhook_receiver
+      WEBHOOK_RECEIVER_APP_DB_PASSWORD: ${WEBHOOK_RECEIVER_APP_DB_PASSWORD:?make env を実行してください}
+      WEBHOOK_RECEIVER_SCHEMA_REGISTRY_URL: http://apicurio:8080/apis/registry/v3
+      WEBHOOK_RECEIVER_CRM_SECRET_FILE: /secrets/crm-webhook/receiver-current
+      WEBHOOK_RECEIVER_CRM_SECRET_PREVIOUS_FILE: /secrets/crm-webhook/receiver-previous
+      WEBHOOK_RECEIVER_TLS_CERT_FILE: /certs/webhook-receiver.crt
+      WEBHOOK_RECEIVER_TLS_KEY_FILE: /certs/webhook-receiver.key
+      WEBHOOK_RECEIVER_TLS_CLIENT_CA_FILE: /certs/ca.crt
+      WEBHOOK_RECEIVER_TLS_ALLOWED_CLIENTS: apisix
+      OTEL_SERVICE_NAME: webhook-receiver
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    ports:
+      - 127.0.0.1:19444:8443
+    volumes:
+      # CA の鍵(ca.key)は渡さない
+      - ./certs/ca.crt:/certs/ca.crt:ro
+      - ./certs/webhook-receiver.crt:/certs/webhook-receiver.crt:ro
+      - ./certs/webhook-receiver.key:/certs/webhook-receiver.key:ro
+      - ./secrets/crm-webhook:/secrets/crm-webhook:ro
+      - *probe-volume
+    mem_limit: 256m
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "/probe/bin/wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/health/ready"]
+
+  integration-flow-migrate:
+    build: &integration-flow-build
+      context: ../../services/integration-flow/app
+      args:
+        JAVA_RUNTIME_IMAGE: ${JAVA_RUNTIME_IMAGE:?}
+    profiles: [saas]
+    command: ["migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      INTEGRATION_FLOW_DB_URL: jdbc:postgresql://postgres:5432/integration_flow
+      INTEGRATION_FLOW_DB_PASSWORD: ${INTEGRATION_FLOW_DB_PASSWORD:?make env を実行してください}
+      OTEL_SERVICE_NAME: integration-flow
+    mem_limit: 256m
+    restart: "no"
+
+  # iPaaS 風の Flow の実行(ADR-0036)。取り込みのトピック(Consumer Group integration-flow.webhook-ingest)と CRM の API の定期の同期から、
+  # Canonical の顧客のイベント(sales.customer.changed.v1。INT-SALES-007)を Outbox に書く。発行は Debezium(コネクタ integration-flow-outbox)。
+  # Flow の定義はイメージに含めた contracts/flows(起動時に検証し、誤りがあれば起動しない)。取り込みのトピックと DLQ を kafka-topics が作ってから起動する
+  integration-flow:
+    build: *integration-flow-build
+    profiles: [saas]
+    command: ["serve"]
+    depends_on:
+      integration-flow-migrate:
+        condition: service_completed_successfully
+      schema-publish:
+        condition: service_completed_successfully
+      kafka-topics:
+        condition: service_completed_successfully
+      saas-mock:
+        condition: service_healthy
+      otel-collector:
+        condition: service_healthy
+    environment:
+      INTEGRATION_FLOW_DB_URL: jdbc:postgresql://postgres:5432/integration_flow
+      INTEGRATION_FLOW_APP_DB_PASSWORD: ${INTEGRATION_FLOW_APP_DB_PASSWORD:?make env を実行してください}
+      INTEGRATION_FLOW_KAFKA_BOOTSTRAP: kafka:9092
+      INTEGRATION_FLOW_SCHEMA_REGISTRY_URL: http://apicurio:8080/apis/registry/v3
+      INTEGRATION_FLOW_CRM_API_URL: http://saas-mock:8080
+      INTEGRATION_FLOW_CRM_API_TOKEN: ${SAAS_MOCK_API_TOKEN:?make env を実行してください}
+      # 定期の同期の間隔(Flow の every を上書きする)。ローカルで確かめやすいよう 1 分。E2E では tests/e2e/e2e.env で短くする
+      INTEGRATION_FLOW_POLL_INTERVAL: ${INTEGRATION_FLOW_POLL_INTERVAL:-1m}
+      OTEL_SERVICE_NAME: integration-flow
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    volumes:
+      - *probe-volume
     mem_limit: 256m
     healthcheck:
       <<: *healthcheck
@@ -748,8 +904,8 @@ services:
       args:
         JAVA_RUNTIME_IMAGE: ${JAVA_RUNTIME_IMAGE:?}
     # cdc: legacy-order-acl が書くイベントのスキーマ(ADR-0026)。order: order-service のイベント。saga: 参加者の返事(ADR-0029)。
-    # batch: batch-etl が読む注文のイベントの書き手のスキーマ(ADR-0031)
-    profiles: [order, cdc, saga, batch]
+    # batch: batch-etl が読む注文のイベントの書き手のスキーマ(ADR-0031)。saas: 取り込みと Canonical の顧客のイベント(ADR-0035・ADR-0036)
+    profiles: [order, cdc, saga, batch, saas]
     command: ["--registry", "http://apicurio:8080/apis/registry/v3", "--root", "/repo"]
     depends_on:
       apicurio:
@@ -864,6 +1020,11 @@ services:
       BATCH_ETL_APP_DB_PASSWORD: ${BATCH_ETL_APP_DB_PASSWORD:?}
       # file-exchange の DB(P09 ⑥)。追加前のボリュームには作られないため make clean が必要(infra/local/README.md)
       FILE_EXCHANGE_APP_DB_PASSWORD: ${FILE_EXCHANGE_APP_DB_PASSWORD:?make env を実行してください}
+      # SaaS 連携の DB(P10 ⑥)。追加前のボリュームには作られないため make clean が必要(infra/local/README.md)
+      WEBHOOK_RECEIVER_DB_PASSWORD: ${WEBHOOK_RECEIVER_DB_PASSWORD:?make env を実行してください}
+      WEBHOOK_RECEIVER_APP_DB_PASSWORD: ${WEBHOOK_RECEIVER_APP_DB_PASSWORD:?make env を実行してください}
+      INTEGRATION_FLOW_DB_PASSWORD: ${INTEGRATION_FLOW_DB_PASSWORD:?make env を実行してください}
+      INTEGRATION_FLOW_APP_DB_PASSWORD: ${INTEGRATION_FLOW_APP_DB_PASSWORD:?make env を実行してください}
       KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?}
       APICURIO_DB_PASSWORD: ${APICURIO_DB_PASSWORD:?}
       DEBEZIUM_DB_PASSWORD: ${DEBEZIUM_DB_PASSWORD:?make env を実行してください}

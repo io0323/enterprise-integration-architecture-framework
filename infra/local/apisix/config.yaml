@@ -20,13 +20,21 @@ nginx_config:
   error_log_level: warn
   # ADR-0023 §3: APISIX 3.18 の upstream の tls.verify は HTTP の上流に効かない(Kafka だけ)ため、nginx の proxy_ssl_verify で
   # 上流のサーバ証明書を検証する(CA は上の ssl_trusted_certificate、名前は APISIX が設定する proxy_ssl_name $upstream_host)。
-  # ADR-0023 §6: ゲートウェイ自身の 502 / 504 を Problem Details(about:blank)で返す。error_page の内部の転送で
+  # ADR-0023 §6: ゲートウェイ自身の 413 / 502 / 504 を Problem Details(about:blank)で返す(413 は Webhook の本文の上限。ADR-0035 §5)。error_page の内部の転送で
   # X-Correlation-Id(request-id プラグインが付けた値)が落ちるので、要求のヘッダの値を応答にも付ける。
   http_server_configuration_snippet: |
     proxy_ssl_verify on;
     proxy_ssl_verify_depth 2;
+    error_page 413 /__eiaf/problems/413;
     error_page 502 /__eiaf/problems/502;
     error_page 504 /__eiaf/problems/504;
+    location = /__eiaf/problems/413 {
+      internal;
+      default_type application/problem+json;
+      add_header Cache-Control no-store always;
+      add_header X-Correlation-Id $http_x_correlation_id always;
+      return 413 '{"type":"about:blank","title":"Content Too Large","status":413}';
+    }
     location = /__eiaf/problems/502 {
       internal;
       default_type application/problem+json;
@@ -50,6 +58,8 @@ plugins:
   - limit-count
   - openid-connect
   - proxy-rewrite
+  # 本文の大きさの上限(Webhook の受け口。ADR-0035 §5)
+  - client-control
   # ADR-0023 §5: 設定だけでは実現できない 3 つの処理(外部の traceparent の除去・azp の取り出し・Problem Details のヘッダ)
   - serverless-pre-function
   - serverless-post-function

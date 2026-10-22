@@ -29,7 +29,7 @@ class SaasMockConfigSpec :
                 SaasMockConfig.fromEnvironment(
                     mapOf(
                         "SAAS_MOCK_PORT" to "9000",
-                        "SAAS_MOCK_WEBHOOK_URL" to "http://apisix:9080/integration/v1/webhooks/crm",
+                        "SAAS_MOCK_WEBHOOK_URL" to "http://apisix:9080/sales/v1/webhooks/crm",
                         "SAAS_MOCK_WEBHOOK_RETRY" to "1s, 2s",
                         "SAAS_MOCK_DISPATCH_INTERVAL" to "200ms",
                         "SAAS_MOCK_RATE_LIMIT" to "5/10s",
@@ -39,7 +39,7 @@ class SaasMockConfigSpec :
             (set as Result.Ok).value shouldBe
                 SaasMockConfig(
                     9000,
-                    URI("http://apisix:9080/integration/v1/webhooks/crm"),
+                    URI("http://apisix:9080/sales/v1/webhooks/crm"),
                     listOf(1.seconds, 2.seconds),
                     200.milliseconds,
                     RateLimiter.Limit(5, 10.seconds),

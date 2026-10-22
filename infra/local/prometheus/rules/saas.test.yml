@@ -1,0 +1,120 @@
+# saas.rules.yml の単体テスト(promtool test rules。make alerts-test)。
+rule_files:
+  - saas.rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: 署名の拒否が 15 分に 5 件を超えたら理由ごとに知らせる。受け付けた・ヘッダの欠落だけなら出さない
+    interval: 1m
+    input_series:
+      - series: 'eia_webhook_requests_total{job="webhook-receiver",source="crm",outcome="recorded",reason="none",key="current"}'
+        values: "0+10x20"
+      - series: 'eia_webhook_requests_total{job="webhook-receiver",source="crm",outcome="rejected",reason="webhook_header_missing",key="none"}'
+        values: "0+5x20"
+      - series: 'eia_webhook_requests_total{job="webhook-receiver",source="crm",outcome="rejected",reason="webhook_signature_invalid",key="none"}'
+        values: "0 0 0 0 0 0 0 0 0 0 1 3 5 7 9"
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: WebhookSignatureRejected
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: WebhookSignatureRejected
+        exp_alerts:
+          - exp_labels: { severity: warning, job: webhook-receiver, source: crm, reason: webhook_signature_invalid }
+            exp_annotations:
+              summary: "Webhook(crm)の署名を拒否し続けている(理由 webhook_signature_invalid)"
+              runbook: docs/runbooks/saas-integration.md#webhook-の署名を拒否し続けているとき
+
+  - name: 記録できない状態が 5 分続いたら知らせる
+    interval: 1m
+    input_series:
+      - series: 'eia_webhook_requests_total{job="webhook-receiver",source="crm",outcome="failed",reason="webhook_secret_unavailable",key="none"}'
+        values: "0 1 2 3 4 5 6 7 8 9 10"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: WebhookReceiveFailed
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: WebhookReceiveFailed
+        exp_alerts:
+          - exp_labels: { severity: warning, job: webhook-receiver, source: crm, reason: webhook_secret_unavailable }
+            exp_annotations:
+              summary: "Webhook(crm)を記録できない(理由 webhook_secret_unavailable)"
+              runbook: docs/runbooks/saas-integration.md#webhook-を記録できないとき
+
+  - name: 差し替え前の鍵が 1 日を超えて使われ続けたら知らせる。止まれば出さない
+    interval: 10m
+    input_series:
+      - series: 'eia_webhook_requests_total{job="webhook-receiver",source="crm",outcome="recorded",reason="none",key="previous"}'
+        values: "0+1x200"
+    alert_rule_test:
+      - eval_time: 12h
+        alertname: WebhookPreviousKeyStillUsed
+        exp_alerts: []
+      - eval_time: 26h
+        alertname: WebhookPreviousKeyStillUsed
+        exp_alerts:
+          - exp_labels: { severity: info, job: webhook-receiver, source: crm }
+            exp_annotations:
+              summary: "Webhook(crm)の送り手が、まだ差し替え前の鍵で署名している"
+              runbook: docs/runbooks/webhook-secret-rotation.md#送り手が新しい鍵に切り替えない
+
+  - name: Flow で処理できないレコードは経路ごとに知らせる。出した・古い版だけなら出さない
+    interval: 1m
+    input_series:
+      - series: 'eia_flow_records_total{job="integration-flow",flow="crm-customer",path="webhook",outcome="published"}'
+        values: "0+1x10"
+      - series: 'eia_flow_records_total{job="integration-flow",flow="crm-customer",path="poll",outcome="stale"}'
+        values: "0+1x10"
+      - series: 'eia_flow_records_total{job="integration-flow",flow="none",path="webhook",outcome="failed"}'
+        values: "0 0 0 0 1 1 1"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: FlowRecordsFailed
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: FlowRecordsFailed
+        exp_alerts:
+          - exp_labels: { severity: warning, job: integration-flow, path: webhook }
+            exp_annotations:
+              summary: "Flow で処理できないレコードがある(経路 webhook)"
+              runbook: docs/runbooks/saas-integration.md#flow-で処理できないレコードがあるとき
+
+  - name: 同期が 30 分成功しなければ知らせる。1 回でも成功していれば出さない
+    interval: 1m
+    input_series:
+      - series: 'eia_flow_sync_runs_total{job="integration-flow",flow="crm-customer",outcome="succeeded"}'
+        values: "0+1x10 10+0x50"
+      - series: 'eia_flow_sync_runs_total{job="integration-flow",flow="crm-customer",outcome="failed"}'
+        values: "0+0x10 0+1x50"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: FlowSyncNotSucceeding
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: FlowSyncNotSucceeding
+        exp_alerts:
+          - exp_labels: { severity: warning, job: integration-flow, flow: crm-customer }
+            exp_annotations:
+              summary: "Flow crm-customer の定期の同期が 30 分の間成功していない"
+              runbook: docs/runbooks/saas-integration.md#定期の同期が成功しないとき
+
+  - name: CRM の API の Circuit Breaker が 5 分を超えて開いたら知らせる。ほかの依存先は対象外
+    interval: 1m
+    input_series:
+      - series: 'eia_resilience_circuit_breaker_state_ratio{job="integration-flow",eia_dependency_name="saas-crm",state="open"}'
+        values: "0 0 1 1 1 1 1 1 1 1"
+      - series: 'eia_resilience_circuit_breaker_state_ratio{job="file-exchange",eia_dependency_name="sftp-partner01",state="open"}'
+        values: "1 1 1 1 1 1 1 1 1 1"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: SaasCrmCircuitOpen
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: SaasCrmCircuitOpen
+        exp_alerts:
+          - exp_labels: { severity: warning, job: integration-flow, eia_dependency_name: saas-crm }
+            exp_annotations:
+              summary: "CRM の API(saas-crm)の Circuit Breaker が開いている"
+              runbook: docs/runbooks/saas-integration.md#定期の同期が成功しないとき

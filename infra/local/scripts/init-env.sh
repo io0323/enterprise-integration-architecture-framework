@@ -62,3 +62,16 @@ if [[ ! -f "$secrets_dir/sftp-b2b.known_hosts" ]]; then
   printf '[sftp-b2b]:2222,[127.0.0.1]:19223 %s %s\n' "$key_type" "$key_body" >"$secrets_dir/sftp-b2b.known_hosts"
 fi
 chmod 644 "$host_key.pub" "$secrets_dir/sftp-b2b.known_hosts"
+
+# CRM の Webhook の署名の鍵(saas profile。P10 ⑥。ADR-0035 §2)。Standard Webhooks の形(whsec_ に続く base64)。
+# 送り手(saas-mock)と受け口(webhook-receiver)は本来は別の置き場なので、ファイルを分ける。最初は同じ値にする。
+# - sender-current / sender-next: saas-mock が送るたびに読む(next があれば新旧の両方で署名する)
+# - receiver-current / receiver-previous: webhook-receiver が要求のたびに読む(previous があれば両方を受け付ける)
+# 差し替えの手順は docs/runbooks/webhook-secret-rotation.md(ファイルを置き換えるだけで、再起動は要らない)
+webhook_dir="$secrets_dir/crm-webhook"
+mkdir -p "$webhook_dir"
+if [[ ! -f "$webhook_dir/receiver-current" ]]; then
+  key="whsec_$(head -c 24 /dev/urandom | base64 | tr -d '\n')"
+  (umask 077 && printf '%s\n' "$key" >"$webhook_dir/sender-current" && printf '%s\n' "$key" >"$webhook_dir/receiver-current")
+  echo "infra/local/secrets/crm-webhook/(Webhook の署名の鍵)を生成しました"
+fi
