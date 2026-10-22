@@ -29,10 +29,13 @@ import kotlin.time.Duration.Companion.hours
  * | `INTEGRATION_FLOW_SCHEMA_REGISTRY_URL` | なし(serve では必須) | serve(例 `http://apicurio:8080/apis/registry/v3`) |
  * | `INTEGRATION_FLOW_HEALTH_PORT` | 8081 | serve(`/health/live` と `/health/ready` だけ。平文。コンテナの外に公開しない) |
  * | `INTEGRATION_FLOW_FLOWS_DIR` | なし(イメージに含めた contracts/flows) | serve・validate(Flow の定義を読むディレクトリ) |
+ * | `INTEGRATION_FLOW_EXTRA_FLOWS_DIR` | なし | serve・validate(上の置き場に足して読むディレクトリ。E2E で試験用の Flow を足す) |
  * | `INTEGRATION_FLOW_CRM_API_URL` | なし(CRM の poll の trigger があれば serve で必須) | serve(例 `http://saas-mock:8080`) |
  * | `INTEGRATION_FLOW_CRM_API_TOKEN`(または `_FILE`) | なし(読めなければ同期が失敗する) | serve(CRM の API トークン。呼ぶたびに読む) |
  * | `INTEGRATION_FLOW_POLL_INTERVAL` | なし(Flow の `every`) | serve(定期の同期の間隔を上書きする。E2E で短くする) |
  * | `INTEGRATION_FLOW_PURGE_INTERVAL` | 1h | serve(保持期間を過ぎた冪等消費の記録の削除の間隔) |
+ *
+ * 本番の Flow は追加のディレクトリではなく contracts/flows に置き、契約と同じくレビューする(ADR-0036 §1)。
  */
 internal data class IntegrationFlowConfig(
     val dbUrl: String,
@@ -54,14 +57,18 @@ internal data class IntegrationFlowConfig(
         const val KAFKA_BOOTSTRAP = "INTEGRATION_FLOW_KAFKA_BOOTSTRAP"
         const val SCHEMA_REGISTRY_URL = "INTEGRATION_FLOW_SCHEMA_REGISTRY_URL"
         const val FLOWS_DIR = "INTEGRATION_FLOW_FLOWS_DIR"
+        const val EXTRA_FLOWS_DIR = "INTEGRATION_FLOW_EXTRA_FLOWS_DIR"
         const val CRM_API_URL = "INTEGRATION_FLOW_CRM_API_URL"
         private const val DEFAULT_HEALTH_PORT = 8081
         private const val MAX_PORT = 65_535
         private val DEFAULT_PURGE_INTERVAL = 1.hours
 
-        /** Flow の定義の置き場(ディレクトリの指定がなければイメージに含めたもの)。validate も使う。 */
-        fun flows(env: Map<String, String>): FlowSource =
-            env[FLOWS_DIR]?.takeIf { it.isNotBlank() }?.let { FlowSource.Directory(Path.of(it)) } ?: FlowSource.Classpath
+        /** Flow の定義の置き場(ディレクトリの指定がなければイメージに含めたもの。追加のディレクトリがあれば合わせる)。validate も使う。 */
+        fun flows(env: Map<String, String>): FlowSource {
+            val base = env[FLOWS_DIR]?.takeIf { it.isNotBlank() }?.let { FlowSource.Directory(Path.of(it)) } ?: FlowSource.Classpath
+            val extra = env[EXTRA_FLOWS_DIR]?.takeIf { it.isNotBlank() }?.let { FlowSource.Directory(Path.of(it)) }
+            return if (extra == null) base else FlowSource.Combined(listOf(base, extra))
+        }
 
         @Suppress("CyclomaticComplexMethod") // 項目ごとの既定と検査を並べる
         fun fromEnvironment(env: Map<String, String>): Result<IntegrationFlowConfig, ValidationError> {

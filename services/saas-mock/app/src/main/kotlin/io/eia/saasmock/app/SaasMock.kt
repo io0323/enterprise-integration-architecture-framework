@@ -31,6 +31,8 @@ internal class SaasMock(
  * - 管理の API(SaaS の画面の代わり。E2E が使う。管理のトークンで認証する。Rate Limit は当てない):
  *   - `POST /admin/customers`・`PATCH /admin/customers/{id}`: 顧客を作る・変える。`customer.created`・`customer.updated` の Webhook を送る。
  *     `?webhookDelay=10s` で初めて送るまで待たせる(順序の逆転を作る)。
+ *   - `POST /admin/customers/{id}/events`: 顧客の今の状態で任意の種類の Webhook を送る(`{"type":"customer.reactivated"}`)。
+ *     作った Webhook のイベント ID は `X-Webhook-Id`(作成・変更も同じ)。
  *   - `GET /admin/webhooks`: 送ったイベントの状態。`POST /admin/webhooks/{id}/redeliver`: 同じイベントを送り直す。
  *   - `PUT /admin/rate-limit`: Rate Limit を変える(`{"limit":"1/10s"}`)。
  */

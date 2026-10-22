@@ -166,8 +166,9 @@ routes:
       pass_host: node
       # 受け口は記録してすぐに 204 を返す。送り手は 2xx 以外で再送するので、ゲートウェイでは再送しない
       retries: 0
-      # 受け口のリクエストの予算(5 秒)より長くする
-      timeout: {connect: 2, send: 10, read: 10}
+      # 読み取りは受け口のリクエストの予算(5 秒)より長くする。接続(mTLS のハンドシェイク)は、起動の直後の受け口が遅くても
+      # 送り手に 504 を返さないよう 5 秒にする(送り手の Webhook の待ち時間は数十秒。P10 ⑦ の E2E で起動の直後に 2 秒を超えた)
+      timeout: {connect: 5, send: 10, read: 10}
       nodes:
         "webhook-receiver:8443": 1
       # mTLS のクライアント証明書(SAN apisix。webhook-receiver の許可の一覧。ADR-0024 §6)

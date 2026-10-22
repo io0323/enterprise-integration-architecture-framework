@@ -16,6 +16,7 @@ public class FlowFile(
 /**
  * Flow の定義の置き場。既定はイメージに含めた contracts/flows([Classpath])。ディレクトリ([Directory])を指定すると、
  * そこにある `*.flow.yaml` を読む(Flow の YAML を足して再起動するだけで、新しいマッピングを足せる。ROADMAP P10 の DoD)。
+ * [Combined] は複数の置き場を合わせる(イメージの Flow に、追加のディレクトリの Flow を足す)。
  */
 public sealed interface FlowSource {
     /** ファイルを読む。読めなければ、ファイル名と理由の一覧。 */
@@ -67,6 +68,26 @@ public sealed interface FlowSource {
             } catch (e: IOException) {
                 Result.Unreadable(listOf(path.toString() to "読めません(${e::class.simpleName})"))
             }
+    }
+
+    /**
+     * 複数の置き場を合わせたもの(例 イメージの contracts/flows と、試験用の追加のディレクトリ)。どれかを読めなければ読めない。
+     * 同じ ID の Flow が重なれば、読み込み([io.eia.integrationflow.domain.FlowCatalog])が誤りにする。
+     */
+    public data class Combined(
+        val sources: List<FlowSource>,
+    ) : FlowSource {
+        override fun files(): Result {
+            val results = sources.map { it.files() }
+            val problems = results.filterIsInstance<Result.Unreadable>().flatMap { it.problems }
+            return if (problems.isEmpty()) {
+                Result.Files(
+                    results.filterIsInstance<Result.Files>().flatMap { it.files },
+                )
+            } else {
+                Result.Unreadable(problems)
+            }
+        }
     }
 
     public companion object {

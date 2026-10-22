@@ -61,6 +61,12 @@ data class CustomerInput(
     val address: CrmAddress? = null,
 )
 
+/** 管理の API で送る Webhook の種類(例 `customer.reactivated`)。 */
+@Serializable
+internal data class EventInput(
+    val type: String,
+)
+
 /** 管理の API で Rate Limit を変える(`<回数>/<期間>`)。 */
 @Serializable
 internal data class RateLimitInput(
