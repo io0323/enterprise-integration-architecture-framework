@@ -1,0 +1,81 @@
+asyncapi: 3.0.0
+info:
+  title: IoT Telemetry Events
+  version: 1.0.0
+  description: |
+    デバイスのテレメトリを社内の標準(Framework 6 章)に載せた Domain Event(INT-IOT-002。ADR-0039)。
+    iot-bridge が MQTT(INT-IOT-001)から受け取り、デバイスの形式の版によらず 1 つの Avro の形にそろえて出す。
+    iot-bridge は DB を持たず Kafka に直接送る(DB への書き込みと発行の二重書込みがないので Outbox は使わない。ADR-0039 §2)。
+    MQTT の PUBACK は Kafka が受け取りを確認してから返す(At-Least-Once)。
+
+    **パーティションキー**は `{tenant}/{deviceId}`(デバイスごとの順序。デバイスの ID はテナントの中でだけ一意)。
+    順序は届いた順で、`deviceTime` の順とは限らない(通信が切れていた間のデータがまとめて遅れて届く。ADR-0039 §8)。
+
+    **ce_id** は `{tenant}/{deviceId}/{bootId}/{seq}` から毎回同じ値になる UUID(版 5)。QoS 1 の再送や iot-bridge の再送で
+    同じメッセージが重ねて届いても ce_id は同じなので、消費者は ce_id で冪等に処理する(platform/inbox。ADR-0039 §5)。
+    起動のたびに bootId が変わるので、番号が振り直されても以前のメッセージと ce_id が重ならない。
+    `ce_time` は iot-bridge が受け取った時刻(receivedAt)。デバイスの時計の時刻はペイロードの deviceTime(ADR-0039 §7)。
+
+    ヘッダは CloudEvents binary mode(`ce_*`。`ce_source=/iot/iot-bridge`)と `traceparent`・`correlationid`
+    (MQTT v5 のユーザープロパティから引き継ぐ。なければ iot-bridge が始める)。
+    処理できないメッセージ(知らない形式の版・形式の誤り)は `{topic}.dlq` に隔離する(Framework 6.5)。
+  contact:
+    name: team-integration
+defaultContentType: avro/binary
+servers:
+  local:
+    host: localhost:19092
+    protocol: kafka
+    description: ローカル(P03 の docker compose。ホスト用の EXTERNAL リスナー。コンテナ内からは kafka:9092)
+channels:
+  telemetryReported:
+    address: iot.telemetry.reported.v1
+    messages:
+      telemetryReported:
+        $ref: "#/components/messages/TelemetryReported"
+operations:
+  publishTelemetryReported:
+    action: send
+    channel:
+      $ref: "#/channels/telemetryReported"
+    messages:
+      - $ref: "#/channels/telemetryReported/messages/telemetryReported"
+components:
+  messages:
+    TelemetryReported:
+      name: TelemetryReported
+      title: テレメトリの受け取り
+      contentType: avro/binary
+      headers:
+        $ref: "#/components/schemas/StandardHeaders"
+      payload:
+        schemaFormat: application/vnd.apache.avro+json;version=1.9.0
+        schema:
+          $ref: "../avro/iot/TelemetryReported.avsc"
+  schemas:
+    StandardHeaders:
+      type: object
+      description: 全イベント共通のヘッダ(INTEGRATION_STANDARDS §2)
+      required: [ce_id, ce_source, ce_type, ce_time, ce_specversion, traceparent, correlationid]
+      properties:
+        ce_id:
+          type: string
+          description: イベント ID(冪等消費のキー)。{tenant}/{deviceId}/{bootId}/{seq} から作る UUID(版 5)
+        ce_source:
+          type: string
+          description: 発行元
+        ce_type:
+          type: string
+          description: イベント種別。トピック名から `.v{n}` を除いた値
+        ce_time:
+          type: string
+          format: date-time
+        ce_specversion:
+          type: string
+          const: "1.0"
+        traceparent:
+          type: string
+          description: W3C Trace Context
+        correlationid:
+          type: string
+          description: 業務トランザクション ID

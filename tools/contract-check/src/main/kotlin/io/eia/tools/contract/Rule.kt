@@ -39,7 +39,7 @@ enum class Rule(
     ),
     STRUCT_JSON_SCHEMA(
         "CC-STRUCT-005",
-        "JSON Schema(manifest・カタログ・ファイルの仕様)がメタスキーマに適合すること",
+        "JSON Schema(manifest・カタログ・ファイルの仕様・デバイスの形式)がメタスキーマに適合すること",
         "9, 16.1",
         "JSON Schema 2020-12 の仕様に合わせて直す",
     ),
@@ -105,6 +105,18 @@ enum class Rule(
         "16.1, ADR-0005",
         "連携 ID の {DOMAIN} を小文字にした値を Topic の先頭セグメント・servers の末尾に使う",
     ),
+    NAMING_MQTT_TOPIC(
+        "CC-NAMING-011",
+        "MQTT のトピックは devices/{tenant}/{deviceId}/{channel}",
+        "17.3, INTEGRATION_STANDARDS §1, ADR-0039",
+        "address を devices/{tenant}/{deviceId}/{channel}(channel は小文字・kebab-case)にする。ACL はこの形でデバイスごとに書く",
+    ),
+    NAMING_DEVICE_PAYLOAD(
+        "CC-NAMING-012",
+        "contracts/devices のファイル名は {message}.v{n}.schema.json",
+        "17.3, ADR-0039",
+        "ファイル名を {message}.v{n}.schema.json にし、n をスキーマの v の const と一致させる(例 telemetry.v2.schema.json)",
+    ),
 
     // --- API ---
     API_IDEMPOTENCY_KEY(
@@ -146,6 +158,21 @@ enum class Rule(
         "メッセージの payload は contracts/avro の Avro スキーマを参照する",
         "6.3",
         "payload を schemaFormat: application/vnd.apache.avro+json と、存在する .avsc への \$ref にする",
+    ),
+
+    // --- MQTT(デバイスと Broker の間。ADR-0039) ---
+    MQTT_HEADERS(
+        "CC-MQTT-001",
+        "MQTT のメッセージのヘッダ(MQTT v5 のユーザープロパティ)に traceparent・correlationid が定義されている",
+        "14, 17.3, ADR-0039",
+        "headers の properties に traceparent と correlationid を定義する(MQTT v3.1.1 のデバイスは送れないので required にはしない)",
+    ),
+    MQTT_PAYLOAD(
+        "CC-MQTT-002",
+        "MQTT のメッセージの payload は contracts/devices の形式のスキーマを参照し、スキーマは v(形式の版)・boot・seq を必須にする",
+        "13, 17.3, ADR-0039",
+        "payload を contracts/devices/{message}.v{n}.schema.json への \$ref にし、スキーマの required に v(const n)・boot・seq を含める。" +
+            "どの契約も参照しない形式のスキーマは置かない",
     ),
 
     // --- Catalog ---
@@ -250,6 +277,13 @@ enum class Rule(
         "ファイルの仕様が main の版に対して互換(列の削除・型や必須性の変更・並べ替え・enum の変更・形式の変更がない)",
         "9, 15.3",
         "足してよいのは、末尾の任意(nullable: true)の列と、新しい形式だけ。ほかの変更は新しい版のファイル({system}_{dataset}.v{n+1}.yaml)で行う",
+    ),
+    COMPAT_DEVICE_PAYLOAD(
+        "CC-COMPAT-004",
+        "デバイスの形式のスキーマ(contracts/devices)を main の版から変えていない・消していない(説明の文だけは変えてよい)",
+        "15.3, 17.3, ADR-0039",
+        "出したデバイスの形式は変えない(古いファームウェアのデバイスが送り続ける)。変更は新しい版のファイル({message}.v{n+1}.schema.json)で足す。" +
+            "版をやめるときは ADR-0039 §4 の手順で例外を承認してもらう",
     ),
 
     EXTERNAL_BREAKING(

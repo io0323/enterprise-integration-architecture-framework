@@ -1,0 +1,46 @@
+{
+  "type": "record",
+  "name": "TelemetryReported",
+  "namespace": "io.eia.events.iot",
+  "doc": "デバイスのテレメトリを受け取った(iot.telemetry.reported.v1。INT-IOT-002)。iot-bridge が MQTT(INT-IOT-001)から受け取り、デバイスの形式の版(contracts/devices)によらずこの形にそろえて出す(ADR-0039 §4)。デバイスの ID は ACL で守られた MQTT のトピックから取る(ペイロードの値は信じない)。時刻はデバイスの申告(deviceTime)と受け取り(receivedAt)の両方を持つ(ADR-0039 §7)。項目は default 付きでだけ足す(FULL_TRANSITIVE。ADR-0014)。",
+  "fields": [
+    { "name": "tenant", "type": "string", "doc": "テナント(MQTT のトピックの {tenant})" },
+    { "name": "deviceId", "type": "string", "doc": "デバイスの ID(MQTT のトピックの {deviceId}。テナントの中で一意)" },
+    { "name": "bootId", "type": "string", "doc": "デバイスが起動のたびに作るセッション ID(ペイロードの boot)" },
+    { "name": "seq", "type": "long", "doc": "起動ごとのメッセージの番号(ペイロードの seq)。bootId と組で重複の判定に使う" },
+    { "name": "payloadVersion", "type": "int", "doc": "デバイスが送った形式の版(ペイロードの v)。古い版をやめる判断の材料" },
+    {
+      "name": "deviceTime",
+      "type": ["null", { "type": "long", "logicalType": "timestamp-micros" }],
+      "default": null,
+      "doc": "デバイスの時計での測定の時刻。送られなかったら null。ずれていることがある(clockSuspect を見る)。分析の発生時刻に使う"
+    },
+    {
+      "name": "receivedAt",
+      "type": { "type": "long", "logicalType": "timestamp-micros" },
+      "doc": "iot-bridge が MQTT から受け取った時刻。ce_time・遅れの監視・保持期間・運用の判断に使う"
+    },
+    {
+      "name": "clockSuspect",
+      "type": "boolean",
+      "doc": "deviceTime がない、または receivedAt より許容範囲(5 分)を超えて未来。値は直さない(ADR-0039 §7)"
+    },
+    {
+      "name": "readings",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "Reading",
+          "fields": [
+            { "name": "name", "type": "string", "doc": "測定の種類(小文字の kebab-case。例 temperature)" },
+            { "name": "value", "type": "double" },
+            { "name": "unit", "type": ["null", "string"], "default": null, "doc": "単位(SenML の単位名。例 Cel)。不明なら null" }
+          ]
+        }
+      },
+      "doc": "測定値。形式の版 1 の temp・hum は temperature(Cel)・humidity(%RH)に変える"
+    },
+    { "name": "batteryPercent", "type": ["null", "int"], "default": null, "doc": "電池の残り(%)。送られなかったら null" }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eia.io/contracts/devices/telemetry.v1.schema.json",
+  "title": "Device telemetry v1",
+  "description": "デバイスが MQTT の devices/{tenant}/{deviceId}/telemetry に送るテレメトリの形式の版 1(初期のファームウェア。INT-IOT-001。ADR-0039 §4)。測定値は温度と湿度の決まった 2 つだけ。デバイスはすぐに更新できないので、iot-bridge は版 2 以降ができた後もこの版を受け付け続ける。版をやめるのは、この版の受信数が保持の期間ゼロになり、承認を得てから(ADR-0039 §4)。このファイルは一度出したら変えない(CC-COMPAT-004)。未知の項目は無視する(Tolerant Reader)。",
+  "type": "object",
+  "required": ["v", "boot", "seq"],
+  "properties": {
+    "v": {
+      "description": "形式の版",
+      "const": 1
+    },
+    "boot": {
+      "description": "起動のたびにデバイスが乱数で作るセッション ID(64 ビット以上。小文字の 16 進)。番号(seq)が起動・初期化で振り直されても、メッセージの ID(ce_id)が以前のものと重ならないようにする(ADR-0039 §5)",
+      "type": "string",
+      "pattern": "^[0-9a-f]{16,32}$"
+    },
+    "seq": {
+      "description": "起動(boot)ごとに 0 から数えるメッセージの番号。QoS 1 の再送では同じ値を使う。上限に達したら boot を作り直す",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "ts": {
+      "description": "デバイスの時計での測定の時刻(UNIX 秒)。時計が合っていないデバイスは送らない。ずれていることがある(ADR-0039 §7)",
+      "type": "integer",
+      "minimum": 0
+    },
+    "temp": {
+      "description": "温度(℃)",
+      "type": "number"
+    },
+    "hum": {
+      "description": "相対湿度(%)",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    }
+  }
+}

@@ -14,10 +14,12 @@ import kotlin.io.path.readText
  *
  * - `$ref` は文書内の参照(`#/components/...`)と、AsyncAPI のファイルからの相対パス(`../avro/sales/OrderCreated.avsc`)を辿る。
  * - 1 つのチャネルには 1 つのスキーマだけを許す(レジストリの `{topic}-value` のアーティファクトは、トピックごとに 1 つのため)。
+ * - servers がすべて MQTT の契約(デバイスと Broker の間。ペイロードは contracts/devices の JSON Schema)は Kafka のトピックではないので登録しない(ADR-0039)。
  * - 形式の検査は contract-check の役割なので、ここでは登録に必要な項目がなければ例外にするだけにする。
  */
 internal object ContractSchemas {
     private val yaml = YAMLMapper.builder().build()
+    private val MQTT_PROTOCOLS = setOf("mqtt", "secure-mqtt")
 
     fun load(contractsRoot: Path): List<SchemaSubject> {
         val asyncApiDir = contractsRoot.resolve("asyncapi")
@@ -33,6 +35,7 @@ internal object ContractSchemas {
 
     private fun subjectsOf(file: Path): List<SchemaSubject> {
         val document = yaml.readTree(file.readText())
+        if (isMqtt(document)) return emptyList()
         val channels = document.path("channels")
         return channels.propertyNames().map { name ->
             val channel = resolve(document, channels.path(name))
@@ -59,6 +62,12 @@ internal object ContractSchemas {
         val schema = file.parent.resolve(ref).normalize()
         require(schema.isRegularFile()) { "$file が参照する $schema がありません" }
         return schema
+    }
+
+    private fun isMqtt(document: JsonNode): Boolean {
+        val servers = document.path("servers")
+        val protocols = servers.propertyNames().map { servers.path(it).path("protocol").stringValue(null) }
+        return protocols.isNotEmpty() && protocols.all { it in MQTT_PROTOCOLS }
     }
 
     /** 文書内の `$ref`(`#/a/b`)を辿る。参照でなければそのまま返す。 */

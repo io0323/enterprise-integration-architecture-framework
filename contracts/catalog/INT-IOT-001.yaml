@@ -1,0 +1,15 @@
+id: INT-IOT-001
+name: Device Telemetry (MQTT)
+description: デバイスが MQTT Broker(IoT の境界)にテレメトリを送る。受け付ける形式の版は契約の messages(版は足すだけ。やめる条件は ADR-0039 §4)。デバイスと Broker の間の通信の設計は範囲外(Framework 2.3)
+style: mqtt
+pattern: pub-sub
+provider: { owner: team-iot, system: devices }
+consumers:
+  - { owner: team-integration, system: iot-bridge }
+contract: contracts/asyncapi/device-telemetry.v1.yaml
+channels:
+  - devices/{tenant}/{deviceId}/telemetry
+tier: 2
+dataClassification: internal
+slo: { availability: "99.9", latencyP99: "5s" }
+lifecycle: design

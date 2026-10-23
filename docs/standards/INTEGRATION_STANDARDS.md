@@ -13,7 +13,8 @@
 | Avro | namespace `{basePackage}.events.{domain}`、record は PascalCase | OrderCreated |
 | File | `{system}_{dataset}_{yyyyMMddHHmmss}_{seq}.{ext}` + 同名の `.manifest.json` | sales_daily_20260925010000_001.parquet / sales_daily_20260925010000_001.manifest.json |
 | File 仕様 | `contracts/files/{system}_{dataset}.v{n}.yaml` | contracts/files/sales_daily.v1.yaml |
-| MQTT | `devices/{tenant}/{deviceId}/{channel}` | devices/t1/d-001/telemetry |
+| MQTT | `devices/{tenant}/{deviceId}/{channel}`(ACL で自分のトピックにしか書けない。ADR-0039 §3) | devices/t1/d-001/telemetry |
+| デバイスの形式 | `contracts/devices/{message}.v{n}.schema.json`(ペイロードの `v` が n。ADR-0039 §4) | contracts/devices/telemetry.v2.schema.json |
 
 - 連携 ID の `{DOMAIN}` は業務の領域(Topic の domain・API の `/{domain}` と同じ。CC-NAMING-010)で、データの出どころのシステムではない。出どころ(例: レガシー基幹)はカタログの `provider.system` と `description` に書く(例: レガシーの受注の CDC は INT-SALES-003)。
 
@@ -78,6 +79,12 @@ DLQ のトピックは、元のメッセージと同じ機密区分として扱�
 - contract-check の `CC-FILE-002`〜`004`・`CC-COMPAT-003` が検査する。
 - ファイルの仕様もカタログ(`style: file`)に登録する。
 
+### MQTT(デバイスと Broker の間。ADR-0039)
+- `traceparent` と `correlationid` は **MQTT v5 のユーザープロパティ**で運ぶ。MQTT v3.1.1 のデバイスは送れないので必須にしない(iot-bridge が新しいトレースを始める。contract-check の `CC-MQTT-001`)。
+- QoS 1、retain は使わない。ペイロードは JSON で、`v`(形式の版)・`boot`(起動のたびに乱数で作るセッション ID)・`seq`(起動ごとの番号)が必須(`CC-MQTT-002`)。デバイスの ID はペイロードに入れない(トピックから取る)。
+- 出した形式の版は変えない。変更は新しい版で足し、古い版も受け付け続ける(`CC-COMPAT-004`。やめる手順は ADR-0039 §4)。
+- iot-bridge が Kafka に出すときは、ce_id を `{tenant}/{deviceId}/{boot}/{seq}` から作る UUID の版 5、`ce_time` を受け取った時刻、キーを `{tenant}/{deviceId}` にする(ADR-0039 §5〜§7)。
+
 ## 3. HTTP ステータスとリトライ
 - Retry 対象: 408, 429, 502, 503, 504, 接続エラー。429/503 は `Retry-After` を優先。
 - 既定 RetryPolicy: initial 500ms, multiplier 2.0, max 3 attempts(初回を含む。リトライは 2 回), cap 30s, full jitter(ADR-0011)。
@@ -100,7 +107,7 @@ provider: { owner: team-order, system: order-service }
 consumers:
   - { owner: team-inventory, system: inventory-service, group: inventory.reservation }
 contract: contracts/asyncapi/order-events.v1.yaml
-channels:               # event / cdc では必須。AsyncAPI の channels[*].address と過不足なく一致させる
+channels:               # event / cdc / mqtt では必須。AsyncAPI の channels[*].address と過不足なく一致させる
   - sales.order.created.v1
 tier: 1                 # 1 | 2 | 3
 dataClassification: internal   # public | internal | confidential | restricted

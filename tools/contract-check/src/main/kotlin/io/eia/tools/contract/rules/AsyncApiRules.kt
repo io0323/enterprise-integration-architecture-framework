@@ -10,7 +10,11 @@ import io.eia.tools.contract.text
 import tools.jackson.databind.JsonNode
 import kotlin.io.path.isRegularFile
 
-/** AsyncAPI 3.0 の構造(公式 JSON Schema)・Topic 命名・標準ヘッダ・Avro payload の検査。 */
+/**
+ * AsyncAPI 3.0 の構造(公式 JSON Schema)・Topic 命名・標準ヘッダ・Avro payload の検査。
+ * servers がすべて MQTT の契約(デバイスと Broker の間。ADR-0039)は、Kafka の規則の代わりに MQTT の規則
+ * (トピックの形・MQTT v5 のユーザープロパティ・contracts/devices の形式のスキーマ)で検査する。
+ */
 object AsyncApiRules {
     /** INTEGRATION_STANDARDS §2 の必須ヘッダ(CloudEvents binary mode + トレース)。 */
     val STANDARD_HEADERS = listOf("ce_id", "ce_source", "ce_type", "ce_time", "ce_specversion", "traceparent", "correlationid")
@@ -37,24 +41,40 @@ object AsyncApiRules {
                     .orEmpty()
             val channelAddresses = channels.mapNotNull { it.text("address") }
             addresses[document.path] = channelAddresses
+            val mqtt = MqttRules.isMqtt(document)
             channelAddresses.forEach { address ->
-                Naming.checkTopic(address)?.let { (rule, message) -> violations += Violation(document.path, rule, message) }
+                val problem = if (mqtt) Naming.checkMqttTopic(address) else Naming.checkTopic(address)
+                problem?.let { (rule, message) -> violations += Violation(document.path, rule, message) }
             }
-            channels.forEach { channel -> violations += checkMessages(contracts, document, channel) }
+            channels.forEach { channel -> violations += checkMessages(contracts, document, channel, mqtt) }
         }
         return Result(violations, addresses)
     }
 
     /**
-     * [document] の message の payload が参照する Avro スキーマ(リポジトリルートからの相対パス。contracts/avro の .avsc で、存在するものだけ)。
-     * ライフサイクルの検査(契約のファイルの削除)で、連携が使う Avro を辿るのに使う。
+     * [document] の message の payload が参照するスキーマ(リポジトリルートからの相対パス。contracts/avro の .avsc と、
+     * contracts/devices の形式のスキーマで、存在するものだけ)。
+     * ライフサイクルの検査(契約のファイルの削除)・互換性の検査と状態の連動で、連携が使うスキーマを辿るのに使う。
      */
-    fun avroReferences(
+    fun payloadReferences(
         contracts: Contracts,
         document: ContractDocument,
     ): Set<String> {
-        val avroDir = contracts.root.resolve(Contracts.CONTRACTS_DIR).resolve("avro")
-        return document.tree
+        val dirs = listOf("avro", "devices").map { contracts.root.resolve(Contracts.CONTRACTS_DIR).resolve(it) }
+        return messages(document)
+            .mapNotNull { payloadRef(document, it) }
+            .map {
+                document.file.parent
+                    .resolve(it)
+                    .normalize()
+            }.filter { target -> dirs.any(target::startsWith) && target.isRegularFile() }
+            .map(contracts::relative)
+            .toSet()
+    }
+
+    /** 全 channel の message(ローカルの参照をたどった本体)。 */
+    private fun messages(document: ContractDocument): List<JsonNode> =
+        document.tree
             .get("channels")
             ?.properties()
             .orEmpty()
@@ -63,20 +83,16 @@ object AsyncApiRules {
                     .get("messages")
                     ?.properties()
                     .orEmpty()
-                    .mapNotNull { (_, ref) ->
-                        val payload = ref.resolveLocalRef(document.tree).get("payload")?.resolveLocalRef(document.tree)
-                        payload
-                            ?.get("schema")
-                            ?.text("\$ref")
-                            ?.takeIf { it.endsWith(".avsc") }
-                            ?.let {
-                                document.file.parent
-                                    .resolve(it)
-                                    .normalize()
-                            }?.takeIf { it.startsWith(avroDir) && it.isRegularFile() }
-                            ?.let(contracts::relative)
-                    }
-            }.toSet()
+                    .map { (_, ref) -> ref.resolveLocalRef(document.tree) }
+            }
+
+    /** payload が参照するファイル(`payload.schema.$ref`(Avro など)か `payload.$ref`(JSON Schema))。 */
+    internal fun payloadRef(
+        document: ContractDocument,
+        message: JsonNode,
+    ): String? {
+        val payload = message.get("payload")?.resolveLocalRef(document.tree) ?: return null
+        return payload.get("schema")?.text("\$ref") ?: payload.text("\$ref")?.takeUnless { it.startsWith("#/") }
     }
 
     private fun checkStructure(document: ContractDocument): List<Violation> {
@@ -91,6 +107,7 @@ object AsyncApiRules {
         contracts: Contracts,
         document: ContractDocument,
         channel: JsonNode,
+        mqtt: Boolean,
     ): List<Violation> {
         val address = channel.text("address") ?: "(address なし)"
         return channel
@@ -100,7 +117,11 @@ object AsyncApiRules {
             .flatMap { (name, ref) ->
                 val message = ref.resolveLocalRef(document.tree)
                 val label = "$address の message '$name'"
-                checkHeaders(document, message, label) + checkPayload(contracts, document, message, label)
+                if (mqtt) {
+                    MqttRules.checkHeaders(document, message, label) + MqttRules.checkPayload(contracts, document, message, label)
+                } else {
+                    checkHeaders(document, message, label) + checkPayload(contracts, document, message, label)
+                }
             }
     }
 

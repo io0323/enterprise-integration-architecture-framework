@@ -1,0 +1,90 @@
+asyncapi: 3.0.0
+info:
+  title: Device Telemetry (MQTT)
+  version: 1.0.0
+  description: |
+    デバイスが MQTT Broker(IoT の境界。Framework 2.3・17.3)に送るテレメトリ(INT-IOT-001。ADR-0039)。
+    デバイスと Broker の間の通信の設計(無線・電力・デバイスの管理・FOTA)は範囲外で、この契約は Broker で受け取る形だけを決める。
+    **QoS 1**(At-Least-Once)。retain は使わない。デバイスはデバイスごとの資格情報で接続し、ACL で自分のトピック
+    (`devices/{tenant}/{deviceId}/...`)にしか書けない(ローカルはパスワードのファイル、本番はデバイスごとの証明書の mTLS。ADR-0039 §3)。
+    iot-bridge が購読し、`iot.telemetry.reported.v1`(INT-IOT-002)に変えて出す。デバイスの ID はトピックから取り、ペイロードの値は信じない。
+
+    **形式の版**: ペイロードは JSON で、`v` が形式の版。何年も前のファームウェアのデバイスが混在するので、iot-bridge はここに並べた版を
+    すべて受け付ける。版は足すだけで、出した版のスキーマは変えない(CC-COMPAT-004)。版をやめる手順は ADR-0039 §4。
+    知らない版は捨てずに `iot.telemetry.reported.v1.dlq` に隔離する。
+
+    **重複**: QoS 1 の再送で同じメッセージが届くことがある。`boot`(起動のたびに作るセッション ID)と `seq`(起動ごとの番号)の組で
+    メッセージを識別する(ADR-0039 §5)。
+
+    **ヘッダ**: MQTT v5 のユーザープロパティで `traceparent` と `correlationid` を運ぶ(INTEGRATION_STANDARDS §2)。
+    MQTT v3.1.1 のデバイスはユーザープロパティを送れないので必須にしない(iot-bridge が新しいトレースを始める)。
+  contact:
+    name: team-iot
+defaultContentType: application/json
+servers:
+  local:
+    host: localhost:19883
+    protocol: mqtt
+    protocolVersion: "5.0"
+    description: ローカル(P03 の docker compose の iot profile。コンテナ内からは mosquitto:1883)。ローカルは平文(ADR-0008。TLS 化は #29)
+    security:
+      - $ref: "#/components/securitySchemes/devicePassword"
+channels:
+  deviceTelemetry:
+    address: devices/{tenant}/{deviceId}/telemetry
+    parameters:
+      tenant:
+        description: テナント(小文字の kebab-case)
+      deviceId:
+        description: デバイスの ID(テナントの中で一意。小文字の英数字と -)
+    messages:
+      telemetryV1:
+        $ref: "#/components/messages/TelemetryV1"
+      telemetryV2:
+        $ref: "#/components/messages/TelemetryV2"
+operations:
+  sendTelemetry:
+    action: send
+    channel:
+      $ref: "#/channels/deviceTelemetry"
+    messages:
+      - $ref: "#/channels/deviceTelemetry/messages/telemetryV1"
+      - $ref: "#/channels/deviceTelemetry/messages/telemetryV2"
+    bindings:
+      mqtt:
+        qos: 1
+        retain: false
+        bindingVersion: 0.2.0
+components:
+  securitySchemes:
+    devicePassword:
+      type: userPassword
+      description: デバイスごとのユーザー名(`{tenant}/{deviceId}`)とパスワード(ローカル)。本番はデバイスごとの証明書の mTLS(ADR-0039 §3)
+  messages:
+    TelemetryV1:
+      name: TelemetryV1
+      title: テレメトリ(形式の版 1)
+      contentType: application/json
+      headers:
+        $ref: "#/components/schemas/MqttUserProperties"
+      payload:
+        $ref: "../devices/telemetry.v1.schema.json"
+    TelemetryV2:
+      name: TelemetryV2
+      title: テレメトリ(形式の版 2)
+      contentType: application/json
+      headers:
+        $ref: "#/components/schemas/MqttUserProperties"
+      payload:
+        $ref: "../devices/telemetry.v2.schema.json"
+  schemas:
+    MqttUserProperties:
+      type: object
+      description: MQTT v5 のユーザープロパティ(INTEGRATION_STANDARDS §2)。MQTT v3.1.1 のデバイスは送れないので必須にしない
+      properties:
+        traceparent:
+          type: string
+          description: W3C Trace Context。iot-bridge はこのトレースの子のスパンで処理し、Kafka のヘッダに引き継ぐ
+        correlationid:
+          type: string
+          description: 業務トランザクション ID。なければ iot-bridge が採番する

@@ -1,7 +1,7 @@
 # Module Design
 
 ## 1. Gradle モジュール命名
-`:shared:kernel`, `:shared:resilience`, `:shared:canonical-model`, `:shared:integration-sdk`
+`:shared:kernel`, `:shared:resilience`, `:shared:canonical-model`, `:shared:integration-sdk:http`, `:shared:integration-sdk:mqtt`
 `:platform:<name>`, `:services:<service>:{domain,application,adapters,app}`, `:tools:<name>`
 `:tools:device-simulator`(KMP: linuxX64 / macosArm64 の実行バイナリ)、`:tests:e2e`(JVM。`e2eTest` タスク。通常の build には含めない)
 パッケージ(basePackage は ADR-0001 で決定。既定 `io.eia`):
@@ -10,6 +10,7 @@
 |---|---|---|
 | `services/<service>/<layer>` | `<basePackage>.<service>.<layer>`(`<service>` はディレクトリ名から `-` を除いた値) | `io.eia.order.domain`, `io.eia.legacysim.app`(services/legacy-sim) |
 | `shared/<module>` | `<basePackage>.shared.<module>` | `io.eia.shared.kernel`, `io.eia.shared.kernel.money` |
+| `shared/integration-sdk/<part>` | `<basePackage>.shared.sdk.<part>`(`<part>` は http / mqtt) | `io.eia.shared.sdk.http`, `io.eia.shared.sdk.mqtt` |
 | `shared/canonical-model` | `<basePackage>.shared.canonical.<domain>`(ドメイン単位: common / sales / catalog / billing / logistics。ADR-0011) | `io.eia.shared.canonical.sales` |
 | `platform/<module>` | `<basePackage>.platform.<module>` | `io.eia.platform.observability` |
 | `tools/<module>` | `<basePackage>.tools.<module>` | `io.eia.tools.architecture` |
@@ -21,7 +22,8 @@ Kotlin のパッケージ名に `-` は使えないため、サービスのパ�
 
 | モジュール | 種別 | ターゲット |
 |---|---|---|
-| `shared/kernel`, `shared/resilience`, `shared/canonical-model`, `shared/integration-sdk` | KMP | jvm, js(IR), linuxX64, macosArm64 |
+| `shared/kernel`, `shared/resilience`, `shared/canonical-model`, `shared/integration-sdk/http` | KMP | jvm, js(IR), linuxX64, macosArm64 |
+| `shared/integration-sdk/mqtt` | KMP | jvm, linuxX64, macosArm64(js は ADR-0038 で決める。ブラウザからは TCP の MQTT を使えない) |
 | `services/*/domain`, `services/*/application` | KMP(commonMain) | jvm のみ(`eia.kmp-domain` の DSL で追加可能) |
 | `tools/device-simulator` | KMP | linuxX64, macosArm64 |
 | `platform/*`, `services/*/{adapters,app}`, `tools/*`(上記以外), `tests/e2e` | JVM | — |
@@ -32,7 +34,8 @@ flowchart BT
   kernel[shared:kernel<br/>KMP]
   res[shared:resilience<br/>KMP] --> kernel
   canon[shared:canonical-model<br/>KMP] --> kernel
-  sdk[shared:integration-sdk<br/>KMP] --> res
+  sdkhttp[shared:integration-sdk:http<br/>KMP] --> res
+  sdkmqtt[shared:integration-sdk:mqtt<br/>KMP] --> res
   dom[services:x:domain<br/>KMP] --> kernel
   app[services:x:application<br/>KMP] --> dom
   adp[services:x:adapters<br/>JVM] --> app
@@ -40,8 +43,9 @@ flowchart BT
   adp --> plat[platform:*<br/>JVM]
   plat --> res
   boot[services:x:app<br/>JVM] --> adp
-  sim[tools:device-simulator<br/>KMP native] --> sdk
-  e2e[tests:e2e<br/>JVM] --> sdk
+  sim[tools:device-simulator<br/>KMP native] --> sdkmqtt
+  e2e[tests:e2e<br/>JVM] --> sdkhttp
+  e2e --> sdkmqtt
 ```
 - `platform:*` は `services:*` に依存しない。
 - `services:*:domain` と `services:*:application` は `shared:canonical-model` に依存しない。domain はサービス独自のモデルとし、Canonical Model との変換は adapters で行う(ADR-0010 Decision 7。Konsist の `canonicalModelOutsideDomainAndApplication`)。
@@ -67,7 +71,9 @@ flowchart BT
 - `platform:test-support` はテストのソースセット(`test` / `integrationTest` など)からだけ参照する。
 - `services` 間のコード依存は禁止(連携は契約経由のみ)。契約モデルは contracts から生成するか `adapters` 内で定義する。
 - `tests:e2e` は `services:*` にコード依存しない(契約・SDK・公開エンドポイント経由のみで検証する)。P05 の時点では SDK(P11)がないため、JDK の HttpClient で公開エンドポイント(Gateway・Keycloak・Tempo・Prometheus・Grafana)に接続する。ソースは `src/e2eTest/kotlin`、実行は `make e2e`(起動した基盤に対して)と ci の `e2e` ジョブ。
-- `tools:device-simulator` は `shared:integration-sdk` にのみ依存する。
+- `tools:device-simulator` は SDK の中の `shared:integration-sdk:mqtt` にのみ依存する(HTTP の部分の Curl のエンジン(libcurl)を native のバイナリに巻き込まない。ADR-0039 §1)。
+- SDK は HTTP の部分(`shared:integration-sdk:http`。Ktor Client。ADR-0037)と MQTT の部分(`shared:integration-sdk:mqtt`。ADR-0038)に分け、互いに依存しない。リトライ・traceparent は `shared:resilience`、待ち時間の計算は `shared:kernel` の `RetryPolicy` を使う(同じ処理を SDK に作らない)。
+- `tests:e2e` のトークンの取得は、P11 で `shared:integration-sdk:http` に置き換える(期限の前に取り直す処理を 2 か所に持たない。#14)。
 
 ## 3. サービス内部レイアウト(例: order)
 ```
@@ -141,7 +147,7 @@ services/saas-mock/app/
 | batch-etl | 分析基盤への ELT/ETL(ADR-0031)と日次の売上ファイルの送り手(P09)。注文のイベントを日次の DAG で取り込み(住所はロードの前に地域に変える ETL)、日本時間の日次のパーティションを SQL で置換して作る(ELT)。遅れて届いたデータは 31 日前まで作り直す。週次の Full 照合(order-service の日次の集計を Gateway 経由で読み、件数とハッシュを比べる。38 日分)。日次の DAG の完了の後に、日次の売上ファイル(INT-SALES-004。Parquet / CSV + gzip を S3 互換ストレージに置く。ADR-0031 §8)を書く。コマンドは `migrate`・`serve`(毎日 01:00 JST に前日の分、毎週月曜 07:00 JST に照合)・`run <yyyy-MM-dd> [--restart]`・`reconcile <yyyy-MM-dd> [--restart]`・`sales-file <yyyy-MM-dd> [--restart]`・`skip-lost-events [--confirm]`(保持期間を超えた回復。ADR-0031 §7)。取り込みの遅れを保持期間に対して監視する | Batch, File(S3 互換ストレージ) |
 | file-exchange | ファイル授受(ADR-0032)。P09 ⑤a: 受け口(S3 互換ストレージの `inbox/sales-daily/`)のマニフェストの到着で DAG `file-exchange.receive`(パーティションはファイル名。データファイルがなくても起動)を動かし、検査 → 移動の決定を `received_file` に記録 → archive / quarantine に移す(記録が移動中なら検査をせずに続ける)。serve の中の見回りが、受け取り済みの名前で届いたファイルを送り直し(`duplicate`)・名前の使い回し(`name_reused`)として quarantine の番号ごとの場所に移す(受け取りの実行と同じロック・記録の状態・部分一意索引で排他)。domain に受け取りの記録と理由の規則、application に受け取り・見回りのユースケースと Port(`Inbox`・`ReceivedFiles`・`FileLocks`)、adapters に `S3Inbox`(platform/file-transfer)・`JdbcReceivedFiles`・`BatchFileLocks`・契約の形(`SalesDailyLayout`)、app に起動・見回り・コマンド(`migrate`・`serve`・`receive <名前> [--restart]`・`sweep`)。P09 ⑤b: 受け取りの後のステップ `deliver` で、合格のファイルを取引先の台帳(取引先の ID ごとの送り先・ホスト鍵・PGP の公開鍵。`PartnerRegistry`)に従い、PGP で暗号化・署名して SFTP で送る(`SftpPartnerOutbox`。取引先ごとの Resilience `sftp-{ID}`)。配送の記録 `delivery`(SENDING → SENT)と、送る前の正式名の確認で冪等 | MFT (S3 互換ストレージ/SFTP) |
 | saas-mock / webhook-receiver / integration-flow | SaaS 連携(P10。ADR-0035・ADR-0036)。saas-mock(P10 ②): CRM の模擬(外部の契約 `contracts/external/crm-api.v1.yaml` を実装。カーソルのページング・Rate Limit(429 と `Retry-After`)・署名した Webhook の送信(Standard Webhooks。再送のたびに新しい時刻で署名し直す・鍵の差し替えの間は新旧の両方で署名・再送の間隔を設定できる・`webhookDelay` で順序の逆転を作る)・管理の API(E2E が顧客を作る・変える)。1 モジュール)。webhook-receiver(P10 ③。4 モジュール): 署名の検証・受け取りの記録と Outbox(同じトランザクション)・すぐに 204。domain に受け取りの記録(`WebhookReceipt`。本文を持たない)と重複の判定・保持期間(`ReceiptRetention`。既定 30 日)、application に受け取り・保持期間の削除のユースケースと Port(`WebhookReceipts`・`IngestOutbox`)、adapters に受け口(`webhookReceiver`。生のバイト列で platform/webhook の検証・`WebhookSecrets`(`_PREVIOUS` の鍵)・`WebhookMetrics`)・`JdbcWebhookReceipts`・`OutboxWebhookIngest`、app に起動(mTLS の受け口と平文のヘルスチェック)・削除のジョブ・コマンド(`migrate`・`serve`)。integration-flow: Flow の定義(`contracts/flows`)に従い、取り込みのトピックと SaaS の API の定期の同期から Canonical の顧客のイベントを出す。P10 ④(中核): domain に Flow の定義のモデル(`FlowDefinition`・`FlowCatalog`)・元のレコードの値(`SourceValue`。JSON に依存しない)・写し方(`FlowMapper`。決まった変換の一覧だけ)・振り分け・新旧の判定(`VersionDecision`)、application に読み込み(`LoadFlowsUseCase`。Port `FlowDefinitions`)と 1 件の変換(`TransformRecordUseCase`)、adapters に YAML の読み込みと起動時の検証(`YamlFlowDefinitions`。JSON Schema・ファイル名・Canonical の項目)・JSON の読み取り(`JsonRecords`)・Canonical への変換(`CanonicalTypes`)、app に `validate` のコマンド。P10 ⑤(接続): application に Webhook の取り込み(`IngestWebhookUseCase`。冪等消費・新旧の判定・発行を 1 つのトランザクション)と定期の同期(`SyncFlowUseCase`。Watermark)、両方が使う `RecordPublisher`(同じ新旧の記録)、Port(`FlowVersions`・`ProcessedMessages`・`CanonicalPublisher`・`SaasConnector`・`SyncWatermarks`)、adapters に取り込みのトピックの購読(`WebhookIngestHandler`。Flow の event の trigger のトピック・Consumer Group `integration-flow.webhook-ingest`)・`JdbcFlowVersions`・`JdbcSyncWatermarks`・`InboxProcessedMessages`(platform/inbox)・`OutboxCanonicalPublisher`(`sales.customer.changed.v1`)・CRM の Connector(`CrmCustomersConnector`。Resilience `saas-crm`・429 と Retry-After・Tolerant Reader)・`FlowMetrics`、app に `migrate`・`serve`(起動時の検証・購読・Flow ごとの定期の同期・冪等消費の記録の掃除) | REST, Webhook, Kafka(Outbox) |
-| iot-bridge | MQTT→Kafka | MQTT, Kafka |
+| iot-bridge | MQTT → Kafka の橋渡し(P11。ADR-0039)。デバイスの形式の版ごとの読み替え(1 つの Avro の形にそろえる)・時刻(デバイスの申告と受け取り)・ce_id(`{tenant}/{deviceId}/{boot}/{seq}` の UUID 版 5)・Kafka の確認の後の PUBACK・DLQ と再処理。DB を持たない | MQTT(INT-IOT-001)→ Kafka(`iot.telemetry.reported.v1`。INT-IOT-002) |
 | b2b-gateway | EDI | SFTP, EDIFACT |
 | bff-graphql | フロント集約 | GraphQL |
 

@@ -73,6 +73,9 @@ data class Contracts(
     // iPaaS 風の Flow の定義(contracts/flows の {id}.v{n}.flow.yaml)と、その形式(flow.v{n}.schema.json。ADR-0036)
     val flows: List<ContractDocument> = emptyList(),
     val flowSchemas: List<ContractDocument> = emptyList(),
+    // デバイスの形式のスキーマ(contracts/devices の {message}.v{n}.schema.json。ADR-0039 §4)と、contracts/devices の全ファイル(名前の検査用)
+    val devicePayloads: List<ContractDocument> = emptyList(),
+    val deviceFiles: List<String> = emptyList(),
     val loadViolations: List<Violation>,
 ) {
     fun relative(file: Path): String = root.relativize(file).invariantSeparatorsPathString
@@ -82,6 +85,7 @@ data class Contracts(
         const val CATALOG_SCHEMA = "contracts/catalog/catalog.schema.json"
         const val EXTERNAL_DIR = "contracts/external/"
         const val FLOW_SUFFIX = ".flow.yaml"
+        const val DEVICES_DIR = "contracts/devices/"
 
         private val yaml = YAMLMapper.builder().build()
         private val json = JsonMapper.builder().build()
@@ -138,6 +142,8 @@ data class Contracts(
                     files(contracts.resolve("flows"))
                         .filter { it.name.startsWith("flow.") && it.name.endsWith(".schema.json") }
                         .mapNotNull(::readTree),
+                devicePayloads = files(contracts.resolve("devices")).filter { it.name.endsWith(".schema.json") }.mapNotNull(::readTree),
+                deviceFiles = files(contracts.resolve("devices")).map(::relative),
                 loadViolations = violations,
             )
         }

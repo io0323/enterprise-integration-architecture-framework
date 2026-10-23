@@ -36,6 +36,14 @@ class ContractSchemasSpec :
 
             subjects shouldContain SchemaSubject("sales.order.created.v1", CONTRACTS.resolve("avro/sales/OrderCreated.avsc").readText())
             subjects shouldContain SchemaSubject("sales.order.cancelled.v1", CONTRACTS.resolve("avro/sales/OrderCancelled.avsc").readText())
+            subjects shouldContain
+                SchemaSubject("iot.telemetry.reported.v1", CONTRACTS.resolve("avro/iot/TelemetryReported.avsc").readText())
+        }
+
+        test("MQTT の契約(デバイスと Broker の間)は Kafka のトピックではないので登録しない(ADR-0039)") {
+            val subjects = ContractSchemas.load(CONTRACTS)
+
+            subjects.map { it.topic }.filter { it.startsWith("devices/") } shouldBe emptyList()
         }
 
         test("文書内の \$ref を何段でも辿る") {

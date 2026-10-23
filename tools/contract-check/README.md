@@ -49,7 +49,7 @@ ID は `CC-{区分}-{連番}`。定義は `src/main/kotlin/io/eia/tools/contract
 | `CC-STRUCT-002` | OpenAPI として正しいこと(swagger-parser の検証) | 5, 15.2 | OpenAPI 3.1 の仕様に合わせて記述を直す |
 | `CC-STRUCT-003` | AsyncAPI 3.0 の公式 JSON Schema に適合すること | 6.3, 15.2 | AsyncAPI 3.0 の仕様に合わせて記述を直す |
 | `CC-STRUCT-004` | Avro スキーマとして読めること | 6.3 | Avro 1.12 の仕様に合わせて直す(default の型、名前の参照順など) |
-| `CC-STRUCT-005` | JSON Schema(manifest・カタログ・ファイルの仕様)がメタスキーマに適合すること | 9, 16.1 | JSON Schema 2020-12 の仕様に合わせて直す |
+| `CC-STRUCT-005` | JSON Schema(manifest・カタログ・ファイルの仕様・デバイスの形式)がメタスキーマに適合すること | 9, 16.1 | JSON Schema 2020-12 の仕様に合わせて直す |
 | `CC-NAMING-001` | Topic は {domain}.{entity}.{event}.v{n} | 6.2, 16.1 | 小文字・kebab-case の 4 セグメントに直す(例 sales.order.created.v1)。DLQ は {topic}.dlq |
 | `CC-NAMING-002` | Command Topic の event セグメントは cmd-{command} | 6.2, ADR-0006 | event セグメントを cmd-{command}(kebab-case)にする(例 inventory.stock.cmd-reserve.v1) |
 | `CC-NAMING-003` | OpenAPI の servers[*].url は /{domain} で終わる | 5.2, ADR-0005 | servers には Gateway 公開 URL を /{domain} まで書く(例 http://localhost:19080/sales) |
@@ -60,12 +60,16 @@ ID は `CC-{区分}-{連番}`。定義は `src/main/kotlin/io/eia/tools/contract
 | `CC-NAMING-008` | Avro の namespace は io.eia.events.{domain}、record は PascalCase、ファイル名は {Record}.avsc | 6.3, INTEGRATION_STANDARDS §1 | contracts/avro/{domain}/{Record}.avsc に置き、namespace と名前を合わせる(共通型は io.eia.events.common) |
 | `CC-NAMING-009` | OpenAPI / AsyncAPI のファイル名は {name}.v{n}.yaml で、info.version のメジャーと n が一致する | 5.3, 16.1 | ファイル名を {name}.v{n}.yaml にし、破壊的変更は新しいファイル(v{n+1})で行う |
 | `CC-NAMING-010` | Topic・API の domain が連携 ID の domain と一致する | 16.1, ADR-0005 | 連携 ID の {DOMAIN} を小文字にした値を Topic の先頭セグメント・servers の末尾に使う |
+| `CC-NAMING-011` | MQTT のトピックは devices/{tenant}/{deviceId}/{channel} | 17.3, INTEGRATION_STANDARDS §1, ADR-0039 | address を devices/{tenant}/{deviceId}/{channel}(channel は小文字・kebab-case)にする。ACL はこの形でデバイスごとに書く |
+| `CC-NAMING-012` | contracts/devices のファイル名は {message}.v{n}.schema.json | 17.3, ADR-0039 | ファイル名を {message}.v{n}.schema.json にし、n をスキーマの v の const と一致させる(例 telemetry.v2.schema.json) |
 | `CC-API-001` | POST は Idempotency-Key ヘッダが必須 | 5.4 | POST の parameters に Idempotency-Key(in: header、required: true)を追加する |
 | `CC-API-002` | 全 operation に 429 + Retry-After の応答がある | 5.6 | responses に 429 を追加し、headers に Retry-After を定義する |
 | `CC-API-003` | 全 operation に security が定義されている(匿名アクセスを許さない) | 12 | operation かトップレベルに security(OAuth2 のスコープ)を定義する。空の要件 {} は使わない |
 | `CC-API-004` | Webhook の受け口(x-eia-webhook: true)は、署名のヘッダ(webhook-id・webhook-timestamp・webhook-signature)と署名の方式を定義する | 10.2, 12, ADR-0035 | 3 つのヘッダを required の header で定義し、security に apiKey(in: header、name: webhook-signature)の方式を指定する。Idempotency-Key の代わりに webhook-id で重複を判定する |
 | `CC-EVENT-001` | メッセージのヘッダに CloudEvents(ce_*)・traceparent・correlationid が必須で定義されている | 6.3, 14 | headers に ce_id, ce_source, ce_type, ce_time, ce_specversion, traceparent, correlationid を required で定義する |
 | `CC-EVENT-002` | メッセージの payload は contracts/avro の Avro スキーマを参照する | 6.3 | payload を schemaFormat: application/vnd.apache.avro+json と、存在する .avsc への $ref にする |
+| `CC-MQTT-001` | MQTT のメッセージのヘッダ(MQTT v5 のユーザープロパティ)に traceparent・correlationid が定義されている | 14, 17.3, ADR-0039 | headers の properties に traceparent と correlationid を定義する(MQTT v3.1.1 のデバイスは送れないので required にはしない) |
+| `CC-MQTT-002` | MQTT のメッセージの payload は contracts/devices の形式のスキーマを参照し、スキーマは v(形式の版)・boot・seq を必須にする | 13, 17.3, ADR-0039 | payload を contracts/devices/{message}.v{n}.schema.json への $ref にし、スキーマの required に v(const n)・boot・seq を含める。どの契約も参照しない形式のスキーマは置かない |
 | `CC-CATALOG-001` | カタログがカタログスキーマに適合する(Owner・Tier・SLO・機密区分など) | 16.1 | contracts/catalog/catalog.schema.json の必須項目と値を満たす |
 | `CC-CATALOG-002` | カタログの contract が存在する | 16.1 | contract にリポジトリルートからの正しいパスを書く |
 | `CC-CATALOG-003` | 連携 ID が重複しない | 16.1 | 未使用の連番を割り当てる |
@@ -82,6 +86,7 @@ ID は `CC-{区分}-{連番}`。定義は `src/main/kotlin/io/eia/tools/contract
 | `CC-COMPAT-001` | Avro スキーマが main の版に対して FULL 互換(BACKWARD かつ FORWARD) | 6.3, 13, 15.3, ADR-0014 | 追加・削除できるのは default 付きの項目だけ。必須項目の追加・削除、型変更、リネーム、enum 値の増減は新しいバージョンのトピック(.v{n+1})で行う |
 | `CC-COMPAT-002` | OpenAPI に main の版からの破壊的変更がない(oasdiff) | 5.3 | 互換な変更(任意項目の追加など)にするか、/v{n+1} を新設して並行提供する |
 | `CC-COMPAT-003` | ファイルの仕様が main の版に対して互換(列の削除・型や必須性の変更・並べ替え・enum の変更・形式の変更がない) | 9, 15.3 | 足してよいのは、末尾の任意(nullable: true)の列と、新しい形式だけ。ほかの変更は新しい版のファイル({system}_{dataset}.v{n+1}.yaml)で行う |
+| `CC-COMPAT-004` | デバイスの形式のスキーマ(contracts/devices)を main の版から変えていない・消していない(説明の文だけは変えてよい) | 15.3, 17.3, ADR-0039 | 出したデバイスの形式は変えない(古いファームウェアのデバイスが送り続ける)。変更は新しい版のファイル({message}.v{n+1}.schema.json)で足す。版をやめるときは ADR-0039 §4 の手順で例外を承認してもらう |
 | `CC-EXTERNAL-001` | 外部の契約(contracts/external)の破壊的変更(警告。ジョブは失敗させない) | 10.4, 16.1, ADR-0035 | ベンダーの変更に合わせて、取り込みの側(Connector・Flow の定義)を直す。カタログの external.source に変更の出典を書く |
 | `CC-WAIVER-001` | 互換性検査の例外リストの形式が正しい | 16.1, ADR-0013 | 各例外に rule(CC-COMPAT-*)・file・contains・reason・issue・expires(YYYY-MM-DD)を書く |
 | `CC-WAIVER-002` | 期限切れの互換性検査の例外が残っていない | 16.1, ADR-0013 | 例外が不要になっていれば削除する。まだ必要なら理由を Issue に残して expires を延ばす |
@@ -102,6 +107,12 @@ ID は `CC-{区分}-{連番}`。定義は `src/main/kotlin/io/eia/tools/contract
 - **Webhook の受け口**(自社の OpenAPI の操作に `x-eia-webhook: true`)は、Idempotency-Key の代わりに、署名の 3 つのヘッダ(`webhook-id`・`webhook-timestamp`・`webhook-signature`。required)と、security の署名の方式(`apiKey`・`in: header`・`name: webhook-signature`)を検査する(`CC-API-004`)。429 は従来どおり必須。
 - **外部の契約**(`contracts/external/`。SaaS のベンダーが持ち主の API の写し)には、自社の API の規則(命名・Idempotency-Key・429・security)を当てない。構造(`CC-STRUCT-002`)・ファイル名(`CC-NAMING-009`)・登録(`CC-CATALOG-006`)・ライフサイクルの検査は当てる。使う連携は `external` が必須(`CC-CATALOG-007`)。比較元に対する破壊的変更は、違反ではなく警告(`CC-EXTERNAL-001`。Step Summary に出る)。
 - **Flow の定義**(`contracts/flows/{id}.v{version}.flow.yaml`)は、`flow.v1.schema.json` への適合・ファイル名・振り分けの形(`CC-FLOW-001`)と、参照(カタログの連携・トピック・対応表。mapping が Canonical Model の項目だけで、必須の項目をすべて書いていること。`CC-FLOW-002`)を検査する。
+
+## MQTT の契約とデバイスの形式(ADR-0039)
+
+- servers がすべて MQTT(`mqtt`・`secure-mqtt`)の AsyncAPI は、デバイスと Broker の間の契約として扱う。Kafka の規則(`CC-NAMING-001`・`CC-EVENT-001`・`CC-EVENT-002`)の代わりに、トピックの形(`CC-NAMING-011`)・MQTT v5 のユーザープロパティ(`CC-MQTT-001`)・形式のスキーマの参照(`CC-MQTT-002`)を検査する。カタログの domain とトピックの照合(`CC-NAMING-010`)は当てない(MQTT のトピックは domain を持たない)。
+- **デバイスの形式のスキーマ**(`contracts/devices/{message}.v{n}.schema.json`)は、`v`(const はファイル名の版)・`boot`・`seq` を必須にする(`CC-MQTT-002`。重複の判定に使う)。どの MQTT の契約も参照しない形式のスキーマは置かない。
+- 古いファームウェアのデバイスは送り続けるので、**出した形式のスキーマは変えない・消さない**(`CC-COMPAT-004`。説明の文 `description`・`title`・`examples`・`$comment` だけは直してよい)。変更は新しい版のファイルで足す。版をやめるときは、契約から外してファイルを消し、承認者と期限のある例外で許可する(ADR-0039 §4)。この削除は `CC-LIFECYCLE-003` の対象から外している(連携を続けたまま古い版だけをやめるため)。
 
 ## 連携のライフサイクルの検査(`CC-LIFECYCLE-*`。ADR-0034)
 
