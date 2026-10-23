@@ -31,3 +31,4 @@ Dependabot は github-actions の更新を、月 1 回、1 つの PR にまと�
 
 ## 履歴
 - 2026-09-28: serialize-javascript 6.0.2 → 7.1.2(GHSA-5c6j-r48x-rmvq・GHSA-qj8w-gfj5-8c6v)、diff 7.0.0 → 8.0.4(GHSA-73rr-hh4g-fpgx)。mocha 11.7.6 の `generateDiff` と `BufferedWorkerPool.serializeOptions` が動くことを確かめた。
+- 2026-10-23: P11 ②a で shared/integration-sdk/http(Ktor Client の JS のエンジン)が ws と @js-joda/core(kotlinx-datetime)を持ち込んだ。ws 8.20.1 は GHSA-96hv-2xvq-fx4p(< 8.21.0)に当たるので、`npm-ws` を 8.22.0 に固定した。

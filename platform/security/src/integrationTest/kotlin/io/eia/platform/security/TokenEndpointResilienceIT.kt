@@ -5,11 +5,8 @@ import eu.rekawek.toxiproxy.ToxiproxyClient
 import eu.rekawek.toxiproxy.model.ToxicDirection
 import io.eia.platform.reliability.ResilienceMetrics
 import io.eia.platform.security.secret.EnvSecretProvider
-import io.eia.platform.security.token.AccessToken
 import io.eia.platform.security.token.ClientCredentialsConfig
 import io.eia.platform.security.token.ClientCredentialsTokenProvider
-import io.eia.platform.security.token.TokenEndpointUnavailable
-import io.eia.platform.security.token.TokenError
 import io.eia.platform.testsupport.InfraImages
 import io.eia.shared.kernel.Jitter
 import io.eia.shared.kernel.Result
@@ -19,6 +16,9 @@ import io.eia.shared.resilience.CircuitState
 import io.eia.shared.resilience.Resilience
 import io.eia.shared.resilience.ResilienceConfig
 import io.eia.shared.resilience.SlidingWindow
+import io.eia.shared.sdk.http.token.AccessToken
+import io.eia.shared.sdk.http.token.TokenEndpointUnavailable
+import io.eia.shared.sdk.http.token.TokenError
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.comparables.shouldBeGreaterThanOrEqualTo
 import io.kotest.matchers.comparables.shouldBeLessThan

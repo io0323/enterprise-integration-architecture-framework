@@ -1,9 +1,10 @@
-package io.eia.platform.reliability
+package io.eia.shared.sdk.http
 
 import io.eia.shared.kernel.DomainError
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.err
 import io.ktor.client.network.sockets.ConnectTimeoutException
+import io.ktor.client.network.sockets.SocketTimeoutException
 import io.ktor.client.plugins.HttpRequestTimeoutException
 import io.ktor.client.plugins.ResponseException
 import io.ktor.client.statement.HttpResponse
@@ -11,9 +12,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.CancellationException
-import java.io.IOException
-import java.net.SocketTimeoutException
-import java.nio.channels.UnresolvedAddressException
+import kotlinx.io.IOException
 import kotlin.time.Clock
 
 /**
@@ -31,7 +30,7 @@ import kotlin.time.Clock
  * | 2xx | [call] の `read` の結果 |
  * | [retryableStatuses](既定 408・429・502・503・504) | [HttpCallUnavailable](Retryable)。429 と 503 は `Retry-After` を retryAfter に入れる |
  * | それ以外の 4xx・5xx(500 を含む) | [HttpCallRejected](NonRetryable) |
- * | 接続の失敗(`IOException`・名前解決の失敗) | [HttpCallUnavailable](Retryable。reason は `connection`) |
+ * | 接続の失敗(`IOException`・名前解決の失敗(JVM の `UnresolvedAddressException`)) | [HttpCallUnavailable](Retryable。reason は `connection`) |
  * | Ktor の HttpTimeout・接続と読み取りのタイムアウト | [HttpCallUnavailable](Retryable。reason は `timeout`) |
  * | キャンセル・そのほかの例外 | 捕まえずに伝える(プログラムの誤りを依存先の障害として数えないため。ADR-0021 §3) |
  *

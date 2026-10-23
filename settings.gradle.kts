@@ -23,6 +23,7 @@ include(
     ":shared:kernel",
     ":shared:resilience",
     ":shared:canonical-model",
+    ":shared:integration-sdk:http",
     ":platform:api",
     ":platform:audit",
     ":platform:batch",

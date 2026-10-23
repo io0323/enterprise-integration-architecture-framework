@@ -2,7 +2,6 @@ package io.eia.batchetl.adapters.http
 
 import io.eia.batchetl.domain.BusinessDay
 import io.eia.batchetl.domain.DailySummary
-import io.eia.platform.reliability.HttpCallRejected
 import io.eia.platform.security.secret.EnvSecretProvider
 import io.eia.platform.security.secret.SecretName
 import io.eia.platform.security.token.ClientCredentialsConfig
@@ -13,6 +12,7 @@ import io.eia.shared.kernel.RetryPolicy
 import io.eia.shared.kernel.UnexpectedError
 import io.eia.shared.resilience.Resilience
 import io.eia.shared.resilience.ResilienceConfig
+import io.eia.shared.sdk.http.HttpCallRejected
 import io.kotest.assertions.fail
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe

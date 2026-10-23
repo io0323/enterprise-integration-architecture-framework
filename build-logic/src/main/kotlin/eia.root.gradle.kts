@@ -26,11 +26,12 @@ kover {
     }
 }
 
-// Kotlin/JS のテストランナー(mocha)の間接的な依存を、脆弱性の修正版に固定する(Dependabot alerts。docs/runbooks/dependabot-kotlin-js.md)。
+// Kotlin/JS のテストランナー(mocha)と Ktor Client の JS のエンジンの間接的な依存を、脆弱性の修正版に固定する(Dependabot alerts。docs/runbooks/dependabot-kotlin-js.md)。
 // 版を変えたら `./gradlew kotlinUpgradeYarnLock` で kotlin-js-store/yarn.lock を作り直す。
 plugins.withType<YarnPlugin> {
     the<YarnRootExtension>().apply {
         resolution("serialize-javascript", libs.version("npm-serialize-javascript"))
         resolution("diff", libs.version("npm-diff"))
+        resolution("ws", libs.version("npm-ws"))
     }
 }

@@ -3,7 +3,6 @@ package io.eia.integrationflow.adapters.out.saas
 import io.eia.integrationflow.adapters.flow.JsonRecords
 import io.eia.integrationflow.application.port.outbound.SaasConnector
 import io.eia.integrationflow.application.port.outbound.SourcePage
-import io.eia.platform.reliability.HttpCallClassifier
 import io.eia.platform.security.secret.SecretName
 import io.eia.platform.security.secret.SecretProvider
 import io.eia.shared.kernel.DomainError
@@ -13,6 +12,7 @@ import io.eia.shared.kernel.UnexpectedError
 import io.eia.shared.kernel.err
 import io.eia.shared.kernel.ok
 import io.eia.shared.resilience.Resilience
+import io.eia.shared.sdk.http.HttpCallClassifier
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.expectSuccess
 import io.ktor.client.request.get

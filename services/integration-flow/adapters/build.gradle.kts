@@ -19,6 +19,8 @@ dependencies {
     implementation(project(":platform:observability"))
     // SaaS の API の Connector: 429 と Retry-After の分類(HttpCallClassifier)・Resilience(ADR-0021・ADR-0035 §6)・API トークン(SecretProvider)
     api(project(":platform:reliability"))
+    // Ktor Client の呼び出しの結果の分類(HttpCallClassifier。ADR-0037)
+    api(project(":shared:integration-sdk:http"))
     api(project(":platform:security"))
     api(libs.ktor.client.core)
     // 永続化: Exposed はトランザクションの管理に使い、ロックの意味が重要な SQL は PreparedStatement で書く(MODULE_DESIGN §3)

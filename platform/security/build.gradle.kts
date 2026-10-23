@@ -6,8 +6,8 @@ plugins {
 // Nimbus JOSE+JWT を参照してよいのはこのモジュールだけ(Konsist の nimbusOnlyInSecurity)。
 dependencies {
     api(project(":shared:kernel"))
-    // トークン取得の Retry と Circuit Breaker、Retry-After の解析(ADR-0019 §4・ADR-0021)。platform 間の依存は Konsist で許可した一覧だけ
-    api(project(":platform:reliability"))
+    // Client Credentials のトークンの取得とキャッシュ・スコープの形式(KMP の SDK と共有。ADR-0019 §4・ADR-0037)
+    api(project(":shared:integration-sdk:http"))
     // 401 / 403 / 503 を Problem Details で返す(ADR-0019 §5・ADR-0022 §2)
     implementation(project(":platform:api"))
     api(libs.ktor.server.auth)
@@ -30,6 +30,8 @@ dependencies {
     testImplementation(project(":platform:test-support"))
 
     integrationTestImplementation(project(":platform:test-support"))
+    // トークンの取得の Resilience のメトリクス(TokenEndpointResilienceIT)
+    integrationTestImplementation(project(":platform:reliability"))
     integrationTestImplementation(libs.ktor.client.cio)
     integrationTestImplementation(libs.testcontainers.toxiproxy)
 }

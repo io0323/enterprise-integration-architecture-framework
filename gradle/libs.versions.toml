@@ -45,6 +45,9 @@ bouncycastle = "1.86"
 # - diff: GHSA-73rr-hh4g-fpgx(< 8.0.3)。9.x は CommonJS の入口がないため、mocha の require と両立する 8.x の最新にする
 npm-serialize-javascript = "7.1.2"
 npm-diff = "8.0.4"
+# Ktor Client の JS のエンジン(shared/integration-sdk/http。P11)が入れる ws を、GHSA-96hv-2xvq-fx4p(< 8.21.0)の修正版に上げる(確認日: 2026-10-23)。
+# 8.x の最新(2026-09-26 公開)。CommonJS の入口(exports の require)がある
+npm-ws = "8.22.0"
 # P04a ④ audit(確認日: 2026-09-28。ADR-0017)
 flyway = "13.8.0"
 postgresql = "42.7.13"

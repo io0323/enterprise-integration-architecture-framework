@@ -67,7 +67,7 @@ class ArchitectureRulesSpec :
                 PlatformDependencyRules.findCycles(graph) shouldContainExactlyInAnyOrder listOf(listOf("a", "b", "c"), listOf("d"))
             }
 
-            test("commonMain の禁止 import(integration-sdk の io.ktor.client は許可)") {
+            test("commonMain の禁止 import(integration-sdk の io.ktor.client・io.ktor.http・io.ktor.utils.io は許可)") {
                 val found = ArchitectureRules.commonMainPurity(violations)
                 found.map { it.detail.substringAfter("import ").substringBefore('(') } shouldContainExactlyInAnyOrder
                     listOf(
@@ -208,7 +208,7 @@ class ArchitectureRulesSpec :
                 PlatformDependencyRules.unexpectedDependencies(compliant).shouldBeEmpty()
                 PlatformDependencyRules.cycles(compliant).shouldBeEmpty()
                 PlatformDependencyRules.dependencies(compliant).map { it.from to it.to }.toSet() shouldBe
-                    setOf("security" to "reliability")
+                    setOf("security" to "api")
             }
 
             test("許可した一覧そのものに循環がない") {

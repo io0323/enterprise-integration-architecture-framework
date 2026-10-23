@@ -1,4 +1,4 @@
-package io.eia.platform.reliability
+package io.eia.shared.sdk.http
 
 import io.eia.shared.kernel.DomainError
 import io.eia.shared.kernel.Jitter

@@ -27,7 +27,6 @@ internal object PlatformDependencyRules {
      * - batch → file-transfer: ファイルの到着の監視の置き場(ObjectReader)とマニフェスト(ADR-0030 §4・ADR-0032 §1)
      * - batch → observability: 実行・ステップの span と traceparent の引き継ぎ(ADR-0030 §5・ADR-0018 §2)
      * - file-transfer → security: S3 の資格情報を SecretProvider から取る(ADR-0032 §1・ADR-0019 §6)
-     * - security → reliability: トークン取得の Retry と Circuit Breaker、Retry-After の解析(ADR-0019 §4・ADR-0021)
      * - security → api: 401 / 403 / 503 を Problem Details で返す(ADR-0019 §5・ADR-0022 §2)
      * - api → observability: Problem Details の correlationId(ADR-0022 §2)
      * - messaging-kafka → schema-registry: 書き込みのスキーマ ID(起動時に解決したもの)と受信時の書き手のスキーマ(ADR-0025 §3)
@@ -44,7 +43,7 @@ internal object PlatformDependencyRules {
             "file-transfer" to setOf("security"),
             "messaging-kafka" to setOf("schema-registry", "observability"),
             "outbox" to setOf("messaging-kafka", "observability"),
-            "security" to setOf("reliability", "api"),
+            "security" to setOf("api"),
             "webhook" to setOf("security"),
         )
 
