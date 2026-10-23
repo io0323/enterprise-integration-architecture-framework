@@ -160,11 +160,16 @@ class LifecycleRules(
             )
         }
 
-    /** 比較元で retired 以外の連携が使う契約のファイル(と、AsyncAPI が参照する Avro)が、消えていないこと。 */
+    /**
+     * 比較元で retired 以外の連携が使う契約のファイル(と、AsyncAPI が参照する Avro)が、消えていないこと。
+     * デバイスの形式のスキーマ(contracts/devices)は除く。連携を続けたまま古い版だけをやめることがあり、
+     * その削除は CC-COMPAT-004(承認者と期限のある例外で許可できる)で止める(ADR-0039 §4)。
+     */
     private fun checkRemovedContracts(base: Contracts): List<Violation> {
         val used =
             ContractUsage
                 .of(base)
+                .filterKeys { !it.startsWith(Contracts.DEVICES_DIR) }
                 .mapValues { (_, catalogs) -> catalogs.filter { it.entry.lifecycle != RETIRED }.map { it.entry.id } }
                 .filterValues { it.isNotEmpty() }
         return used

@@ -3,6 +3,7 @@ package io.eia.tools.contract.rules
 import io.eia.tools.contract.Rule
 
 /** INTEGRATION_STANDARDS §1 の命名規約。各関数は違反していれば (ルール, 内容) を返す。 */
+@Suppress("TooManyFunctions") // 命名の対象ごとに 1 つの関数にする
 object Naming {
     private const val SEGMENT = "[a-z][a-z0-9]*(?:-[a-z0-9]+)*"
     private val TOPIC = Regex("^($SEGMENT)\\.($SEGMENT)\\.($SEGMENT)\\.v[1-9][0-9]*$")
@@ -22,6 +23,8 @@ object Naming {
     private val EDI_SPEC = Regex("^edi/$SEGMENT\\.v[1-9][0-9]*\\.yaml$")
     private val FILE_PATTERNS = listOf(FILE_SPEC, MANIFEST_SCHEMA, FILE_SPEC_SCHEMA, EDI_SPEC)
     private val FILES_README = setOf("README.md")
+    private val MQTT_TOPIC = Regex("^devices/\\{tenant\\}/\\{deviceId\\}/$SEGMENT$")
+    private val DEVICE_PAYLOAD = Regex("^($SEGMENT)\\.v([1-9][0-9]*)\\.schema\\.json$")
 
     /** Topic 名の検査。DLQ(`{topic}.dlq`)は元の Topic 名で検査する。 */
     fun checkTopic(topic: String): Pair<Rule, String>? {
@@ -98,6 +101,22 @@ object Naming {
                 "'$relativePath' は {system}_{dataset}.v{n}.yaml / manifest.v{n}.schema.json / file-spec.v{n}.schema.json / " +
                 "edi/{name}.v{n}.yaml のいずれでもありません"
         }
+
+    /** MQTT のトピック(AsyncAPI の address。{tenant}・{deviceId} はパラメータ)の検査。 */
+    fun checkMqttTopic(topic: String): Pair<Rule, String>? =
+        if (MQTT_TOPIC.matches(topic)) {
+            null
+        } else {
+            Rule.NAMING_MQTT_TOPIC to "'$topic' は devices/{tenant}/{deviceId}/{channel}(channel は小文字・kebab-case)ではありません"
+        }
+
+    /** contracts/devices のファイル名から版(v{n} の n)を返す。形式が違えば null。 */
+    fun devicePayloadVersion(fileName: String): Int? =
+        DEVICE_PAYLOAD
+            .matchEntire(fileName)
+            ?.groupValues
+            ?.get(2)
+            ?.toInt()
 
     private const val EVENT_GROUP = 3
 }

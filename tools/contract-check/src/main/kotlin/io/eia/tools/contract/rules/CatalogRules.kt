@@ -60,7 +60,8 @@ class CatalogRules(
             violations += Violation(catalog.path, Rule.NAMING_INTEGRATION_ID, "ファイル名が連携 ID '${entry.id}' と一致しません")
         }
         entry.contract?.let { violations += checkContract(catalog, it, domain) }
-        if (domain != null) {
+        // MQTT のトピック(devices/{tenant}/{deviceId}/...)は domain を持たない(CC-NAMING-011 で形を検査する)
+        if (domain != null && entry.style != MQTT) {
             violations +=
                 entry.channels.filter { Naming.topicDomain(it) != domain }.map {
                     Violation(catalog.path, Rule.NAMING_DOMAIN, "channel '$it' の domain が連携 ID の domain '$domain' と異なります")
@@ -225,6 +226,7 @@ class CatalogRules(
 
     private companion object {
         const val QUEUE = "queue"
+        const val MQTT = "mqtt"
         const val COMMAND_GROUP_SUFFIX = ".command"
         val STYLES_WITH_CONSUMER_GROUP = setOf("event", "cdc")
     }

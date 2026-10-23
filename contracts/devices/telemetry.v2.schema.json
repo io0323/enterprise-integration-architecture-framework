@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eia.io/contracts/devices/telemetry.v2.schema.json",
+  "title": "Device telemetry v2",
+  "description": "デバイスが MQTT の devices/{tenant}/{deviceId}/telemetry に送るテレメトリの形式の版 2(INT-IOT-001。ADR-0039 §4)。測定値を名前・値・単位の一覧にし、時刻をミリ秒の精度にした。版 1 のデバイスと混在する。このファイルは一度出したら変えない(CC-COMPAT-004)。未知の項目は無視する(Tolerant Reader)。",
+  "type": "object",
+  "required": ["v", "boot", "seq", "readings"],
+  "properties": {
+    "v": {
+      "description": "形式の版",
+      "const": 2
+    },
+    "boot": {
+      "description": "起動のたびにデバイスが乱数で作るセッション ID(64 ビット以上。小文字の 16 進)。番号(seq)が起動・初期化で振り直されても、メッセージの ID(ce_id)が以前のものと重ならないようにする(ADR-0039 §5)",
+      "type": "string",
+      "pattern": "^[0-9a-f]{16,32}$"
+    },
+    "seq": {
+      "description": "起動(boot)ごとに 0 から数えるメッセージの番号。QoS 1 の再送では同じ値を使う。上限に達したら boot を作り直す",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "time": {
+      "description": "デバイスの時計での測定の時刻(RFC 3339。UTC で末尾は Z)。時計が合っていないデバイスは送らない。ずれていることがある(ADR-0039 §7)",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "readings": {
+      "description": "測定値",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "required": ["name", "value"],
+        "properties": {
+          "name": {
+            "description": "測定の種類(小文字の kebab-case。例 temperature)",
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+          },
+          "value": { "type": "number" },
+          "unit": {
+            "description": "単位(SenML の単位名。例 Cel、%RH)",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16
+          }
+        }
+      }
+    },
+    "battery": {
+      "description": "電池の残り(%)",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    }
+  }
+}

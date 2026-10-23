@@ -123,7 +123,7 @@
 - **DoD**: 署名不正を拒否する。SaaS の 429 で Backoff する。Flow 定義だけで新しいマッピングを追加できる。
 
 ## P11 IoT (MQTT) & KMP SDK
-- `shared/integration-sdk`: Ktor Client ベースの KMP SDK(認証・`shared/resilience` によるリトライ・Correlation ID / traceparent)。エンジンはプラットフォーム別(CIO / JS / Darwin / Curl)
+- `shared/integration-sdk`: Ktor Client ベースの KMP SDK(認証・`shared/resilience` によるリトライ・Correlation ID / traceparent)。エンジンはプラットフォーム別(CIO / JS / Darwin / Curl)。HTTP の部分(`http`)と MQTT の部分(`mqtt`)のモジュールに分ける(シミュレータは `mqtt` だけに依存。ADR-0039 §1)
 - `tools/device-simulator`: Kotlin/Native のデバイスシミュレータ CLI。MQTT v5 クライアント(ライブラリ採用か ktor-network での最小実装か)を ADR で決める
 - Mosquitto → MQTT-Kafka Bridge(QoS1、デバイス ID をキー)→ `iot.telemetry.reported.v1`
 - **DoD**: native バイナリのシミュレータから送信したテレメトリが Kafka に到達し、MQTT v5 のユーザープロパティで運んだ traceparent でトレースできる。

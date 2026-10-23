@@ -40,7 +40,7 @@
       "pattern": "^contracts/"
     },
     "channels": {
-      "description": "この連携が扱うトピック・MQTT トピック・ファイル仕様など。event / cdc では必須",
+      "description": "この連携が扱うトピック・MQTT トピック・ファイル仕様など。event / cdc / mqtt では必須",
       "type": "array",
       "items": { "type": "string", "minLength": 1 },
       "uniqueItems": true
@@ -144,7 +144,7 @@
       "then": { "required": ["retirement"] }
     },
     {
-      "if": { "properties": { "style": { "enum": ["event", "cdc"] } } },
+      "if": { "properties": { "style": { "enum": ["event", "cdc", "mqtt"] } } },
       "then": { "required": ["channels"], "properties": { "channels": { "minItems": 1 } } }
     }
   ],

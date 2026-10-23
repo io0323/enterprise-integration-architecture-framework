@@ -1,0 +1,14 @@
+id: INT-IOT-002
+name: IoT Telemetry Events
+description: MQTT から受け取ったテレメトリを、形式の版によらず 1 つの Avro の形にそろえて社内に出す(ADR-0039)
+style: event
+pattern: pub-sub
+provider: { owner: team-integration, system: iot-bridge }
+consumers: []
+contract: contracts/asyncapi/iot-telemetry-events.v1.yaml
+channels:
+  - iot.telemetry.reported.v1
+tier: 2
+dataClassification: internal
+slo: { availability: "99.9", latencyP99: "5s" }
+lifecycle: design
