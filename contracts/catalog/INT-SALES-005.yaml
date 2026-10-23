@@ -13,4 +13,4 @@ external: { vendor: Mock CRM(saas-mock), source: services/saas-mock(Standard Web
 tier: 2
 dataClassification: confidential
 slo: { availability: "99.9", latencyP99: "1s" }
-lifecycle: design
+lifecycle: active

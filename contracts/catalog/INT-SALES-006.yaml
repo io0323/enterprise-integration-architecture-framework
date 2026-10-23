@@ -12,4 +12,4 @@ external: { vendor: Mock CRM(saas-mock), source: services/saas-mock(CRM API v1) 
 tier: 3
 dataClassification: confidential
 slo: { availability: "99.5", latencyP99: "2s" }
-lifecycle: design
+lifecycle: active

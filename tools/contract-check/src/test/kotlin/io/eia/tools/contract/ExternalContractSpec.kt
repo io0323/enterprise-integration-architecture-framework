@@ -29,7 +29,11 @@ class ExternalContractSpec :
 
         test("自社の契約(Webhook の受け口)の破壊的変更は、設計中なら許可・active なら違反(外部の扱いにはしない)") {
             val breaking = { ws: Workspace -> ws.replace(WEBHOOK, "        maxLength: 128\n", "        maxLength: 64\n") }
-            val design = breaking(Workspace.ofRepositoryContracts()).check(baseline = Workspace.ofRepositoryContracts())
+            // 状態はリポジトリの値に頼らず明示する(INT-SALES-005 は P10 の後に active にした)
+            val designBase = Workspace.ofRepositoryContracts().setLifecycle("contracts/catalog/INT-SALES-005.yaml", "lifecycle: design")
+            val design =
+                breaking(Workspace.ofRepositoryContracts().setLifecycle("contracts/catalog/INT-SALES-005.yaml", "lifecycle: design"))
+                    .check(baseline = designBase)
             design.violations.shouldBeEmpty()
             design.warnings.filter { it.rule == Rule.EXTERNAL_BREAKING }.shouldBeEmpty()
             design.designAllowed.map { it.rule.id }.toSet() shouldBe setOf("CC-COMPAT-002")

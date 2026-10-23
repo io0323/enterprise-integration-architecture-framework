@@ -14,4 +14,4 @@ tier: 2
 dataClassification: confidential
 dataRetention: P7D
 slo: { availability: "99.9", latencyP99: "5s" }
-lifecycle: design
+lifecycle: active
