@@ -75,5 +75,6 @@ internal fun webhookReceiverModule(
 
 /** 取り込みのイベントの `ce_source`。 */
 internal const val SOURCE = "/integration/webhook-receiver"
+
 // 1 件ずつの処理と定期のジョブだけなので 3 本で足りる(すべての profile を同時に動かす E2E で DB の接続数が上限に届いた。P10 ⑦)
 private const val POOL_SIZE = 3
