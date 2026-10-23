@@ -100,6 +100,8 @@ docs/                   設計書・ロードマップ・標準・ADR・プロ�
    - 契約変更時: `./gradlew :tools:contract-check:run`
    - 統合テスト: `./gradlew integrationTest`(Testcontainers)
 6. 設計書と実装が乖離する場合は実装で黙って逸脱せず、ADR を書いて理由を残す。
+7. フェーズの E2E がマージされたら、そのフェーズで作った連携のカタログを design から active に進める小さな単独の PR を出す。
+   根拠(E2E の PR)と、以降は破壊的変更に例外リストが必要になることを PR 本文に書く。
 
 ## 7. よく使うコマンド
 ```bash
