@@ -135,6 +135,7 @@ internal val CRM_RESILIENCE: ResilienceConfig =
 
 /** 発行するイベントの `ce_source`。 */
 internal const val SOURCE = "/integration/integration-flow"
-private const val POOL_SIZE = 5
+// 1 件ずつの処理と定期のジョブだけなので 3 本で足りる(すべての profile を同時に動かす E2E で DB の接続数が上限に届いた。P10 ⑦)
+private const val POOL_SIZE = 3
 private const val REGISTRY = "registry"
 private const val CRM = "crm"

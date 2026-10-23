@@ -1005,6 +1005,10 @@ services:
       - max_slot_wal_keep_size=1GB
       - -c
       - shared_buffers=128MB
+      # 接続数の上限(既定は 100)。core + order + cdc + saga + batch + file + saas を同時に動かす E2E で、サービスの接続のプール・
+      # Debezium のコネクタ・運用者のコマンドの同時の実行の合計が 100 を超え、接続を断られた(P10 ⑦)
+      - -c
+      - max_connections=200
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?make env を実行してください}
       ORDER_DB_PASSWORD: ${ORDER_DB_PASSWORD:?}
@@ -1041,7 +1045,8 @@ services:
       # PostgreSQL 18 以降のイメージはメジャー版ごとのサブディレクトリ(/var/lib/postgresql/18/docker)を使う
       - postgres-data:/var/lib/postgresql
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
-    mem_limit: 384m
+    # 接続数の上限を 200 にした分(P10 ⑦)
+    mem_limit: 512m
     healthcheck:
       <<: *healthcheck
       # 初期化中の一時サーバは Unix ソケットだけで待ち受けるため、TCP で接続し、
@@ -1185,7 +1190,8 @@ services:
     volumes:
       - ./tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
       - tempo-data:/var/tempo
-    mem_limit: 384m
+    # すべての profile を同時に動かす E2E で、使用量が上限の 96% になった(P10 ⑦。saas のサービスの span が増えた)
+    mem_limit: 512m
     healthcheck:
       <<: *healthcheck
       # tempo 自身の -health(/ready を確認して終了する)
