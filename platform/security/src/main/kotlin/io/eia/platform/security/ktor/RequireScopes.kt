@@ -1,6 +1,6 @@
 package io.eia.platform.security.ktor
 
-import io.eia.platform.security.ScopeToken
+import io.eia.shared.sdk.http.token.ScopeToken
 import io.ktor.server.application.createRouteScopedPlugin
 import io.ktor.server.application.isHandled
 import io.ktor.server.auth.AuthenticationChecked

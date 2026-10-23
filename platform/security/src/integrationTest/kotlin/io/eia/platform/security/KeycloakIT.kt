@@ -8,12 +8,12 @@ import io.eia.platform.security.jwt.VerifiedToken
 import io.eia.platform.security.ktor.eiaJwt
 import io.eia.platform.security.ktor.requireScopes
 import io.eia.platform.security.secret.EnvSecretProvider
-import io.eia.platform.security.token.AccessToken
 import io.eia.platform.security.token.ClientCredentialsConfig
 import io.eia.platform.security.token.ClientCredentialsTokenProvider
-import io.eia.platform.security.token.TokenRequestRejected
 import io.eia.shared.kernel.DomainError
 import io.eia.shared.kernel.Result
+import io.eia.shared.sdk.http.token.AccessToken
+import io.eia.shared.sdk.http.token.TokenRequestRejected
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.equals.shouldBeEqual
 import io.kotest.matchers.shouldBe

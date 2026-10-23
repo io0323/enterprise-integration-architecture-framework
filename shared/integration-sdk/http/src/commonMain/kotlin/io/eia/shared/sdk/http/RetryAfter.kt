@@ -1,8 +1,6 @@
-package io.eia.platform.reliability
+package io.eia.shared.sdk.http
 
-import java.time.ZonedDateTime
-import java.time.format.DateTimeFormatter
-import java.time.format.DateTimeParseException
+import kotlinx.datetime.format.DateTimeComponents
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
@@ -28,9 +26,13 @@ public object RetryAfter {
         now: Instant,
     ): Duration? =
         try {
-            val date = ZonedDateTime.parse(value, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant()
-            (Instant.fromEpochMilliseconds(date.toEpochMilli()) - now).coerceAtLeast(Duration.ZERO)
-        } catch (_: DateTimeParseException) {
+            val date =
+                DateTimeComponents.Formats.RFC_1123
+                    .parse(value)
+                    .toInstantUsingOffset()
+            (date - now).coerceAtLeast(Duration.ZERO)
+        } catch (_: IllegalArgumentException) {
+            // kotlinx-datetime の DateTimeFormatException(書式の誤り)と、日時として成り立たない値
             null
         }
 }

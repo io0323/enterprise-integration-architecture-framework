@@ -1,4 +1,4 @@
-package io.eia.platform.security.token
+package io.eia.shared.sdk.http.token
 
 import kotlin.time.Instant
 

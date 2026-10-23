@@ -17,6 +17,8 @@ dependencies {
     // Timeout・Retry・Circuit Breaker・応答の分類(ADR-0021)
     api(project(":platform:security"))
     api(project(":platform:reliability"))
+    // Ktor Client の呼び出しの結果の分類(HttpCallClassifier。ADR-0037)
+    api(project(":shared:integration-sdk:http"))
     api(libs.ktor.client.core)
     implementation(libs.kotlinx.coroutines.core)
     // 取り込みの位置(SourcePosition)の JSON

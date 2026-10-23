@@ -1,6 +1,5 @@
-package io.eia.platform.security.token
+package io.eia.shared.sdk.http.token
 
-import io.eia.platform.security.secret.SecretError
 import io.eia.shared.kernel.DomainError
 import kotlin.time.Duration
 
@@ -67,12 +66,15 @@ public data class InvalidTokenResponse(
     override val message: String get() = "トークンの応答が不正です($reason)"
 }
 
-/** Client Secret を取得できない。[cause] が一時的な失敗([DomainError.Retryable])かどうかで、実装を分ける。 */
+/**
+ * Client Secret を取得できない([ClientSecretSource] の失敗)。[cause] が一時的な失敗([DomainError.Retryable])かどうかで、実装を分ける。
+ * JVM の platform/security では、[cause] は SecretProvider の `SecretError`。
+ */
 public sealed interface ClientSecretUnavailable : TokenError {
-    public val cause: SecretError
+    public val cause: DomainError
 
     public data class Permanent(
-        override val cause: SecretError,
+        override val cause: DomainError,
     ) : ClientSecretUnavailable,
         DomainError.NonRetryable {
         override val code: String get() = "client_secret_unavailable"
@@ -80,7 +82,7 @@ public sealed interface ClientSecretUnavailable : TokenError {
     }
 
     public data class Temporary(
-        override val cause: SecretError,
+        override val cause: DomainError,
     ) : ClientSecretUnavailable,
         DomainError.Retryable {
         override val code: String get() = "client_secret_unavailable"
@@ -88,7 +90,7 @@ public sealed interface ClientSecretUnavailable : TokenError {
     }
 
     public companion object {
-        public fun of(cause: SecretError): ClientSecretUnavailable =
+        public fun of(cause: DomainError): ClientSecretUnavailable =
             if (cause is DomainError.Retryable) Temporary(cause) else Permanent(cause)
     }
 }

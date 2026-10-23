@@ -42,6 +42,7 @@ flowchart BT
   adp --> canon
   adp --> plat[platform:*<br/>JVM]
   plat --> res
+  plat --> sdkhttp
   boot[services:x:app<br/>JVM] --> adp
   sim[tools:device-simulator<br/>KMP native] --> sdkmqtt
   e2e[tests:e2e<br/>JVM] --> sdkhttp
@@ -57,7 +58,6 @@ flowchart BT
   | `platform:audit` | `platform:observability` | details の値のマスキング(ADR-0018 §3) |
   | `platform:batch` | `platform:file-transfer` | ファイルの到着の監視の置き場(`ObjectReader`)とマニフェスト(`FileManifest`)(ADR-0030 §4・ADR-0032 §1) |
   | `platform:batch` | `platform:observability` | 実行・ステップの span と traceparent の引き継ぎ(ADR-0030 §5・ADR-0018 §2) |
-  | `platform:security` | `platform:reliability` | トークンの取得の Retry・Circuit Breaker、`Retry-After` の解析(ADR-0019 §4・ADR-0021 §11) |
   | `platform:security` | `platform:api` | 401 / 403 / 503 を Problem Details で返す(ADR-0019 §5・ADR-0022 §2) |
   | `platform:api` | `platform:observability` | Problem Details の `correlationId`(ADR-0022 §2) |
   | `platform:messaging-kafka` | `platform:schema-registry` | 書き込みのスキーマ ID(起動時に解決したもの)と受信時の書き手のスキーマ(ADR-0025 §3) |
@@ -71,6 +71,7 @@ flowchart BT
 - `platform:test-support` はテストのソースセット(`test` / `integrationTest` など)からだけ参照する。
 - `services` 間のコード依存は禁止(連携は契約経由のみ)。契約モデルは contracts から生成するか `adapters` 内で定義する。
 - `tests:e2e` は `services:*` にコード依存しない(契約・SDK・公開エンドポイント経由のみで検証する)。P05 の時点では SDK(P11)がないため、JDK の HttpClient で公開エンドポイント(Gateway・Keycloak・Tempo・Prometheus・Grafana)に接続する。ソースは `src/e2eTest/kotlin`、実行は `make e2e`(起動した基盤に対して)と ci の `e2e` ジョブ。
+- `platform:security` は `shared:integration-sdk:http` に依存する(Client Credentials のトークンの取得の中身とスコープの形式を SDK と共有する。ADR-0037 §2)。`HttpCallClassifier`・`RetryAfter` も SDK にある(`platform:reliability` は `ResilienceMetrics` だけ)。
 - `tools:device-simulator` は SDK の中の `shared:integration-sdk:mqtt` にのみ依存する(HTTP の部分の Curl のエンジン(libcurl)を native のバイナリに巻き込まない。ADR-0039 §1)。
 - SDK は HTTP の部分(`shared:integration-sdk:http`。Ktor Client。ADR-0037)と MQTT の部分(`shared:integration-sdk:mqtt`。ADR-0038)に分け、互いに依存しない。リトライ・traceparent は `shared:resilience`、待ち時間の計算は `shared:kernel` の `RetryPolicy` を使う(同じ処理を SDK に作らない)。
 - `tests:e2e` のトークンの取得は、P11 で `shared:integration-sdk:http` に置き換える(期限の前に取り直す処理を 2 か所に持たない。#14)。
@@ -154,11 +155,11 @@ services/saas-mock/app/
 | platform | 役割 | フェーズ |
 |---|---|---|
 | observability | OTel の初期化・Ktor の Server / Client プラグイン(traceparent・Correlation ID の伝搬、RED メトリクス)・構造化 JSON ログ・マスキング(ADR-0018)。OTel SDK を使ってよいのはこのモジュールと `services/*/app` だけ(ADR-0004 §4。Konsist) | P04a |
-| security | JWT の検証(JWKS)・スコープの認可(`eiaJwt` / `requireScopes`)・Client Credentials のトークン取得・`SecretProvider`(ADR-0008・ADR-0019)・API のポートの mTLS(`tls` パッケージ: PEM から作る `ServerTls`(有効期限の確認)・SAN の許可の一覧 `ClientCertificateAllowList`・2 つのコネクタ `mutualTlsConnectors`・ルートの分け方 `overTls` / `overPlaintext`・環境変数の名前 `TlsVariables`(`{PREFIX}_TLS_*`)。ADR-0024 §6)。Nimbus JOSE+JWT を使ってよいのはこのモジュールだけ(Konsist) | P04a |
+| security | JWT の検証(JWKS)・スコープの認可(`eiaJwt` / `requireScopes`)・Client Credentials のトークン取得(中身は `shared/integration-sdk/http`。ここでは SecretProvider とログをつなぐ。ADR-0037 §2)・`SecretProvider`(ADR-0008・ADR-0019)・API のポートの mTLS(`tls` パッケージ: PEM から作る `ServerTls`(有効期限の確認)・SAN の許可の一覧 `ClientCertificateAllowList`・2 つのコネクタ `mutualTlsConnectors`・ルートの分け方 `overTls` / `overPlaintext`・環境変数の名前 `TlsVariables`(`{PREFIX}_TLS_*`)。ADR-0024 §6)。Nimbus JOSE+JWT を使ってよいのはこのモジュールだけ(Konsist) | P04a |
 | audit | 監査記録: 追記専用のテーブル(アプリ用のロールは INSERT / SELECT だけ。トリガーでも拒否)とハッシュチェーン、S3 互換ストレージの Object Lock(COMPLIANCE)へのアンカー、チェーンとアンカーの検証(ADR-0017)。検査は `tools/audit-verify`(`make audit-verify`)。`java.time` と `java.sql` を使う JVM の部品なので、services の application に Port(例 `AuditTrail`)を置き、adapters で `AuditLog.appendAudit`(業務と同じ Exposed のトランザクション)に写す | P04a |
 | test-support | テスト専用。mTLS のテストの CA と証明書(`TestPki`。gen-dev-certs.sh と同じ形)。`infra/local/images.env` のイメージを Testcontainers で使う `InfraImages`(ADR-0016 §5)と、compose と同じ構成のコンテナ(`SeaweedFsContainer`・`SftpServerContainer`・`ApicurioRegistryContainer`・`KafkaConnectContainer`。Connect のイメージは docker の CLI で組み立てる)、テスト用の SSH・PGP の鍵(`TestKeys`)。test / integrationTest からだけ参照する(Konsist) | P04a |
 | api | REST の共通部品: Problem Details(RFC 9457。`installProblemDetails` / `respondError`。`type` の一覧は INTEGRATION_STANDARDS §6)と Idempotency-Key(`respondIdempotently` / `IdempotencyHandler` / Port `IdempotencyStore`。PostgreSQL の実装は各サービスの adapters)(ADR-0022) | P05 |
-| reliability | `shared/resilience` の JVM 向けアダプタ: OTel のメトリクス(`ResilienceMetrics`)、Ktor Client の結果の Retryable / NonRetryable への分類(`HttpCallClassifier`)、`Retry-After` の解析(ADR-0021 §7・§11)。OTel は API だけを使う | P04b |
+| reliability | `shared/resilience` の JVM 向けアダプタ: OTel のメトリクス(`ResilienceMetrics`。ADR-0021 §7・§11)。OTel は API だけを使う。Ktor Client の結果の分類(`HttpCallClassifier`)と `Retry-After` の解析は、P11 ②a で `shared/integration-sdk/http` に移した(KMP で共有。ADR-0037 §2) | P04b |
 | inbox | 冪等消費の記録(ADR-0028 §3)。`Inbox.markProcessed` / `markProcessedIn`(業務と同じ Exposed のトランザクションで `inbox.processed_message` に `(consumer_group, ce_id)` を `INSERT ... ON CONFLICT DO NOTHING`。重複なら `DUPLICATE`。自動コミットでは書かない)、`Inbox.purgeExpired`(DB の時計で保持期間(既定 14 日)を過ぎた行を古い順に消す)、`InboxSchema`(スキーマ `inbox`・権限。サービスの migrate で所有者が適用する)。Kafka にも他の platform にも依存しない | P07 |
 | outbox | Transactional Outbox(ADR-0007)。`Outbox.append` / `appendOutbox`(業務と同じ Exposed のトランザクションで INSERT し、同じ行を DELETE する既定の方式。自動コミットでは書かない)、`OutboxEvents`(イベントから記録を作る。`{topic} create` の PRODUCER の span・UUIDv7 の `ce_id` = `id`)、`OutboxSchema`(スキーマ `outbox`・権限・publication `eiaf_outbox`。サービスの migrate で所有者が適用する)、`OutboxMetrics`。保持期間の方式は #76 | P06 |
 | messaging-kafka | Kafka の共通部品(ADR-0025)。P06: CloudEvents binary mode のヘッダ(`EventMetadata`)・トピック名(`EventTopic`)・Avro の Serde(avro4k。スキーマ ID は Apicurio と同じ形式でペイロードの先頭に埋め込む。`ApicurioWireFormat`・`AvroEventSerializer`・`AvroEventDeserializer`)・DB の更新を伴わない送信の Producer(`EventProducer`。PRODUCER の span)。DB の更新と組み合わせるイベントは Outbox で発行する。tombstone(`EventProducer.sendTombstone`)と DLQ(`DeadLetterPublisher`。`{topic}.dlq`・`eiaf.dlq.*` のヘッダ。INTEGRATION_STANDARDS §2)は P06 ⑤b(最初の利用者は legacy-order-acl)。P07: 型付きの Consumer(`EventConsumer`・`EventSubscription`・`EventHandler`。CloudEvents のヘッダを持たない外部のトピック(レガシーの生の CDC)は `ExternalSubscription`・`RecordHandler`。パーティションごとに届いた順に処理し、処理の後にコミットする At-Least-Once。失敗の種類(`HandlingFailure`: Rejected → DLQ・Transient → 初回 + 3 回のリトライの後に DLQ・Unavailable → DLQ に送らず読み直す)。CONSUMER の span・`ConsumerMetrics`。ADR-0028)。冪等消費の記録は `platform/inbox`。DLQ の Replay(`DeadLetterReplayer`。既定は dry-run・件数の上限は必須・`ce_id` を変えずに元のトピックへ・生の CDC の DLQ は拒否。CLI は `tools/dlq-replay`。ADR-0028 §6) | P06, P07 |

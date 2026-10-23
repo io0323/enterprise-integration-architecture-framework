@@ -51,11 +51,12 @@ internal object ArchitectureRules {
     /**
      * 禁止リストの例外。
      * - `kotlin.jvm.JvmInline`: CODING_STANDARDS の値オブジェクト(`@JvmInline value class`)に必要。stdlib の common API(ADR-0010)。
-     * - shared/integration-sdk の `io.ktor.client`(ADR-0004 §2)。
+     * - shared/integration-sdk の Ktor Client とその要求・応答の型(`io.ktor.client`・`io.ktor.http`・`io.ktor.utils.io`。ADR-0004 §2・ADR-0037)。
+     *   サーバの `io.ktor.server` は SDK でも禁止。
      */
     private val COMMON_MAIN_ALLOWED_IMPORTS = setOf("kotlin.jvm.JvmInline")
     private const val INTEGRATION_SDK_PATH = "shared/integration-sdk/"
-    private const val KTOR_CLIENT_PACKAGE = "io.ktor.client"
+    private val SDK_KTOR_PACKAGES = listOf("io.ktor.client", "io.ktor.http", "io.ktor.utils.io")
 
     /** services/<service>/<layer>/ 配下のファイルについて、同一サービス内の依存方向を検査する。 */
     fun layerDependencies(
@@ -133,7 +134,7 @@ internal object ArchitectureRules {
                     val forbidden = FORBIDDEN_COMMON_MAIN_PACKAGES.firstOrNull { import.isInPackage(it) }
                     val allowed =
                         import in COMMON_MAIN_ALLOWED_IMPORTS ||
-                            (file.path.startsWith(INTEGRATION_SDK_PATH) && import.isInPackage(KTOR_CLIENT_PACKAGE))
+                            (file.path.startsWith(INTEGRATION_SDK_PATH) && SDK_KTOR_PACKAGES.any { import.isInPackage(it) })
                     if (forbidden != null && !allowed) {
                         Violation("commonMain 禁止 import", file.path, "import $import($forbidden.* は commonMain で禁止)")
                     } else {
@@ -188,9 +189,24 @@ internal object ArchitectureRules {
                 listOf("kotlin", "kotlinx.serialization", "$BASE_PACKAGE.shared.kernel", "$BASE_PACKAGE.shared.canonical"),
             "shared/resilience/" to
                 listOf("kotlin", "kotlinx.coroutines", "$BASE_PACKAGE.shared.kernel", "$BASE_PACKAGE.shared.resilience"),
+            // SDK の HTTP の部分(ADR-0037)。Ktor Client と、JSON・日時・バイト列の kotlinx のライブラリだけ
+            "shared/integration-sdk/http/" to
+                listOf(
+                    "kotlin",
+                    "kotlinx.coroutines",
+                    "kotlinx.serialization",
+                    "kotlinx.datetime",
+                    "kotlinx.io",
+                    "io.ktor.client",
+                    "io.ktor.http",
+                    "io.ktor.utils.io",
+                    "$BASE_PACKAGE.shared.kernel",
+                    "$BASE_PACKAGE.shared.resilience",
+                    "$BASE_PACKAGE.shared.sdk.http",
+                ),
         )
 
-    /** shared の基盤モジュール(kernel / canonical-model / resilience)の commonMain は [SHARED_ALLOWED_IMPORTS] 以外を import しない。 */
+    /** shared のモジュール(kernel / canonical-model / resilience / integration-sdk)の commonMain は [SHARED_ALLOWED_IMPORTS] 以外を import しない。 */
     fun sharedImportAllowList(codeBase: CodeBase): List<Violation> =
         SHARED_ALLOWED_IMPORTS.flatMap { (modulePath, allowed) ->
             codeBase

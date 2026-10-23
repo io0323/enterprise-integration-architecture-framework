@@ -3,9 +3,6 @@ package io.eia.batchetl.adapters.http
 import io.eia.batchetl.application.port.outbound.OrderSummarySource
 import io.eia.batchetl.domain.BusinessDay
 import io.eia.batchetl.domain.DailySummary
-import io.eia.platform.reliability.HttpCallClassifier
-import io.eia.platform.reliability.HttpCallRejected
-import io.eia.platform.reliability.HttpCallUnavailable
 import io.eia.platform.security.token.ClientCredentialsTokenProvider
 import io.eia.shared.kernel.DomainError
 import io.eia.shared.kernel.Result
@@ -13,6 +10,9 @@ import io.eia.shared.kernel.UnexpectedError
 import io.eia.shared.kernel.err
 import io.eia.shared.kernel.ok
 import io.eia.shared.resilience.Resilience
+import io.eia.shared.sdk.http.HttpCallClassifier
+import io.eia.shared.sdk.http.HttpCallRejected
+import io.eia.shared.sdk.http.HttpCallUnavailable
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.expectSuccess
 import io.ktor.client.request.get
