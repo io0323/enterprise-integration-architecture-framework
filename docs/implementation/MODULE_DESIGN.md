@@ -23,7 +23,7 @@ Kotlin のパッケージ名に `-` は使えないため、サービスのパ�
 | モジュール | 種別 | ターゲット |
 |---|---|---|
 | `shared/kernel`, `shared/resilience`, `shared/canonical-model`, `shared/integration-sdk/http` | KMP | jvm, js(IR), linuxX64, macosArm64 |
-| `shared/integration-sdk/mqtt` | KMP | jvm, linuxX64, macosArm64(js は ADR-0038 で決める。ブラウザからは TCP の MQTT を使えない) |
+| `shared/integration-sdk/mqtt` | KMP(`eia.kmp-socket-library`) | jvm, linuxX64, macosArm64(js は持たない。ブラウザからは TCP のソケットを開けない。ADR-0038 §2)。実際の Mosquitto に対する統合テストは jvm の `integrationTest`(src/integrationTest/kotlin) |
 | `services/*/domain`, `services/*/application` | KMP(commonMain) | jvm のみ(`eia.kmp-domain` の DSL で追加可能) |
 | `tools/device-simulator` | KMP | linuxX64, macosArm64 |
 | `platform/*`, `services/*/{adapters,app}`, `tools/*`(上記以外), `tests/e2e` | JVM | — |

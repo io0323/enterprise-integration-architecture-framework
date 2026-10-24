@@ -18,7 +18,7 @@ SDK を 2 つのモジュールに分ける(ADR-0039 §1。MODULE_DESIGN)。互�
 | モジュール | 中身 | ターゲット |
 |---|---|---|
 | `shared/integration-sdk/http`(`io.eia.shared.sdk.http`) | Ktor Client の呼び出しの分類・`Retry-After`・Client Credentials のトークン・エンジンの選択・社内 API のクライアント | jvm, js(IR), linuxX64, macosArm64 |
-| `shared/integration-sdk/mqtt`(`io.eia.shared.sdk.mqtt`) | MQTT v5 のクライアント(ADR-0038) | ADR-0038 で決める |
+| `shared/integration-sdk/mqtt`(`io.eia.shared.sdk.mqtt`) | MQTT v5 のクライアント(ADR-0038) | jvm, linuxX64, macosArm64(ADR-0038 §2) |
 
 - `tools/device-simulator` は `mqtt` だけに依存する(HTTP の Curl のエンジン(libcurl)を native のバイナリに巻き込まない)。
 - リトライ・Circuit Breaker・締め切り・traceparent は `shared/resilience`、待ち時間の計算は kernel の `RetryPolicy`、Correlation ID・Idempotency-Key は kernel を使う。SDK に同じ処理を作らない。
