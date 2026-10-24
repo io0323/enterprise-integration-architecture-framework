@@ -24,6 +24,7 @@ include(
     ":shared:resilience",
     ":shared:canonical-model",
     ":shared:integration-sdk:http",
+    ":shared:integration-sdk:mqtt",
     ":platform:api",
     ":platform:audit",
     ":platform:batch",

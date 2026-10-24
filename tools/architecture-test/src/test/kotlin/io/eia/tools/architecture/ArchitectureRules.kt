@@ -51,12 +51,13 @@ internal object ArchitectureRules {
     /**
      * 禁止リストの例外。
      * - `kotlin.jvm.JvmInline`: CODING_STANDARDS の値オブジェクト(`@JvmInline value class`)に必要。stdlib の common API(ADR-0010)。
-     * - shared/integration-sdk の Ktor Client とその要求・応答の型(`io.ktor.client`・`io.ktor.http`・`io.ktor.utils.io`。ADR-0004 §2・ADR-0037)。
+     * - shared/integration-sdk の Ktor Client とその要求・応答の型(`io.ktor.client`・`io.ktor.http`・`io.ktor.utils.io`。ADR-0004 §2・ADR-0037)と、
+     *   MQTT の部分の TCP のソケット(`io.ktor.network`。ADR-0038)。どのパッケージを使えるかは、モジュールごとに [SHARED_ALLOWED_IMPORTS] で絞る。
      *   サーバの `io.ktor.server` は SDK でも禁止。
      */
     private val COMMON_MAIN_ALLOWED_IMPORTS = setOf("kotlin.jvm.JvmInline")
     private const val INTEGRATION_SDK_PATH = "shared/integration-sdk/"
-    private val SDK_KTOR_PACKAGES = listOf("io.ktor.client", "io.ktor.http", "io.ktor.utils.io")
+    private val SDK_KTOR_PACKAGES = listOf("io.ktor.client", "io.ktor.http", "io.ktor.utils.io", "io.ktor.network")
 
     /** services/<service>/<layer>/ 配下のファイルについて、同一サービス内の依存方向を検査する。 */
     fun layerDependencies(
@@ -203,6 +204,18 @@ internal object ArchitectureRules {
                     "$BASE_PACKAGE.shared.kernel",
                     "$BASE_PACKAGE.shared.resilience",
                     "$BASE_PACKAGE.shared.sdk.http",
+                ),
+            // SDK の MQTT の部分(ADR-0038)。TCP のソケット(ktor-network)とバイト列だけ。HTTP の部分には依存しない
+            "shared/integration-sdk/mqtt/" to
+                listOf(
+                    "kotlin",
+                    "kotlinx.coroutines",
+                    "kotlinx.io",
+                    "io.ktor.network",
+                    "io.ktor.utils.io",
+                    "$BASE_PACKAGE.shared.kernel",
+                    "$BASE_PACKAGE.shared.resilience",
+                    "$BASE_PACKAGE.shared.sdk.mqtt",
                 ),
         )
 

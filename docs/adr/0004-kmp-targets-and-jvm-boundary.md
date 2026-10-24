@@ -75,3 +75,4 @@ ADR-0001 で domain / application / shared を KMP(commonMain)とした。一方
 - 2026-09-27: §4 の OTel SDK の配置を Konsist(`otelSdkOnlyInAllowedModules`)で検査するようにした(P04a ②。計装方式は ADR-0018)。
 - 2026-09-30: §5 の「`Clock` と `Random` をインジェクションする」のうち、経過時間(締め切り・Circuit Breaker の Open の期間)は、壁時計の `Clock` ではなく単調な `TimeSource` を注入する(P04b。理由は ADR-0021 §6)。業務の時刻には引き続き `Clock` を使う。
 - 2026-10-23: §2 の `shared/integration-sdk` の例外を、`io.ktor.client` から `io.ktor.client`・`io.ktor.http`・`io.ktor.utils.io` に広げた(Ktor Client の要求・応答の型。`io.ktor.server` は禁止のまま)。SDK の HTTP の部分の commonMain は許可の一覧(`sharedImportAllowList`)でも縛る(P11 ②a。ADR-0037 §1)。
+- 2026-10-24: `shared/integration-sdk/mqtt` のターゲットを jvm・linuxX64・macosArm64 にした(js は持たない。規約 `eia.kmp-socket-library`。ADR-0038 §2)。§2 の SDK の例外に `io.ktor.network` を足した(MQTT の TCP。使えるパッケージはモジュールごとの許可の一覧で絞る)。
