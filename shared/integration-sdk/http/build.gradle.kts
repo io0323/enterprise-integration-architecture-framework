@@ -6,6 +6,8 @@ plugins {
 // Client Credentials のトークンの取得とキャッシュ。JVM の platform(reliability・security)もこれを使う(同じ処理を 2 か所に持たない)。
 // リトライ・Circuit Breaker・traceparent は shared/resilience、待ち時間の計算は kernel の RetryPolicy を使う。
 kotlin {
+    // UnresolvedAddressException の expect / actual のクラス(JVM の CIO が投げる名前解決の失敗。ADR-0037 §2)
+    compilerOptions { freeCompilerArgs.add("-Xexpect-actual-classes") }
     sourceSets {
         commonMain.dependencies {
             api(project(":shared:resilience"))
@@ -13,12 +15,14 @@ kotlin {
             implementation(libs.kotlinx.serialization.json)
             implementation(libs.kotlinx.datetime)
         }
+        // ターゲットごとの既定のエンジン(expect/actual。ADR-0037 §3)
+        jvmMain.dependencies { implementation(libs.ktor.client.cio) }
+        jsMain.dependencies { implementation(libs.ktor.client.js) }
+        macosArm64Main.dependencies { implementation(libs.ktor.client.darwin) }
+        linuxX64Main.dependencies { implementation(libs.ktor.client.curl) }
         commonTest.dependencies {
             implementation(libs.kotlinx.coroutines.test)
             implementation(libs.ktor.client.mock)
-        }
-        jvmTest.dependencies {
-            implementation(libs.ktor.client.cio)
         }
     }
 }
