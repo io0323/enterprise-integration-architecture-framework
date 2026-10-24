@@ -46,8 +46,9 @@ JVM の platform にあった処理の中身を `shared/integration-sdk/http` �
   | jvm | CIO |
   | js | Js |
   | macosArm64 | Darwin |
-  | linuxX64 | Curl(リンクと実行に libcurl が要る) |
+  | linuxX64 | Curl |
 - エンジンは引数で差し替えられる(テストは MockEngine)。
+- Ktor 3.6 の Curl のエンジンは、linuxX64 では libcurl を静的にリンクする(リンクした実行ファイルが動的に読むのは libc・libz などのシステムのライブラリだけで、`libcurl.so` を読まないことを確かめた)。CI と実行環境に libcurl を入れる必要はない。
 
 ### 4. 社内 API のクライアント
 - 依存先ごとに 1 つの `Resilience` を作って使い回し、1 回の呼び出しを `Resilience.execute` で包む(ADR-0021)。結果は §2 の `HttpCallClassifier` で分け、429 / 503 の `Retry-After` を待ち時間に使う(kernel の RetryPolicy が優先する)。
@@ -69,7 +70,8 @@ JVM の platform にあった処理の中身を `shared/integration-sdk/http` �
 - JVM のサービスのトークンの取得・HTTP の分類は、KMP の共通のコードで動く。直すときは SDK を直す(platform は JVM の部品をつなぐだけ)。
 - `ClientSecretUnavailable.cause` の型が `DomainError` になった(公開の API の変更。使っていたのは platform/security のテストだけ)。
 - SDK の JS のターゲットのため、Kotlin/JS のテストが Ktor Client の JS のエンジン(`ws`)と kotlinx-datetime(`@js-joda/core`)を npm から入れる。`ws` は脆弱性の修正版に固定した(`npm-ws`。docs/runbooks/dependabot-kotlin-js.md)。
-- linuxX64 の Curl のエンジンは libcurl に依存する。CI と、SDK の HTTP の部分を使う native のバイナリの実行環境に libcurl が要る(シミュレータは使わない。§1)。
+- linuxX64 の Curl のエンジンは libcurl を静的に持つので、SDK の HTTP の部分を使う native のバイナリは大きくなる。シミュレータは HTTP の部分に依存しない(§1)。
 
 ## 改訂履歴
 - 2026-10-23: P11 ②a(#14)で作成した。§2 の移動を行った。§3〜§5 は ②b で実装する。
+- 2026-10-24: P11 ②b で §3〜§5 を実装した。§3 の既定のエンジンは `defaultEngine()`(expect/actual)。§4 のクライアントは `IntegrationClient`(`get`・`post`。呼び出しの文脈は `CallContext`)。traceparent と Correlation ID は 1 回の呼び出しで 1 つにし、リトライでも同じ値を送る。§5 の e2e のトークンの取得は `E2eEnvironment.token()` の中で SDK の `ClientCredentialsTokenProvider` を使うようにした(クライアントの認証は client_secret_post から client_secret_basic に変わった。realm の `eiaf-e2e` は両方を受け付ける)。§3 の libcurl は、静的にリンクされていて実行環境に要らないことを確かめたので、Consequences を直した。

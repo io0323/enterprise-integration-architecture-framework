@@ -2,6 +2,14 @@
 
 package io.eia.tests.e2e
 
+import io.eia.shared.kernel.Result
+import io.eia.shared.kernel.ok
+import io.eia.shared.sdk.http.defaultEngine
+import io.eia.shared.sdk.http.token.ClientCredentialsConfig
+import io.eia.shared.sdk.http.token.ClientCredentialsTokenProvider
+import io.eia.shared.sdk.http.token.ClientSecret
+import io.ktor.http.Url
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.jsonObject
@@ -15,7 +23,9 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 import java.time.Duration
 import java.util.Base64
+import java.util.concurrent.ConcurrentHashMap
 import javax.net.ssl.SSLContext
+import io.ktor.client.HttpClient as KtorHttpClient
 
 /**
  * E2E の接続先(ローカル基盤の公開されたエンドポイント。infra/local/README.md のポート一覧)と、共通の HTTP の部品。
@@ -36,8 +46,6 @@ internal object E2eEnvironment {
     // 下の http などより先に初期化する(object の初期化はファイルの上から順)
     private val CONNECT_TIMEOUT: Duration = Duration.ofSeconds(5)
     private val REQUEST_TIMEOUT: Duration = Duration.ofSeconds(30)
-    private val TOKEN_REFRESH_BEFORE: Duration = Duration.ofSeconds(30)
-    private const val DEFAULT_TOKEN_LIFETIME_SECONDS = 300L
 
     /** client-credentials のクライアント(infra/local/keycloak/realm-eiaf.json)。 */
     enum class Client(
@@ -65,43 +73,32 @@ internal object E2eEnvironment {
         System.getenv(name)?.takeIf { it.isNotBlank() }
             ?: error("$name がありません。make e2e で実行してください(infra/local/.env を読み込みます)")
 
-    /** 取ったトークンと、取り直す時刻(期限の [TOKEN_REFRESH_BEFORE] 前)。 */
-    private class CachedToken(
-        val value: String,
-        val refreshAt: Long,
-    )
-
-    private val tokens = mutableMapOf<Client, CachedToken>()
-
     /**
-     * `sales.order:read` / `sales.order:write` のスコープのアクセストークン。期限(realm の 5 分)の 30 秒前まで使い回し、
-     * それを過ぎたら取り直す(E2E 全体は 5 分を超えるため、期限の切れたトークンで 401 にならないように。#120)。
+     * client-credentials のトークンの取得。SDK(shared/integration-sdk/http)の [ClientCredentialsTokenProvider] をクライアントごとに 1 つ使い回す
+     * (期限(realm の 5 分)の 30 秒前に取り直す。E2E 全体は 5 分を超えるため、期限の切れたトークンで 401 にならないように。#120・#14)。
      */
-    @Synchronized
+    private val tokenProviders = ConcurrentHashMap<Client, ClientCredentialsTokenProvider>()
+    private val tokenHttp = KtorHttpClient(defaultEngine())
+
+    /** `sales.order:read` / `sales.order:write` のスコープのアクセストークン。 */
     fun token(client: Client = Client.A): String {
-        tokens[client]?.takeIf { System.nanoTime() < it.refreshAt }?.let { return it.value }
-        val form =
-            mapOf(
-                "grant_type" to "client_credentials",
-                "client_id" to client.id,
-                "client_secret" to secret(client.secretVariable),
-                "scope" to "sales.order:read sales.order:write",
-            ).entries.joinToString("&") { (k, v) -> "$k=${URLEncoder.encode(v, StandardCharsets.UTF_8)}" }
-        val requestedAt = System.nanoTime()
-        val response =
-            send(
-                HttpRequest
-                    .newBuilder(URI.create("$KEYCLOAK/realms/eiaf/protocol/openid-connect/token"))
-                    .header("Content-Type", "application/x-www-form-urlencoded")
-                    .POST(HttpRequest.BodyPublishers.ofString(form)),
-            )
-        check(response.statusCode() == OK) { "${client.id} のトークンを取れません(${response.statusCode()})" }
-        val body = json(response.body()).jsonObject
-        val value = body.getValue("access_token").jsonPrimitive.content
-        val lifetime = Duration.ofSeconds(body["expires_in"]?.jsonPrimitive?.content?.toLongOrNull() ?: DEFAULT_TOKEN_LIFETIME_SECONDS)
-        // 取得を頼んだ時刻から数える(応答までの時間の分だけ、早めに取り直す)
-        tokens[client] = CachedToken(value, requestedAt + lifetime.minus(TOKEN_REFRESH_BEFORE).toNanos())
-        return value
+        val provider =
+            tokenProviders.computeIfAbsent(client) {
+                ClientCredentialsTokenProvider(
+                    config =
+                        ClientCredentialsConfig(
+                            tokenEndpoint = Url("$KEYCLOAK/realms/eiaf/protocol/openid-connect/token"),
+                            clientId = it.id,
+                            scopes = setOf("sales.order:read", "sales.order:write"),
+                        ),
+                    httpClient = tokenHttp,
+                    secrets = { ok(ClientSecret(secret(it.secretVariable))) },
+                )
+            }
+        return when (val result = runBlocking { provider.token() }) {
+            is Result.Ok -> result.value.reveal()
+            is Result.Err -> error("${client.id} のトークンを取れません(${result.error.code}: ${result.error.message})")
+        }
     }
 
     fun request(

@@ -14,6 +14,8 @@ configurations.named(e2eTest.runtimeOnlyConfigurationName) {
 }
 
 dependencies {
+    // client-credentials のトークンの取得(期限の前に取り直す)は SDK を使う(同じ処理を 2 か所に持たない。#14・ADR-0037 §5)
+    "e2eTestImplementation"(project(":shared:integration-sdk:http"))
     "e2eTestImplementation"(libs.kotlinx.serialization.json)
     // 発行されたイベントを Kafka から読み、契約のスキーマ(Schema Registry から取る)で解釈する(P06。サービスのコードには依存しない)
     "e2eTestImplementation"(libs.kafka.clients)

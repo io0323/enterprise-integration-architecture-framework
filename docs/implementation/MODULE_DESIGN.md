@@ -70,11 +70,10 @@ flowchart BT
 - AWS SDK を本番コードで使ってよいのは `platform:file-transfer` と `platform:audit` のアンカー(`anchor` パッケージ)だけ。Parquet と Hadoop は `platform:file-transfer` だけ(計測の `tools/parquet-bench` を除く)。SFTP のクライアント(sshj)と OpenPGP(bcpg)は `platform:file-transfer` だけ(テスト用の鍵を作る `platform:test-support` を除く。ADR-0032 §8。Konsist の `transferSecurityOnlyInFileTransfer`)。依存の宣言(`libs.aws.*`・`libs.parquet.*`・`libs.hadoop.*`・`libs.sshj`・`libs.bouncycastle.pg`)も同じ範囲に限り、Hadoop は `compileOnly` だけにする(ADR-0032 §6・ADR-0033 §3。Konsist の `awsSdkOnlyInAllowedModules`・`parquetOnlyInFileTransfer`・`LibraryDeclarationRules`。実行時のクラスパスは `platform:file-transfer` の `verifyNoHadoopAtRuntime` でも検査する)。
 - `platform:test-support` はテストのソースセット(`test` / `integrationTest` など)からだけ参照する。
 - `services` 間のコード依存は禁止(連携は契約経由のみ)。契約モデルは contracts から生成するか `adapters` 内で定義する。
-- `tests:e2e` は `services:*` にコード依存しない(契約・SDK・公開エンドポイント経由のみで検証する)。P05 の時点では SDK(P11)がないため、JDK の HttpClient で公開エンドポイント(Gateway・Keycloak・Tempo・Prometheus・Grafana)に接続する。ソースは `src/e2eTest/kotlin`、実行は `make e2e`(起動した基盤に対して)と ci の `e2e` ジョブ。
+- `tests:e2e` は `services:*` にコード依存しない(契約・SDK・公開エンドポイント経由のみで検証する)。公開エンドポイント(Gateway・Keycloak・Tempo・Prometheus・Grafana)には JDK の HttpClient で接続し、client-credentials のトークンの取得だけは P11 ②b から `shared:integration-sdk:http` の `ClientCredentialsTokenProvider` を使う(ADR-0037 §5)。ソースは `src/e2eTest/kotlin`、実行は `make e2e`(起動した基盤に対して)と ci の `e2e` ジョブ。
 - `platform:security` は `shared:integration-sdk:http` に依存する(Client Credentials のトークンの取得の中身とスコープの形式を SDK と共有する。ADR-0037 §2)。`HttpCallClassifier`・`RetryAfter` も SDK にある(`platform:reliability` は `ResilienceMetrics` だけ)。
 - `tools:device-simulator` は SDK の中の `shared:integration-sdk:mqtt` にのみ依存する(HTTP の部分の Curl のエンジン(libcurl)を native のバイナリに巻き込まない。ADR-0039 §1)。
 - SDK は HTTP の部分(`shared:integration-sdk:http`。Ktor Client。ADR-0037)と MQTT の部分(`shared:integration-sdk:mqtt`。ADR-0038)に分け、互いに依存しない。リトライ・traceparent は `shared:resilience`、待ち時間の計算は `shared:kernel` の `RetryPolicy` を使う(同じ処理を SDK に作らない)。
-- `tests:e2e` のトークンの取得は、P11 で `shared:integration-sdk:http` に置き換える(期限の前に取り直す処理を 2 か所に持たない。#14)。
 
 ## 3. サービス内部レイアウト(例: order)
 ```
