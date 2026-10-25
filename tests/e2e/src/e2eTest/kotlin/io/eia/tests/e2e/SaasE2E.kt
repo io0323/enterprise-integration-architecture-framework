@@ -130,7 +130,7 @@ class SaasE2E :
             val created = admin("POST", "/admin/customers", """{"id":"$id","display_name":"Redeliver","email":"Redeliver@Example.COM"}""")
             created.statusCode() shouldBe 201
             val webhookId = created.header("X-Webhook-Id") ?: fail("X-Webhook-Id がありません")
-            val (event, traceparent) = customerEvents(id).single()
+            val (event, _) = customerEvents(id).single()
             event.customerName() shouldBe "Redeliver"
             val duplicatesBefore = metricSum("""sum(eia_webhook_requests_total{outcome="duplicate"})""")
 
@@ -141,8 +141,11 @@ class SaasE2E :
                 ?: fail("受け口が再送を重複として数えません")
             customerEvents(id, enough = 2, timeout = Duration.ofSeconds(15)).size shouldBe 1
 
-            // traceparent: 受け口の受け取り → Outbox → Debezium → Flow の購読 → Outbox → Debezium(Framework 14.1)
-            val traceId = traceparent?.split('-')?.getOrNull(1) ?: fail("traceparent がありません")
+            // traceparent: 受け口の受け取り → Outbox → Debezium → Flow の購読(Framework 14.1)。
+            // 出たイベントは、定期の同期(E2E は 5 秒ごと)が先に同じ版を出すと同期のトレースになるので、受け口からのトレースは
+            // 取り込みのトピックのレコード(キーは webhook-id)でたどる。Flow は出すかどうかによらず、そのレコードを処理する(#157)
+            val ingested = webhookIngest(webhookId).firstOrNull() ?: fail("取り込みのトピックに webhook-id $webhookId のレコードがありません")
+            val traceId = ingested.split('-').getOrNull(1) ?: fail("取り込みのレコードに traceparent がありません")
             eventually(Duration.ofSeconds(90), Duration.ofSeconds(5)) {
                 traceServiceNames(traceId).takeIf { it.containsAll(listOf("webhook-receiver", "integration-flow")) }
             } ?: fail("trace $traceId に webhook-receiver と integration-flow の span がそろいません: ${traceServiceNames(traceId)}")

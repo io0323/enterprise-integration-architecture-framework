@@ -16,6 +16,7 @@ import java.time.Duration
 // SaaS 連携の E2E(SaasE2E)の観察の部品: Kafka の Canonical の顧客のイベント・Prometheus・Tempo(公開されたエンドポイントだけ)
 
 internal const val CUSTOMER_CHANGED = "sales.customer.changed.v1"
+internal const val WEBHOOK_INGEST = "integration.crm-webhook.received.v1"
 
 /** Canonical の顧客のイベント(キーは顧客 ID)。[enough] 件そろうか [timeout] まで読む。 */
 internal fun customerEvents(
@@ -26,6 +27,12 @@ internal fun customerEvents(
     SagaKafka.keyed(CUSTOMER_CHANGED, customerId, enough, timeout).mapNotNull { record ->
         record.value()?.let(SagaKafka::decode)?.let { it to SagaKafka.header(record, "traceparent") }
     }
+
+/** 取り込みのトピックのレコード(キーは webhook-id。ADR-0035)の traceparent。受け口から Flow までのトレースの起点。 */
+internal fun webhookIngest(
+    webhookId: String,
+    timeout: Duration = Duration.ofSeconds(30),
+): List<String> = SagaKafka.keyed(WEBHOOK_INGEST, webhookId, 1, timeout).mapNotNull { SagaKafka.header(it, "traceparent") }
 
 internal fun GenericRecord.customerName(): String = (get("customer") as GenericRecord).get("name").toString()
 
