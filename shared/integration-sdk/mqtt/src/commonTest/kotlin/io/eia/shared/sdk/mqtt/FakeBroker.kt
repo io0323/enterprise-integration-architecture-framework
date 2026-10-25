@@ -10,6 +10,7 @@ import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readByte
 import io.ktor.utils.io.readByteArray
 import io.ktor.utils.io.writeByteArray
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -44,7 +45,9 @@ internal class FakeBroker(
     private vararg val behaviours: Behaviour,
 ) {
     private val selector = SelectorManager(Dispatchers.Default)
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    // 止めた後の accept・切れた接続への書き込みの例外は、テストの Broker では無視する(native では捕まえない例外がプロセスを落とすため)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, _ -> })
     private val lock = Mutex()
     private val received = mutableListOf<ReceivedPublish>()
     private lateinit var server: ServerSocket
@@ -58,7 +61,8 @@ internal class FakeBroker(
         server = aSocket(selector).tcp().bind("127.0.0.1", 0)
         scope.launch {
             while (true) {
-                val socket = server.accept()
+                // 止めると accept が失敗する(Linux では EINVAL)。ループを抜ける
+                val socket = runCatchingEof { server.accept() } ?: break
                 val index = connections++
                 val behaviour = behaviours.getOrElse(index) { behaviours.last() }
                 scope.launch {
@@ -104,8 +108,8 @@ internal class FakeBroker(
     }
 
     fun stop() {
-        server.close()
         scope.cancel()
+        server.close()
         selector.close()
     }
 
