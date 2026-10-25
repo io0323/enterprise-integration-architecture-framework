@@ -50,8 +50,36 @@ public class DeadLetterPublisher(
                     header(DeadLetterHeaders.ATTEMPTS, attempts.toString()),
                     header(DeadLetterHeaders.FAILED_AT, clock.now().toString()),
                 )
-        // パーティションは指定しない(キーで決まる。同じキーの DLQ のレコードは同じパーティションに順に入る)
-        val dead = ProducerRecord<ByteArray, ByteArray>(topic, null, record.key(), record.value(), headers)
+        return publish(ProducerRecord<ByteArray, ByteArray>(topic, null, record.key(), record.value(), headers))
+    }
+
+    /**
+     * Kafka 以外から受け取ったメッセージ(例 MQTT。ADR-0039 §4)を、それを変えて出すはずだった [topic] の DLQ に隔離する。
+     * キーと値は受け取ったバイト列のまま。ヘッダは [DeadLetterHeaders] のうち元の位置(source)以外と、今の span の `traceparent`、
+     * 呼び出し元が渡す [origin](元の場所を表すヘッダ。例 `eiaf.mqtt.topic`)。決定的な誤り(形式の誤りなど)だけを送るので、試した回数は 1。
+     */
+    public suspend fun sendExternal(
+        topic: String,
+        key: ByteArray?,
+        value: ByteArray?,
+        reason: DeadLetterReason,
+        origin: Map<String, String> = emptyMap(),
+    ): Result<DeadLettered, MessagingError> {
+        val headers =
+            listOfNotNull(CurrentTrace.get().traceParent?.let { header(TraceParent.HEADER, it.format()) }) +
+                origin.map { (name, text) -> header(name, text) } +
+                listOf(
+                    header(DeadLetterHeaders.REASON, reason.code),
+                    header(DeadLetterHeaders.DETAIL, reason.detail),
+                    header(DeadLetterHeaders.ATTEMPTS, "1"),
+                    header(DeadLetterHeaders.FAILED_AT, clock.now().toString()),
+                )
+        return publish(ProducerRecord<ByteArray, ByteArray>(deadLetterTopic(topic), null, key, value, headers))
+    }
+
+    // パーティションは指定しない(キーで決まる。同じキーの DLQ のレコードは同じパーティションに順に入る)
+    private suspend fun publish(dead: ProducerRecord<ByteArray, ByteArray>): Result<DeadLettered, MessagingError> {
+        val topic = dead.topic()
         return try {
             suspendCancellableCoroutine { continuation ->
                 producer.send(dead) { metadata, exception ->

@@ -31,6 +31,7 @@ import org.apache.kafka.common.errors.RecordTooLargeException
 import org.apache.kafka.common.serialization.ByteArraySerializer
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
+import kotlin.uuid.Uuid
 
 private val NOW = Instant.parse("2026-10-02T03:00:00Z")
 
@@ -53,6 +54,35 @@ class EventProducerSpec :
             val serializer =
                 AvroEventSerializer(TOPIC, SUBJECT_V1, ParcelShipped.serializer(), FakeRegistry(mapOf(SCHEMA_V1 to 7)).book(SUBJECT_V1))
             return mock to (EventProducer(mock, runtime, "/test/parcel-service", FixedClock(NOW)) to serializer)
+        }
+
+        test("送り手が識別子と時刻を決めたら(EventIdentity)、ce_id・ce_time・Kafka のレコードの時刻をそれにする") {
+            val (mock, pair) = fixture()
+            val (producer, serializer) = pair
+            val identity = EventIdentity(Uuid.parse("886313e1-3b8a-5372-9b90-0c9aee199e5d"), NOW - 3600.seconds)
+
+            producer.send(serializer, "p-1", SAMPLE, identity).ok()
+
+            val record = mock.history().single()
+            val metadata = EventMetadata.fromHeaders(record.headers()).ok()
+            metadata.id shouldBe identity.id
+            metadata.time shouldBe identity.time
+            record.timestamp() shouldBe identity.time.toEpochMilliseconds()
+        }
+
+        test("識別子を渡さなければ、ce_id は UUIDv7・ce_time は送る時刻で、レコードの時刻は Kafka に任せる") {
+            val (mock, pair) = fixture()
+            val (producer, serializer) = pair
+
+            producer.send(serializer, "p-1", SAMPLE).ok()
+
+            val record = mock.history().single()
+            EventMetadata
+                .fromHeaders(record.headers())
+                .ok()
+                .id
+                .toString()[14] shouldBe '7'
+            record.timestamp() shouldBe null
         }
 
         test("キーと値を送り、CloudEvents のヘッダに PRODUCER の span の traceparent と呼び出し元の Correlation ID を入れる") {

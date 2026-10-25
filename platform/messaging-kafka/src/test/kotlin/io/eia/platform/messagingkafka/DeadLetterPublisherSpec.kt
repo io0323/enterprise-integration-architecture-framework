@@ -89,6 +89,39 @@ class DeadLetterPublisherSpec :
             headers.getValue(TraceParent.HEADER).split('-')[2] shouldBe spanId
         }
 
+        test("Kafka 以外から受け取ったもの(MQTT)を、出すはずだったトピックの DLQ に、受け取ったバイト列のまま送る。元の場所はヘッダ") {
+            val mock = MockProducer(true, null, ByteArraySerializer(), ByteArraySerializer())
+            val publisher = DeadLetterPublisher(mock, FixedClock(FAILED_AT))
+
+            val (sent, spanId) =
+                runtime.withSpan("mqtt process") { span ->
+                    publisher
+                        .sendExternal(
+                            topic = "iot.telemetry.reported.v1",
+                            key = "t1/d-001".toByteArray(),
+                            value = """{"v":9}""".toByteArray(),
+                            reason = DeadLetterReason("UNSUPPORTED_PAYLOAD_VERSION", "v"),
+                            origin = mapOf("eiaf.mqtt.topic" to "devices/t1/d-001/telemetry"),
+                        ).ok() to span.spanContext.spanId
+                }
+
+            val record = mock.history().single()
+            sent.topic shouldBe "iot.telemetry.reported.v1.dlq"
+            String(record.key()) shouldBe "t1/d-001"
+            String(record.value()) shouldBe """{"v":9}"""
+            val headers = record.headers().associate { it.key() to String(it.value()) }
+            headers shouldBe
+                mapOf(
+                    TraceParent.HEADER to headers.getValue(TraceParent.HEADER),
+                    "eiaf.mqtt.topic" to "devices/t1/d-001/telemetry",
+                    "eiaf.dlq.reason" to "UNSUPPORTED_PAYLOAD_VERSION",
+                    "eiaf.dlq.detail" to "v",
+                    "eiaf.dlq.attempts" to "1",
+                    "eiaf.dlq.failed-at" to "2026-10-08T05:00:00Z",
+                )
+            headers.getValue(TraceParent.HEADER).split('-')[2] shouldBe spanId
+        }
+
         test("値のないレコード(tombstone)も、そのまま送れる") {
             val mock = MockProducer(true, null, ByteArraySerializer(), ByteArraySerializer())
             val tombstone =
