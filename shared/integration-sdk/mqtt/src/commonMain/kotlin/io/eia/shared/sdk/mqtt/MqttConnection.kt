@@ -138,8 +138,8 @@ internal class MqttConnection private constructor(
                 maximumPacketSize = properties.maximumPacketSize ?: MAX_PACKET_SIZE,
             )
         inFlight = Semaphore(minOf(config.maxInFlight, properties.receiveMaximum ?: MqttConfig.UINT16_MAX))
-        scope.launch { readLoop() }
-        if (limits.keepAlive.isPositive()) scope.launch { keepAliveLoop(limits.keepAlive) }
+        scope.launch { closingOnFailure { readLoop() } }
+        if (limits.keepAlive.isPositive()) scope.launch { closingOnFailure { keepAliveLoop(limits.keepAlive) } }
     }
 
     private suspend fun readLoop() {
@@ -163,6 +163,21 @@ internal class MqttConnection private constructor(
                 is InboundPacket.Disconnect -> close(MqttUnavailable("server_disconnected", packet.reasonCode))
                 else -> close(MqttUnavailable("protocol_error"))
             }
+        }
+    }
+
+    /**
+     * 受信と生存確認のループの想定外の例外(エンジンごとに型が違うソケットの例外など)で、接続を閉じる。
+     * native では、捕まえない例外がプロセスを落とすため(シミュレータが止まらないように)。キャンセルはそのまま伝える。
+     */
+    @Suppress("TooGenericExceptionCaught") // ループの最後の防御(接続が切れたものとして扱う)
+    private suspend fun closingOnFailure(loop: suspend () -> Unit) {
+        try {
+            loop()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            close(MqttUnavailable("connection_lost"))
         }
     }
 
