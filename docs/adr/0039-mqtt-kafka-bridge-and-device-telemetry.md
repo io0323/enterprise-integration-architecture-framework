@@ -128,3 +128,4 @@ P11(IoT (MQTT) & KMP SDK。#14)では、デバイスのテレメトリを MQTT B
 ## 改訂履歴
 - 2026-10-23: P11 ①(#14)で作成した。
 - 2026-10-24: §2 のブリッジの MQTT のクライアントを HiveMQ MQTT Client に決めた(ADR-0038 §3)。デバイスの側は ktor-network での最小限の実装(ADR-0038 §2)。§3 の Mosquitto の拒否の振る舞いを Mosquitto 2.1.2 で確かめた: ACL で書けないトピックの PUBLISH には PUBACK 0x87、パスワードの誤りには CONNACK 0x87(0x86 ではない)を返す(`MosquittoIT`)。
+- 2026-10-25: P11 ⑤a で iot-bridge の中核を実装した。§4 の形式のスキーマは契約(contracts/devices)をそのままリソースに含め、受け取ったペイロードを版ごとのスキーマで検証してから読む(契約が唯一の真実。版を足すときは契約・`DevicePayload`・受け付ける版の一覧を同じ PR で足す)。DLQ の `eiaf.dlq.detail` には、項目の位置と破った規則(JSON Schema のキーワード)だけを入れる(値は入れない)。§5 の ce_id の UUID の版 5 は RFC 9562 の既知の値で確かめた。
