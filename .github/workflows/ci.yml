@@ -12,7 +12,7 @@ concurrency:
 # アクションはタグではなくコミット SHA で固定し、コメントにバージョンを併記する。
 # 必須チェック(Ruleset「main protection」)は `build`・`changes`・`integration (Testcontainers)`・`macos (macosArm64 tests)`・`e2e`(ADR-0020 §3)。
 # `integration (Testcontainers)` は、グループごとの統合テストのジョブ `integration (<グループ>)` の結果をまとめるジョブ(#24)。
-# `macos` ジョブは shared/** などの変更時だけ、`integration` ジョブは platform/**・services/**・tools/**・contracts/** などの変更時だけ、
+# `macos` ジョブは shared/**・tools/device-simulator/** などの変更時だけ、`integration` ジョブは platform/**・services/**・tools/**・contracts/** などの変更時だけ、
 # `e2e` ジョブは services/**・platform/**・shared/**・contracts/**・infra/local/** などの変更時だけ実行される。
 # ジョブの `if` でスキップされたジョブは成功に数えられるので、関係のない PR は止まらない。
 # ジョブの `name` を変えるときは、Ruleset の必須チェックの名前も同時に変える(完全一致で照合される)。
@@ -51,6 +51,16 @@ jobs:
           cache-disabled: true
       - name: Build (ktlint, detekt, Konsist, jvm / js / linuxX64 tests, Kover)
         run: ./gradlew build
+      # P11 の DoD: デバイスのシミュレータの native の実行ファイル(linuxX64)を CI で組み立てる(macosArm64 は macos ジョブ)
+      - name: Device simulator (linuxX64 release executable)
+        run: ./gradlew :tools:device-simulator:linkReleaseExecutableLinuxX64
+      - name: Upload device simulator (linuxX64)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: device-simulator-linuxX64
+          path: tools/device-simulator/build/bin/linuxX64/releaseExecutable/device-simulator.kexe
+          if-no-files-found: error
+          retention-days: 14
       - name: Test summary
         if: ${{ !cancelled() }}
         run: python3 scripts/ci/test-summary.py >> "$GITHUB_STEP_SUMMARY"
@@ -92,6 +102,8 @@ jobs:
           filters: |
             shared:
               - 'shared/**'
+              # native の実行ファイル(macosArm64)を macos ジョブで組み立てる(P11)
+              - 'tools/device-simulator/**'
               - 'build-logic/**'
               - 'gradle/libs.versions.toml'
               - '.github/workflows/ci.yml'
@@ -124,7 +136,7 @@ jobs:
               - 'Makefile'
               - '.github/workflows/ci.yml'
 
-  # ADR-0004: macosArm64 は macOS ホストでしか実行できないため、shared/** の変更時のみ検証する。
+  # ADR-0004: macosArm64 は macOS ホストでしか実行できないため、shared/**・tools/device-simulator/** の変更時のみ検証する。
   macos:
     name: macos (macosArm64 tests)
     needs: changes
@@ -147,6 +159,16 @@ jobs:
           cache-provider: basic
       - name: macosArm64 tests
         run: ./gradlew macosArm64Test
+      # P11 の DoD: デバイスのシミュレータの native の実行ファイル(macosArm64)を CI で組み立てる
+      - name: Device simulator (macosArm64 release executable)
+        run: ./gradlew :tools:device-simulator:linkReleaseExecutableMacosArm64
+      - name: Upload device simulator (macosArm64)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: device-simulator-macosArm64
+          path: tools/device-simulator/build/bin/macosArm64/releaseExecutable/device-simulator.kexe
+          if-no-files-found: error
+          retention-days: 14
       - name: Test summary
         if: ${{ !cancelled() }}
         run: python3 scripts/ci/test-summary.py >> "$GITHUB_STEP_SUMMARY"

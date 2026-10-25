@@ -17,7 +17,7 @@ ADR-0001 で domain / application / shared を KMP(commonMain)とした。一方
 |---|---|---|
 | `shared/*`(kernel, resilience, canonical-model, integration-sdk) | jvm, js(IR), linuxX64, macosArm64 | ubuntu CI: jvm / js / linuxX64。macosArm64 は `shared/**` 変更時のみ macOS ランナーの別ジョブ(またはローカル実行の証跡で代替) |
 | `services/*/{domain,application}` | **jvm のみ**(ソースは commonMain) | ubuntu CI |
-| `tools/device-simulator` | linuxX64, macosArm64(実行バイナリ) | P11 で定義 |
+| `tools/device-simulator` | linuxX64, macosArm64(実行バイナリ)。jvm はテストとカバレッジだけ | ubuntu CI: jvm / linuxX64 のテストと linuxX64 の release の実行ファイル(build ジョブ)。macosArm64 のテストと実行ファイルは macOS ランナーの別ジョブ(`tools/device-simulator/**` の変更時も) |
 | `platform/*`, `services/*/{adapters,app}`, `tools/*`(上記以外), `tests/e2e` | JVM | ubuntu CI |
 
 - build-logic の `eia.kmp-library` は、ターゲット集合を拡張関数(例: `eiaTargets { jvm(); js(); native() }`)で宣言できる形にする。
@@ -76,3 +76,4 @@ ADR-0001 で domain / application / shared を KMP(commonMain)とした。一方
 - 2026-09-30: §5 の「`Clock` と `Random` をインジェクションする」のうち、経過時間(締め切り・Circuit Breaker の Open の期間)は、壁時計の `Clock` ではなく単調な `TimeSource` を注入する(P04b。理由は ADR-0021 §6)。業務の時刻には引き続き `Clock` を使う。
 - 2026-10-23: §2 の `shared/integration-sdk` の例外を、`io.ktor.client` から `io.ktor.client`・`io.ktor.http`・`io.ktor.utils.io` に広げた(Ktor Client の要求・応答の型。`io.ktor.server` は禁止のまま)。SDK の HTTP の部分の commonMain は許可の一覧(`sharedImportAllowList`)でも縛る(P11 ②a。ADR-0037 §1)。
 - 2026-10-24: `shared/integration-sdk/mqtt` のターゲットを jvm・linuxX64・macosArm64 にした(js は持たない。規約 `eia.kmp-socket-library`。ADR-0038 §2)。§2 の SDK の例外に `io.ktor.network` を足した(MQTT の TCP。使えるパッケージはモジュールごとの許可の一覧で絞る)。
+- 2026-10-25: §1 の `tools/device-simulator` の行を決めた(P11 ④)。実行ファイルは linuxX64・macosArm64 で、jvm はテストとカバレッジ(Kover は JVM だけ)のために持つ(規約 `eia.kmp-native-tool`)。CI は build ジョブで linuxX64、macos ジョブで macosArm64 の release の実行ファイルを組み立て、成果物にする。依存してよいのは SDK の MQTT の部分だけ(Konsist の `deviceSimulatorDependencies`)。

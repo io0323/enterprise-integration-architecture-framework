@@ -25,7 +25,7 @@ Kotlin のパッケージ名に `-` は使えないため、サービスのパ�
 | `shared/kernel`, `shared/resilience`, `shared/canonical-model`, `shared/integration-sdk/http` | KMP | jvm, js(IR), linuxX64, macosArm64 |
 | `shared/integration-sdk/mqtt` | KMP(`eia.kmp-socket-library`) | jvm, linuxX64, macosArm64(js は持たない。ブラウザからは TCP のソケットを開けない。ADR-0038 §2)。実際の Mosquitto に対する統合テストは jvm の `integrationTest`(src/integrationTest/kotlin) |
 | `services/*/domain`, `services/*/application` | KMP(commonMain) | jvm のみ(`eia.kmp-domain` の DSL で追加可能) |
-| `tools/device-simulator` | KMP | linuxX64, macosArm64 |
+| `tools/device-simulator` | KMP(`eia.kmp-native-tool`) | linuxX64, macosArm64(実行ファイル)。jvm はテストとカバレッジだけ |
 | `platform/*`, `services/*/{adapters,app}`, `tools/*`(上記以外), `tests/e2e` | JVM | — |
 
 ## 2. 依存関係
@@ -72,7 +72,7 @@ flowchart BT
 - `services` 間のコード依存は禁止(連携は契約経由のみ)。契約モデルは contracts から生成するか `adapters` 内で定義する。
 - `tests:e2e` は `services:*` にコード依存しない(契約・SDK・公開エンドポイント経由のみで検証する)。公開エンドポイント(Gateway・Keycloak・Tempo・Prometheus・Grafana)には JDK の HttpClient で接続し、client-credentials のトークンの取得だけは P11 ②b から `shared:integration-sdk:http` の `ClientCredentialsTokenProvider` を使う(ADR-0037 §5)。ソースは `src/e2eTest/kotlin`、実行は `make e2e`(起動した基盤に対して)と ci の `e2e` ジョブ。
 - `platform:security` は `shared:integration-sdk:http` に依存する(Client Credentials のトークンの取得の中身とスコープの形式を SDK と共有する。ADR-0037 §2)。`HttpCallClassifier`・`RetryAfter` も SDK にある(`platform:reliability` は `ResilienceMetrics` だけ)。
-- `tools:device-simulator` は SDK の中の `shared:integration-sdk:mqtt` にのみ依存する(HTTP の部分の Curl のエンジン(libcurl)を native のバイナリに巻き込まない。ADR-0039 §1)。
+- `tools:device-simulator` は SDK の中の `shared:integration-sdk:mqtt` にのみ依存する(HTTP の部分の Curl のエンジン(libcurl)を native のバイナリに巻き込まない。ADR-0039 §1。Konsist の `deviceSimulatorDependencies` が import と build.gradle.kts の `project(...)` を検査する)。
 - SDK は HTTP の部分(`shared:integration-sdk:http`。Ktor Client。ADR-0037)と MQTT の部分(`shared:integration-sdk:mqtt`。ADR-0038)に分け、互いに依存しない。リトライ・traceparent は `shared:resilience`、待ち時間の計算は `shared:kernel` の `RetryPolicy` を使う(同じ処理を SDK に作らない)。
 
 ## 3. サービス内部レイアウト(例: order)

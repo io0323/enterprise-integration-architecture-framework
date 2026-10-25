@@ -79,6 +79,7 @@ include(
     ":tools:architecture-test",
     ":tools:audit-verify",
     ":tools:contract-check",
+    ":tools:device-simulator",
     ":tools:dlq-replay",
     ":tools:schema-publish",
     ":tests:e2e",

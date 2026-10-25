@@ -101,6 +101,17 @@ class ArchitectureRulesSpec :
                     )
             }
 
+            test("device-simulator が SDK の MQTT の部分の外に依存する(import と build.gradle.kts の project)") {
+                ArchitectureRules.deviceSimulatorDependencies(violations).map {
+                    it.path.substringAfterLast('/') to
+                        it.detail.substringBefore('(')
+                } shouldContainExactlyInAnyOrder
+                    listOf(
+                        "UsesHttpSdk.kt" to "import io.eia.shared.sdk.http.IntegrationClient",
+                        "build.gradle.kts" to "project",
+                    )
+            }
+
             test("テスト以外のソースセットから platform/test-support を参照する") {
                 ArchitectureRules.testSupportOnlyFromTests(violations).fileNames() shouldContainExactlyInAnyOrder
                     listOf("UsesTestSupportInMain.kt", "UsesTestSupportQualified.kt")
@@ -191,6 +202,7 @@ class ArchitectureRulesSpec :
 
             test("shared の許可リスト・DomainError 分類の排他・test-support の参照元・OTel SDK と Nimbus の配置") {
                 ArchitectureRules.sharedImportAllowList(compliant).shouldBeEmpty()
+                ArchitectureRules.deviceSimulatorDependencies(compliant).shouldBeEmpty()
                 ArchitectureRules.testSupportOnlyFromTests(compliant).shouldBeEmpty()
                 ArchitectureRules.domainErrorKindIsExclusive(compliant).shouldBeEmpty()
                 ArchitectureRules.otelSdkOnlyInAllowedModules(compliant).shouldBeEmpty()
