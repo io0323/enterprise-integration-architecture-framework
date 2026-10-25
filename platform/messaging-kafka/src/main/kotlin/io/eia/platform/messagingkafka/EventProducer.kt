@@ -15,6 +15,8 @@ import org.apache.kafka.common.KafkaException
 import org.apache.kafka.common.errors.RetriableException
 import kotlin.coroutines.resume
 import kotlin.time.Clock
+import kotlin.time.Instant
+import kotlin.uuid.Uuid
 
 /**
  * イベントを Kafka に直接送る(Framework 6。ADR-0025 §4)。
@@ -22,7 +24,8 @@ import kotlin.time.Clock
  * **DB の更新と組み合わせるイベントは、これを使わず Outbox(ADR-0007)で発行する**(二重書き込みの禁止。CLAUDE.md §5)。
  * これを使うのは、DB の更新を伴わない送信だけ(例: CDC の Anti-Corruption 変換が、受け取ったイベントを整形して送り直す)。
  *
- * - `ce_id` は UUIDv7([EventIds])。
+ * - `ce_id` は UUIDv7([EventIds])、`ce_time` は送る時刻。送り手が識別子と時刻を決める場合([EventIdentity]。例 iot-bridge は
+ *   デバイスのメッセージから作る UUID の版 5 と受け取った時刻。ADR-0039 §5・§7)は、それを使い、Kafka のレコードの時刻もその時刻にする。
  * - 送信ごとに PRODUCER の span(`{topic} publish`)を作り、その `traceparent` と Correlation ID をヘッダに入れる
  *   (CloudEvents binary mode。[EventMetadata])。Correlation ID は呼び出し元のコンテキストのものを引き継ぐ(なければ採番する)。
  * - キーはパーティションキー(集約の ID など)。同じキーのイベントは同じパーティションに入り、順序が保たれる。
@@ -44,12 +47,17 @@ public class EventProducer(
         require(source.isNotBlank()) { "source が空です" }
     }
 
-    /** [value] を [serializer] のトピックに送る。 */
+    /**
+     * [value] を [serializer] のトピックに送る。
+     *
+     * @param identity `ce_id` と `ce_time`(と Kafka のレコードの時刻)を送り手が決めるときに渡す。なければ UUIDv7 と送る時刻
+     */
     public suspend fun <T> send(
         serializer: AvroEventSerializer<T>,
         key: String,
         value: T,
-    ): Result<PublishedEvent, MessagingError> = publish(serializer.topic, key) { serializer.serialize(value) }
+        identity: EventIdentity? = null,
+    ): Result<PublishedEvent, MessagingError> = publish(serializer.topic, key, identity) { serializer.serialize(value) }
 
     /**
      * [topic] に [key] の tombstone(値のないレコード)を送る。compacted のトピックで、そのキーの削除を表す(ADR-0026 §9)。
@@ -58,11 +66,12 @@ public class EventProducer(
     public suspend fun sendTombstone(
         topic: EventTopic,
         key: String,
-    ): Result<PublishedEvent, MessagingError> = publish(topic, key) { ok(null) }
+    ): Result<PublishedEvent, MessagingError> = publish(topic, key, identity = null) { ok(null) }
 
     private suspend fun publish(
         topic: EventTopic,
         key: String,
+        identity: EventIdentity?,
         payload: () -> Result<ByteArray?, MessagingError>,
     ): Result<PublishedEvent, MessagingError> =
         observability.withSpan("${topic.name} publish", SpanKind.PRODUCER) { span ->
@@ -79,15 +88,15 @@ public class EventProducer(
                     val trace = CurrentTrace.get()
                     val metadata =
                         EventMetadata(
-                            id = ids.next(),
+                            id = identity?.id ?: ids.next(),
                             source = source,
                             type = topic.ceType,
-                            time = clock.now(),
+                            time = identity?.time ?: clock.now(),
                             traceParent = requireNotNull(trace.traceParent) { "PRODUCER の span の traceparent がありません" },
                             correlationId = requireNotNull(trace.correlationId) { "Correlation ID がありません" },
                         )
                     span.setAttribute(MESSAGING_MESSAGE_ID, metadata.id.toString())
-                    send(topic, key, serialized.value, metadata).also { result ->
+                    send(topic, key, serialized.value, metadata, timestamp = identity?.time).also { result ->
                         (result as? Result.Err)?.let { span.setAttribute(ERROR_TYPE, it.error.code) }
                     }
                 }
@@ -99,8 +108,18 @@ public class EventProducer(
         key: String,
         payload: ByteArray?,
         metadata: EventMetadata,
+        timestamp: Instant?,
     ): Result<PublishedEvent, MessagingError> {
-        val record = ProducerRecord(topic.name, null, key.toByteArray(Charsets.UTF_8), payload, metadata.toHeaders())
+        // レコードの時刻(保持期間の起点)。指定がなければ Kafka の既定(送る時刻)
+        val record =
+            ProducerRecord(
+                topic.name,
+                null,
+                timestamp?.toEpochMilliseconds(),
+                key.toByteArray(Charsets.UTF_8),
+                payload,
+                metadata.toHeaders(),
+            )
         return try {
             suspendCancellableCoroutine { continuation ->
                 producer.send(record) { recordMetadata, exception ->
@@ -145,6 +164,15 @@ public class EventProducer(
         const val OPERATION_SEND = "send"
     }
 }
+
+/**
+ * 送り手が決める `ce_id` と `ce_time`。同じメッセージを送り直しても同じ `ce_id` になるように、送り手が元のメッセージから作る
+ * (受信側の冪等の判定に使う)。[time] は Kafka のレコードの時刻にもする(保持期間の起点)。
+ */
+public data class EventIdentity(
+    public val id: Uuid,
+    public val time: Instant,
+)
 
 /** 送信したイベント。 */
 public data class PublishedEvent(

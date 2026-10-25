@@ -41,6 +41,14 @@ internal object LibraryDeclarationRules {
             "platform/file-transfer と platform/test-support だけ。ADR-0032 §8",
         )
 
+    private val HIVEMQ =
+        Library(
+            "HiveMQ MQTT Client の依存の宣言",
+            listOf("libs.hivemq.", "\"com.hivemq:"),
+            listOf(Regex("""^services/iot-bridge/adapters/""")),
+            "services/iot-bridge/adapters だけ。ADR-0038 §3",
+        )
+
     private val HADOOP_MARKERS = listOf("libs.hadoop.", "\"org.apache.hadoop:")
     private val HADOOP_RUNTIME_CHECKED = listOf(Regex("""^platform/"""), Regex("""^services/"""))
 
@@ -51,6 +59,7 @@ internal object LibraryDeclarationRules {
                     outsideAllowed(AWS_SDK, path, declaration),
                     outsideAllowed(PARQUET, path, declaration),
                     outsideAllowed(TRANSFER_SECURITY, path, declaration),
+                    outsideAllowed(HIVEMQ, path, declaration),
                     hadoopAtRuntime(path, configuration, declaration),
                 )
             }

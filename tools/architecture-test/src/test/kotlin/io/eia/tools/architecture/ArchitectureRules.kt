@@ -324,6 +324,23 @@ internal object ArchitectureRules {
         return imports + projects
     }
 
+    private const val HIVEMQ_PACKAGE = "com.hivemq"
+    private val HIVEMQ_ALLOWED_PATHS = listOf(Regex("""^services/iot-bridge/adapters/"""))
+    private const val HIVEMQ_RULE = "HiveMQ MQTT Client の配置"
+
+    /**
+     * ADR-0038 §3: MQTT の購読のライブラリ(HiveMQ MQTT Client、`com.hivemq`)を使ってよいのは services/iot-bridge/adapters だけ。
+     * デバイスの側は SDK の MQTT の部分(shared/integration-sdk/mqtt)を使う。テストのソースセットは除く。
+     */
+    fun hivemqOnlyInIotBridge(codeBase: CodeBase): List<Violation> =
+        packageOnlyInAllowedPaths(
+            codeBase,
+            HIVEMQ_PACKAGE,
+            HIVEMQ_ALLOWED_PATHS,
+            HIVEMQ_RULE,
+            "services/iot-bridge/adapters だけ。ADR-0038 §3",
+        )
+
     private const val NIMBUS_PACKAGE = "com.nimbusds"
     private val NIMBUS_ALLOWED_PATHS = listOf(Regex("""^platform/security/"""))
     private const val NIMBUS_RULE = "Nimbus JOSE+JWT の配置"

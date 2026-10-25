@@ -122,6 +122,10 @@ class ArchitectureRulesSpec :
                     listOf("UsesOtelSdk.kt", "UsesOtelSdkQualified.kt")
             }
 
+            test("HiveMQ MQTT Client を services/iot-bridge/adapters 以外の本番コードで使う") {
+                ArchitectureRules.hivemqOnlyInIotBridge(violations).fileNames() shouldContainExactlyInAnyOrder listOf("UsesHiveMq.kt")
+            }
+
             test("Nimbus JOSE+JWT を platform/security 以外の本番コードで使う") {
                 ArchitectureRules.nimbusOnlyInSecurity(violations).fileNames() shouldContainExactlyInAnyOrder
                     listOf("UsesNimbus.kt", "UsesNimbusQualified.kt")
@@ -155,6 +159,7 @@ class ArchitectureRulesSpec :
                         "platform/reliability/build.gradle.kts" to "AWS SDK の依存の宣言",
                         "platform/reliability/build.gradle.kts" to "Parquet・Hadoop の依存の宣言",
                         "platform/reliability/build.gradle.kts" to "SFTP・PGP の依存の宣言",
+                        "platform/reliability/build.gradle.kts" to "HiveMQ MQTT Client の依存の宣言",
                         "platform/file-transfer/build.gradle.kts" to "Hadoop は compileOnly だけ",
                     )
             }
@@ -207,6 +212,7 @@ class ArchitectureRulesSpec :
                 ArchitectureRules.domainErrorKindIsExclusive(compliant).shouldBeEmpty()
                 ArchitectureRules.otelSdkOnlyInAllowedModules(compliant).shouldBeEmpty()
                 ArchitectureRules.nimbusOnlyInSecurity(compliant).shouldBeEmpty()
+                ArchitectureRules.hivemqOnlyInIotBridge(compliant).shouldBeEmpty()
                 ArchitectureRules.canonicalModelOutsideDomainAndApplication(compliant).shouldBeEmpty()
                 ArchitectureRules.resilienceOnlyThroughMetrics(compliant).shouldBeEmpty()
                 ArchitectureRules.messagingLibrariesOnlyInAllowedModules(compliant).shouldBeEmpty()

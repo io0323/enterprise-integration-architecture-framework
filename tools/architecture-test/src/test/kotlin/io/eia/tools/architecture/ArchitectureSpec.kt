@@ -65,6 +65,10 @@ class ArchitectureSpec :
             ArchitectureRules.otelSdkOnlyInAllowedModules(codeBase).assertNone()
         }
 
+        test("HiveMQ MQTT Client は services/iot-bridge/adapters だけで使う(ADR-0038 §3)") {
+            ArchitectureRules.hivemqOnlyInIotBridge(codeBase).assertNone()
+        }
+
         test("Nimbus JOSE+JWT は platform/security だけで使う(ADR-0019 §1)") {
             ArchitectureRules.nimbusOnlyInSecurity(codeBase).assertNone()
         }
@@ -85,7 +89,7 @@ class ArchitectureSpec :
             ArchitectureRules.transferSecurityOnlyInFileTransfer(codeBase).assertNone()
         }
 
-        test("AWS SDK・Parquet・Hadoop・SFTP・PGP の依存の宣言は許可したモジュールだけ。Hadoop は compileOnly だけ(ADR-0032 §6・§8・ADR-0033)") {
+        test("AWS SDK・Parquet・Hadoop・SFTP・PGP・HiveMQ の依存の宣言は許可したモジュールだけ。Hadoop は compileOnly だけ(ADR-0032 §6・§8・ADR-0033)") {
             LibraryDeclarationRules.violations(codeBase).assertNone()
         }
 
