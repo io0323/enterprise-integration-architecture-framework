@@ -278,6 +278,52 @@ internal object ArchitectureRules {
             "platform/observability と services/*/app だけ。ADR-0004 §4",
         )
 
+    private const val DEVICE_SIMULATOR_PATH = "tools/device-simulator/"
+    private const val DEVICE_SIMULATOR_SDK = ":shared:integration-sdk:mqtt"
+    private const val DEVICE_SIMULATOR_RULE = "device-simulator の依存"
+    private val DEVICE_SIMULATOR_IMPORTS =
+        listOf(
+            "kotlin",
+            "kotlinx.coroutines",
+            "kotlinx.cinterop",
+            "platform.posix",
+            "$BASE_PACKAGE.shared.kernel",
+            "$BASE_PACKAGE.shared.resilience",
+            "$BASE_PACKAGE.shared.sdk.mqtt",
+            "$BASE_PACKAGE.tools.devicesimulator",
+        )
+    private val PROJECT_REFERENCE = Regex("""project\(\s*"(:[^"]+)"\s*\)""")
+    private val COMMENT_LINE = Regex("""^\s*//""")
+
+    /**
+     * MODULE_DESIGN §2・ADR-0039 §1: tools/device-simulator は SDK の MQTT の部分(`:shared:integration-sdk:mqtt`)だけに依存する
+     * (HTTP の部分の Curl のエンジンなどを native のバイナリに巻き込まない)。本番のソースセットの import と、build.gradle.kts の
+     * `project(...)` の参照を検査する(テストのソースセットの import は除く)。
+     */
+    fun deviceSimulatorDependencies(codeBase: CodeBase): List<Violation> {
+        val imports =
+            codeBase
+                .filesUnder(DEVICE_SIMULATOR_PATH)
+                .filterNot { TEST_SOURCE_SET.containsMatchIn(it.path) }
+                .flatMap { file ->
+                    file.importNames
+                        .filter { import -> DEVICE_SIMULATOR_IMPORTS.none { import.isInPackage(it) } }
+                        .map { Violation(DEVICE_SIMULATOR_RULE, file.path, "import $it(SDK の MQTT の部分・kernel・resilience と Kotlin の標準だけ)") }
+                }
+        val projects =
+            codeBase.buildScripts
+                .filterKeys { it.startsWith(DEVICE_SIMULATOR_PATH) }
+                .flatMap { (path, script) ->
+                    script
+                        .lines()
+                        .filterNot { COMMENT_LINE.containsMatchIn(it) }
+                        .flatMap { line -> PROJECT_REFERENCE.findAll(line).map { it.groupValues[1] } }
+                        .filter { it != DEVICE_SIMULATOR_SDK }
+                        .map { Violation(DEVICE_SIMULATOR_RULE, path, "project(\"$it\") に依存しています($DEVICE_SIMULATOR_SDK だけ)") }
+                }
+        return imports + projects
+    }
+
     private const val NIMBUS_PACKAGE = "com.nimbusds"
     private val NIMBUS_ALLOWED_PATHS = listOf(Regex("""^platform/security/"""))
     private const val NIMBUS_RULE = "Nimbus JOSE+JWT の配置"

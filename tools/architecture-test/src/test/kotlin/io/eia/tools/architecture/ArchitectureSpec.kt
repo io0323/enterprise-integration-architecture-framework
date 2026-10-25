@@ -53,6 +53,10 @@ class ArchitectureSpec :
             ArchitectureRules.sharedImportAllowList(codeBase).assertNone()
         }
 
+        test("tools/device-simulator は SDK の MQTT の部分だけに依存する(MODULE_DESIGN §2・ADR-0039 §1)") {
+            ArchitectureRules.deviceSimulatorDependencies(codeBase).assertNone()
+        }
+
         test("platform/test-support はテストのソースセットからだけ参照する") {
             ArchitectureRules.testSupportOnlyFromTests(codeBase).assertNone()
         }
