@@ -25,7 +25,6 @@ import org.apache.kafka.common.serialization.ByteArraySerializer
 import java.io.ByteArrayOutputStream
 import java.io.PrintStream
 import java.util.Optional
-import kotlin.time.Instant
 
 private const val SOURCE = "payment.payment.cmd-authorize.v1"
 private const val DLQ = "$SOURCE.dlq"
@@ -103,62 +102,16 @@ class DlqReplayCommandSpec :
             DlqReplayArgs.parse(listOf("--topic", DLQ, "--limit", "1001")).err() shouldContain "1〜1000"
         }
 
-        test("引数: 条件をすべて読み、誤り(知らない引数・値の欠落・重複・形式・範囲)を拒否する") {
+        test("引数: 条件は共通の解析(ReplayCommandLine)で読み、--bootstrap はこのコマンドだけが受け付ける") {
             val args =
                 DlqReplayArgs
-                    .parse(
-                        listOf(
-                            "--topic",
-                            DLQ,
-                            "--limit",
-                            "10",
-                            "--execute",
-                            "--reason",
-                            "CARD_EXPIRED",
-                            "--type",
-                            "payment.payment.cmd-authorize",
-                            "--key",
-                            "saga-1",
-                            "--partition",
-                            "2",
-                            "--from-offset",
-                            "3",
-                            "--to-offset",
-                            "9",
-                            "--failed-from",
-                            "2026-10-09T01:00:00Z",
-                            "--failed-to",
-                            "2026-10-09T02:00:00Z",
-                            "--exclude-replayed",
-                            "--bootstrap",
-                            "kafka:9092",
-                        ),
-                    ).ok()
+                    .parse(listOf("--topic", DLQ, "--limit", "10", "--execute", "--reason", "CARD_EXPIRED", "--bootstrap", "kafka:9092"))
+                    .ok()
             args.request.execute shouldBe true
+            args.request.filter.reason shouldBe "CARD_EXPIRED"
             args.bootstrapServers shouldBe "kafka:9092"
-            with(args.request.filter) {
-                reason shouldBe "CARD_EXPIRED"
-                ceType shouldBe "payment.payment.cmd-authorize"
-                key shouldBe "saga-1"
-                partition shouldBe 2
-                fromOffset shouldBe 3L
-                toOffset shouldBe 9L
-                failedFrom shouldBe Instant.parse("2026-10-09T01:00:00Z")
-                failedTo shouldBe Instant.parse("2026-10-09T02:00:00Z")
-                includeReplayed shouldBe false
-            }
-
-            val base = listOf("--topic", DLQ, "--limit", "1")
-            DlqReplayArgs.parse(base + "--all").err() shouldContain "知らない引数"
-            DlqReplayArgs.parse(base + "--reason").err() shouldContain "値がありません"
-            DlqReplayArgs.parse(base + listOf("--limit", "2")).err() shouldContain "2 回"
-            DlqReplayArgs.parse(base + listOf("--partition", "-1")).err() shouldContain "0 以上"
-            DlqReplayArgs.parse(base + listOf("--from-offset", "x")).err() shouldContain "0 以上"
-            DlqReplayArgs.parse(base + listOf("--failed-from", "yesterday")).err() shouldContain "ISO 8601"
-            DlqReplayArgs.parse(base + listOf("--from-offset", "5", "--to-offset", "4")).err() shouldContain "以下"
-            DlqReplayArgs
-                .parse(base + listOf("--failed-from", "2026-10-09T02:00:00Z", "--failed-to", "2026-10-09T01:00:00Z"))
-                .err() shouldContain "より前"
+            DlqReplayArgs.parse(listOf("--topic", DLQ, "--limit", "1", "--all")).err() shouldContain "知らない引数"
+            DlqReplayArgs.USAGE shouldContain "--exclude-replayed"
         }
 
         test("dry-run は一覧と件数を出して 0 で終わる。値は出さない") {
@@ -185,6 +138,10 @@ class DlqReplayCommandSpec :
             run(listOf("--topic", "_cdc.legacy.public.t_juchu.dlq", "--limit", "10")).let { (code, output) ->
                 code shouldBe DlqReplayCommand.FAILED
                 output shouldContain "cdc-resync.md"
+            }
+            run(listOf("--topic", "iot.telemetry.reported.v1.dlq", "--limit", "10")).let { (code, output) ->
+                code shouldBe DlqReplayCommand.FAILED
+                output shouldContain "reprocess-dlq"
             }
             run(listOf("--topic", DLQ, "--limit", "10")) { error("value=secret") }.let { (code, output) ->
                 code shouldBe DlqReplayCommand.FAILED

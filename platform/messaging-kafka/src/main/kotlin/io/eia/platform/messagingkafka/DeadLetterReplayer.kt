@@ -35,6 +35,8 @@ import kotlin.time.toJavaDuration
  * - 戻すメッセージは、キー・値・`ce_id` を含むヘッダを DLQ のまま使い、`eiaf.dlq.*` を外して `eiaf.replay.*` を加える。
  *   `ce_id` が変わらないので、同じメッセージを 2 回戻しても、受信側の冪等消費(platform/inbox)で 1 回だけ処理される。
  * - 生の CDC の DLQ(`_cdc.*`)は戻さない。回復は signal 表による部分の再同期で行う(ADR-0026 §7。docs/runbooks/cdc-resync.md)。
+ *   値が Avro でない DLQ(Kafka 以外から受け取ったもの。例 iot-bridge)も元のトピックには戻さない。サービスの再処理のコマンドが、
+ *   この部品に [DeadLetterRedelivery] を渡して処理し直す(読む範囲・条件・件数の上限・dry-run は同じ。ADR-0039 §4)。
  * - ログ・結果に値は入れない(キーは出す。キーは集約の ID で、イベントの値を含まない)。
  *
  * [consumer] と [producer] は [connect] で作る(閉じるのは [close])。
@@ -46,9 +48,16 @@ public class DeadLetterReplayer(
     private val pollTimeout: Duration = DEFAULT_POLL_TIMEOUT,
     private val readTimeout: Duration = DEFAULT_READ_TIMEOUT,
 ) : Closeable {
+    /**
+     * @param redelivery 1 件の処理し直し方。null なら元のトピックにそのまま戻す(送るのは execute のときだけ)。
+     *   渡したときは、dry-run でも 1 件ずつ呼ぶ(送らずに見込みを返す)
+     */
     @Suppress("ReturnCount") // 依頼の検査・読み取りの失敗のそれぞれで、送る前に返す
-    public suspend fun replay(request: ReplayRequest): Result<ReplayReport, ReplayError> {
-        refusal(request.deadLetterTopic)?.let { return err(it) }
+    public suspend fun replay(
+        request: ReplayRequest,
+        redelivery: DeadLetterRedelivery? = null,
+    ): Result<ReplayReport, ReplayError> {
+        (if (redelivery == null) refusal(request.deadLetterTopic) else notDeadLetter(request.deadLetterTopic))?.let { return err(it) }
         val partitions =
             try {
                 consumer.partitionsFor(request.deadLetterTopic).orEmpty().map { TopicPartition(request.deadLetterTopic, it.partition()) }
@@ -62,7 +71,14 @@ public class DeadLetterReplayer(
                 is Result.Err -> return read
             }
         val selected = candidates.matched.take(request.limit)
-        val outcomes = if (request.execute) selected.map { send(it, request.sourceTopic) } else selected.map { ReplayOutcome.PLANNED }
+        val outcomes =
+            selected.map { candidate ->
+                when {
+                    redelivery != null -> redelivery.redeliver(candidate.toDeadLetterRecord(), request.execute)
+                    request.execute -> send(candidate, request.sourceTopic)
+                    else -> ReplayOutcome.PLANNED
+                }
+            }
         return ok(
             ReplayReport(
                 deadLetterTopic = request.deadLetterTopic,
@@ -83,7 +99,16 @@ public class DeadLetterReplayer(
     private class Candidate(
         val record: ConsumerRecord<ByteArray?, ByteArray?>,
         val entry: ReplayEntry,
-    )
+    ) {
+        fun toDeadLetterRecord(): DeadLetterRecord =
+            DeadLetterRecord(
+                entry = entry,
+                key = record.key(),
+                value = record.value(),
+                headers = record.headers().associate { it.key() to it.value().toString(Charsets.UTF_8) },
+                timestamp = Instant.fromEpochMilliseconds(record.timestamp()),
+            )
+    }
 
     private class Read(
         val scanned: Int,
@@ -157,11 +182,21 @@ public class DeadLetterReplayer(
         private val DEFAULT_READ_TIMEOUT = 60.seconds
         private const val RAW_CDC_PREFIX = "_cdc."
 
+        /**
+         * 値が Avro でなく、元のトピックにそのまま戻してはならない DLQ と、回復の方法。サービスの再処理のコマンドが
+         * [DeadLetterRedelivery] を渡して処理し直す。
+         */
+        private val REPROCESSED_BY_SERVICE: Map<String, String> =
+            mapOf(
+                "iot.telemetry.reported.v1.dlq" to
+                    "値は MQTT から受け取った JSON のままです。iot-bridge の reprocess-dlq で、デコードからやり直してください(ADR-0039 §4)",
+            )
+
         /** 戻してはならない DLQ。理由を返す(戻してよければ null)。 */
         internal fun refusal(deadLetterTopic: String): ReplayError.Refused? =
-            when {
-                !deadLetterTopic.endsWith(DeadLetterPublisher.SUFFIX) || deadLetterTopic == DeadLetterPublisher.SUFFIX -> {
-                    ReplayError.Refused("$deadLetterTopic は DLQ ではありません({topic}.dlq を指定してください)")
+            notDeadLetter(deadLetterTopic) ?: when {
+                deadLetterTopic in REPROCESSED_BY_SERVICE -> {
+                    ReplayError.Refused("$deadLetterTopic は元のトピックに戻しません。${REPROCESSED_BY_SERVICE.getValue(deadLetterTopic)}")
                 }
 
                 deadLetterTopic.startsWith(RAW_CDC_PREFIX) -> {
@@ -173,6 +208,14 @@ public class DeadLetterReplayer(
                 else -> {
                     null
                 }
+            }
+
+        /** `{topic}.dlq` の形でなければ理由を返す。 */
+        internal fun notDeadLetter(deadLetterTopic: String): ReplayError.Refused? =
+            if (!deadLetterTopic.endsWith(DeadLetterPublisher.SUFFIX) || deadLetterTopic == DeadLetterPublisher.SUFFIX) {
+                ReplayError.Refused("$deadLetterTopic は DLQ ではありません({topic}.dlq を指定してください)")
+            } else {
+                null
             }
 
         /**
@@ -327,8 +370,14 @@ public enum class ReplayOutcome {
     /** 元のトピックに送った。 */
     REPLAYED,
 
-    /** 元のトピックの記録(`eiaf.dlq.source.topic`)が DLQ の名前と合わないため、送らなかった。 */
+    /** 元のトピックの記録(`eiaf.dlq.source.topic`。[DeadLetterRedelivery] ではそれに当たる記録)が合わないため、送らなかった。 */
     SKIPPED_SOURCE_MISMATCH,
+
+    /**
+     * 処理し直しても受け付けなかった([DeadLetterRedelivery] だけが返す。例 デコーダを直す前に再処理した)。送らず、DLQ に新しくも入れない
+     * (DLQ のレコードは残る。原因を除いてから、もう一度実行する)。
+     */
+    REJECTED,
 
     /** 送信に失敗した(もう一度実行してよい。受信側は冪等)。 */
     FAILED,

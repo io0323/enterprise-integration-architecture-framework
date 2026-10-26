@@ -1,8 +1,7 @@
 package io.eia.tools.dlqreplay
 
 import io.eia.platform.messagingkafka.DeadLetterReplayer
-import io.eia.platform.messagingkafka.ReplayOutcome
-import io.eia.platform.messagingkafka.ReplayReport
+import io.eia.platform.messagingkafka.ReplayCommandLine
 import io.eia.shared.kernel.Result
 import kotlinx.coroutines.runBlocking
 import java.io.PrintStream
@@ -52,9 +51,8 @@ internal class DlqReplayCommand(
         return connect(parsed.bootstrapServers).use { replayer ->
             when (val result = runBlocking { replayer.replay(parsed.request) }) {
                 is Result.Ok -> {
-                    print(result.value, out)
-                    val done = setOf(ReplayOutcome.PLANNED, ReplayOutcome.REPLAYED)
-                    if (result.value.entries.all { it.outcome in done }) OK else PARTIAL
+                    ReplayCommandLine.print(result.value, out)
+                    ReplayCommandLine.exitCode(result.value)
                 }
 
                 is Result.Err -> {
@@ -65,31 +63,10 @@ internal class DlqReplayCommand(
         }
     }
 
-    private fun print(
-        report: ReplayReport,
-        out: PrintStream,
-    ) {
-        val mode = if (report.executed) "execute" else "dry-run(送っていない。送るには --execute)"
-        out.println("DLQ: ${report.deadLetterTopic} → ${report.sourceTopic}($mode)")
-        out.println("partition\toffset\tkey\tce_id\tce_type\treason\tfailed_at\treplayed_before\toutcome")
-        report.entries.forEach { e ->
-            out.println(
-                listOf(e.partition, e.offset, e.key, e.ceId, e.ceType, e.reason, e.failedAt, e.replayedBefore, e.outcome)
-                    .joinToString("\t") { it?.toString() ?: "-" },
-            )
-        }
-        out.println(
-            "読んだ件数 ${report.scanned} / 条件に合った件数 ${report.matched} / 対象 ${report.entries.size}" +
-                "(上限で除いた件数 ${report.truncated})/ " +
-                ReplayOutcome.entries.joinToString(" / ") { "${it.name} ${report.count(it)}" },
-        )
-        if (report.truncated > 0) out.println("上限を超えた分は対象にしていません。結果を確かめてから、もう一度実行してください")
-    }
-
     companion object {
-        const val OK = 0
-        const val PARTIAL = 1
-        const val FAILED = 2
+        const val OK = ReplayCommandLine.OK
+        const val PARTIAL = ReplayCommandLine.PARTIAL
+        const val FAILED = ReplayCommandLine.FAILED
         private const val CLIENT_ID = "dlq-replay"
     }
 }
