@@ -39,21 +39,23 @@ private const val V2 =
         """"readings":[{"name":"temperature","value":20}]}"""
 
 /** 取り込みの代わり。受けたものを記録し、[result] を返す(既定は本物と同じにそろえた結果)。 */
-private class RecordingIngest(
-    private val result: (InboundTelemetry) -> Result<Telemetry, DomainError> = { message ->
-        DeviceAddress.fromTopic(message.topic).let { address ->
-            when (address) {
-                is Result.Ok -> ok(TelemetryNormalization.normalize(address.value, message.payload, message.receivedAt))
-                is Result.Err -> err(address.error)
-            }
-        }
-    },
+internal class RecordingIngest(
+    private val result: (InboundTelemetry) -> Result<Telemetry, DomainError> = { normalized(it) },
 ) : IngestTelemetryUseCase {
     val received = mutableListOf<InboundTelemetry>()
 
     override suspend fun invoke(message: InboundTelemetry): Result<Telemetry, DomainError> {
         received += message
         return result(message)
+    }
+
+    companion object {
+        /** 本物と同じにそろえた結果。 */
+        fun normalized(message: InboundTelemetry): Result<Telemetry, DomainError> =
+            when (val address = DeviceAddress.fromTopic(message.topic)) {
+                is Result.Ok -> ok(TelemetryNormalization.normalize(address.value, message.payload, message.receivedAt))
+                is Result.Err -> err(address.error)
+            }
     }
 }
 
@@ -128,6 +130,10 @@ class TelemetryMessageHandlerSpec :
             val headers = record.headers().associate { it.key() to String(it.value()) }
             headers["eiaf.dlq.reason"] shouldBe "UNSUPPORTED_PAYLOAD_VERSION"
             headers["eiaf.mqtt.topic"] shouldBe TOPIC
+            // 再処理で受け取った時刻と Correlation ID を引き継ぐ(ADR-0039 §4)
+            headers["eiaf.mqtt.received-at"] shouldBe RECEIVED.toString()
+            headers["correlationid"] shouldBe "corr-1"
+            headers["traceparent"]!!.contains("0af7651916cd43dd8448eb211c80319c") shouldBe true
         }
 
         test("トピックの形が違うもの(取り込みの拒否)も DLQ に隔離する。キーはない") {
@@ -150,6 +156,18 @@ class TelemetryMessageHandlerSpec :
             handler(RecordingIngest { err(UnavailableError("kafka")) }, dlq).handle(message()) shouldBe HandlingResult.RETRY
 
             dlq.history().size shouldBe 0
+        }
+
+        test("一時的な失敗の後は、次に発行できるまで送り直しの待ち(準備のチェック)") {
+            var fail = true
+            val handler = handler(RecordingIngest { if (fail) err(UnavailableError("kafka")) else RecordingIngest.normalized(it) })
+
+            handler.isRetrying shouldBe false
+            handler.handle(message()) shouldBe HandlingResult.RETRY
+            handler.isRetrying shouldBe true
+            fail = false
+            handler.handle(message()) shouldBe HandlingResult.ACKNOWLEDGE
+            handler.isRetrying shouldBe false
         }
 
         test("発行の恒久的な失敗(契約と実装の食い違いなど)は UNPUBLISHABLE で DLQ に隔離する") {

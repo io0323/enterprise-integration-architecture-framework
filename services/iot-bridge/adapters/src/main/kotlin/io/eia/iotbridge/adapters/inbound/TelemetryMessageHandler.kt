@@ -8,6 +8,8 @@ import io.eia.iotbridge.domain.DeviceAddress
 import io.eia.iotbridge.domain.TelemetryRejection
 import io.eia.platform.messagingkafka.DeadLetterPublisher
 import io.eia.platform.messagingkafka.DeadLetterReason
+import io.eia.platform.messagingkafka.EventMetadata
+import io.eia.platform.messagingkafka.ReplayOutcome
 import io.eia.platform.observability.ObservabilityRuntime
 import io.eia.platform.observability.context.ObservabilityContext
 import io.eia.platform.observability.context.withSpan
@@ -47,7 +49,8 @@ public enum class HandlingResult {
  * - **トレース**: MQTT v5 のユーザープロパティの `traceparent` の子の CONSUMER の span で処理する。Correlation ID は `correlationid` を
  *   引き継ぐ。どちらもなければ(MQTT v3.1.1 のデバイス)新しく始める(§10)。span の名前にはデバイスの ID を入れない。
  * - **読み取り**: 形式のスキーマで検証して読む([DevicePayloadDecoder])。受け付けないもの(知らない版・形式の誤り・トピックの誤り)は
- *   捨てずに `iot.telemetry.reported.v1.dlq` に、受け取ったバイト列のまま隔離する(§4)。元のトピックは `eiaf.mqtt.topic`。
+ *   捨てずに `iot.telemetry.reported.v1.dlq` に、受け取ったバイト列のまま隔離する(§4)。元のトピック・受け取った時刻・Correlation ID は
+ *   ヘッダ(`eiaf.mqtt.topic`・`eiaf.mqtt.received-at`・`correlationid`)。再処理([reprocess])でそのまま引き継ぐ。
  * - **発行**: 一時的な失敗([DomainError.Retryable])は [HandlingResult.RETRY](PUBACK を返さない)。DLQ に送れないときも RETRY。
  *   恒久的な発行の失敗(契約と実装の食い違いなど)は DLQ に隔離する(`UNPUBLISHABLE`)。
  * - ログ・span・DLQ の説明にペイロードの値は入れない。
@@ -61,7 +64,48 @@ public class TelemetryMessageHandler(
 ) {
     private val propagator = observability.openTelemetry.propagators.textMapPropagator
 
-    public suspend fun handle(message: ReceivedMqttMessage): HandlingResult {
+    @Volatile
+    private var lastRetried = false
+
+    /** 直近の処理が一時的な失敗(Kafka に送れない)で、送り直しを待っているか(準備のチェック)。 */
+    public val isRetrying: Boolean get() = lastRetried
+
+    /** MQTT から受け取ったものを処理する。受け付けないものは DLQ に隔離する。 */
+    public suspend fun handle(message: ReceivedMqttMessage): HandlingResult =
+        traced(message) { span, context ->
+            when (val processed = process(span, message, context)) {
+                Processed.Published -> HandlingResult.ACKNOWLEDGE
+                Processed.Retry -> HandlingResult.RETRY
+                is Processed.Rejected -> deadLetter(span, message, context, processed)
+            }
+        }.also { lastRetried = it == HandlingResult.RETRY }
+
+    /**
+     * DLQ から取り出したものを、デコードからやり直して発行する(iot-bridge の `reprocess-dlq`。§4)。
+     * 受け付けないものは DLQ に入れ直さない(DLQ のレコードは残る)。
+     */
+    internal suspend fun reprocess(message: ReceivedMqttMessage): ReplayOutcome =
+        traced(message) { span, context ->
+            when (val processed = process(span, message, context)) {
+                Processed.Published -> {
+                    ReplayOutcome.REPLAYED
+                }
+
+                Processed.Retry -> {
+                    ReplayOutcome.FAILED
+                }
+
+                is Processed.Rejected -> {
+                    logger.warn("再処理しても受け付けません reason={} detail={}", processed.reason, processed.detail)
+                    ReplayOutcome.REJECTED
+                }
+            }
+        }
+
+    private suspend fun <T> traced(
+        message: ReceivedMqttMessage,
+        block: suspend (Span, MessageContext) -> T,
+    ): T {
         val properties = message.userProperties.associate { it }
         val parent = propagator.extract(Context.root(), properties, UserPropertiesGetter)
         val correlationId = properties[CORRELATION_ID]?.let { CorrelationId.parse(it).getOrNull() } ?: CorrelationId.generate()
@@ -69,64 +113,74 @@ public class TelemetryMessageHandler(
             observability.withSpan(SPAN_NAME, SpanKind.CONSUMER) { span ->
                 span.setAttribute(MESSAGING_SYSTEM, MQTT)
                 span.setAttribute(MESSAGING_DESTINATION_TEMPLATE, SUBSCRIPTION)
-                process(span, message, MessageContext(properties[TRACEPARENT], correlationId.value))
+                block(span, MessageContext(properties[TRACEPARENT], correlationId.value))
             }
         }
+    }
+
+    private sealed interface Processed {
+        data object Published : Processed
+
+        data object Retry : Processed
+
+        data class Rejected(
+            val reason: String,
+            val detail: String,
+        ) : Processed
     }
 
     private suspend fun process(
         span: Span,
         message: ReceivedMqttMessage,
         context: MessageContext,
-    ): HandlingResult =
+    ): Processed =
         when (val decoded = decoder.decode(message.payload)) {
             is Result.Err -> {
-                deadLetter(span, message, decoded.error.reason.name, decoded.error.detail)
+                Processed.Rejected(decoded.error.reason.name, decoded.error.detail)
             }
 
             is Result.Ok -> {
                 when (val result = ingest(InboundTelemetry(message.topic, decoded.value, message.receivedAt, context))) {
                     is Result.Ok -> {
                         metrics.published(result.value)
-                        HandlingResult.ACKNOWLEDGE
+                        Processed.Published
                     }
 
                     is Result.Err -> {
-                        failed(span, message, result.error)
+                        failed(span, result.error)
                     }
                 }
             }
         }
 
-    private suspend fun failed(
+    private fun failed(
         span: Span,
-        message: ReceivedMqttMessage,
         error: DomainError,
-    ): HandlingResult =
+    ): Processed =
         when (error) {
             is TelemetryRejection -> {
-                deadLetter(span, message, error.reason.name, error.detail)
+                Processed.Rejected(error.reason.name, error.detail)
             }
 
             is DomainError.Retryable -> {
                 span.setAttribute(ERROR_TYPE, error.code)
                 logger.warn("テレメトリを発行できません。PUBACK を返さずに送り直します code={}", error.code)
                 metrics.retried()
-                HandlingResult.RETRY
+                Processed.Retry
             }
 
             is DomainError.NonRetryable -> {
-                deadLetter(span, message, UNPUBLISHABLE, error.code)
+                Processed.Rejected(UNPUBLISHABLE, error.code)
             }
         }
 
     private suspend fun deadLetter(
         span: Span,
         message: ReceivedMqttMessage,
-        reason: String,
-        detail: String,
+        context: MessageContext,
+        rejected: Processed.Rejected,
     ): HandlingResult {
-        span.setAttribute(ERROR_TYPE, reason)
+        span.setAttribute(ERROR_TYPE, rejected.reason)
         val key =
             DeviceAddress
                 .fromTopic(message.topic)
@@ -139,13 +193,15 @@ public class TelemetryMessageHandler(
                     topic = IotEventSchemas.TELEMETRY_REPORTED.name,
                     key = key,
                     value = message.payload,
-                    reason = DeadLetterReason(reason, detail),
-                    origin = mapOf(MQTT_TOPIC_HEADER to message.topic),
+                    reason = DeadLetterReason(rejected.reason, rejected.detail),
+                    origin =
+                        mapOf(MQTT_TOPIC_HEADER to message.topic, MQTT_RECEIVED_AT_HEADER to message.receivedAt.toString()) +
+                            listOfNotNull(context.correlationId?.let { EventMetadata.CORRELATION_ID to it }),
                 )
         ) {
             is Result.Ok -> {
-                logger.warn("テレメトリを DLQ に隔離しました reason={} detail={}", reason, detail)
-                metrics.rejected(reason)
+                logger.warn("テレメトリを DLQ に隔離しました reason={} detail={}", rejected.reason, rejected.detail)
+                metrics.rejected(rejected.reason)
                 HandlingResult.ACKNOWLEDGE
             }
 
@@ -163,6 +219,9 @@ public class TelemetryMessageHandler(
 
         /** DLQ のヘッダ: 元の MQTT のトピック(ADR-0039 §4)。 */
         public const val MQTT_TOPIC_HEADER: String = "eiaf.mqtt.topic"
+
+        /** DLQ のヘッダ: MQTT から受け取った時刻(ISO 8601。再処理で `receivedAt` に使う。§4・§7)。 */
+        public const val MQTT_RECEIVED_AT_HEADER: String = "eiaf.mqtt.received-at"
 
         /** 恒久的に発行できない(契約と実装の食い違いなど)。 */
         public const val UNPUBLISHABLE: String = "UNPUBLISHABLE"

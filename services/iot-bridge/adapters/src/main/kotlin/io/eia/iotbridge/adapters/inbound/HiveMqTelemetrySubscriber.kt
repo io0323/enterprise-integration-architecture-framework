@@ -64,27 +64,30 @@ public class HiveMqTelemetrySubscriber(
     /** 購読を始めたか(受け取れる状態か。準備のチェック)。 */
     public val isSubscribed: Boolean get() = subscribed && isConnected
 
-    /** 接続して購読し、キャンセルされるまで処理する。 */
+    /**
+     * 接続して購読し、キャンセルされるまで処理する。最初の接続か購読に失敗したら、切断して(自動の再接続も止めて)例外で終わる。
+     * やり直すときは、新しいインスタンスで呼ぶ(1 つのインスタンスで呼ぶのは 1 回だけ)。
+     */
     public suspend fun run() {
-        client.publishes(MqttGlobalPublishFilter.ALL, { queue.trySend(Received(it, clock.now())) }, true)
-        client
-            .connectWith()
-            .cleanStart(false)
-            .sessionExpiryInterval(settings.sessionExpiry.inWholeSeconds)
-            .restrictions()
-            .receiveMaximum(settings.receiveMaximum)
-            .applyRestrictions()
-            .send()
-            .await()
-        client
-            .subscribeWith()
-            .topicFilter(TelemetryMessageHandler.SUBSCRIPTION)
-            .qos(MqttQos.AT_LEAST_ONCE)
-            .send()
-            .await()
-        subscribed = true
-        logger.info("MQTT の購読を始めました topic={}", TelemetryMessageHandler.SUBSCRIPTION)
         try {
+            client.publishes(MqttGlobalPublishFilter.ALL, { queue.trySend(Received(it, clock.now())) }, true)
+            client
+                .connectWith()
+                .cleanStart(false)
+                .sessionExpiryInterval(settings.sessionExpiry.inWholeSeconds)
+                .restrictions()
+                .receiveMaximum(settings.receiveMaximum)
+                .applyRestrictions()
+                .send()
+                .await()
+            client
+                .subscribeWith()
+                .topicFilter(TelemetryMessageHandler.SUBSCRIPTION)
+                .qos(MqttQos.AT_LEAST_ONCE)
+                .send()
+                .await()
+            subscribed = true
+            logger.info("MQTT の購読を始めました topic={}", TelemetryMessageHandler.SUBSCRIPTION)
             for (received in queue) process(received)
         } finally {
             subscribed = false

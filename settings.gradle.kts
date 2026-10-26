@@ -55,6 +55,7 @@ include(
     ":services:iot-bridge:domain",
     ":services:iot-bridge:application",
     ":services:iot-bridge:adapters",
+    ":services:iot-bridge:app",
     ":services:legacy-order-acl:domain",
     ":services:legacy-order-acl:application",
     ":services:legacy-order-acl:adapters",
