@@ -14,6 +14,8 @@
 
 **対象外**: 生の CDC の DLQ(`_cdc.*.dlq`)は戻さない(古い状態で上書きするため)。`docs/runbooks/legacy-order-acl.md` と `docs/runbooks/cdc-resync.md`(signal 表の部分の再同期)に従う。`make dlq-replay` も拒否する。
 
+**対象外**: IoT のテレメトリの DLQ(`iot.telemetry.reported.v1.dlq`)も戻さない(値が Avro ではなく、MQTT から受け取った JSON のまま)。デコーダを直した後に、iot-bridge の `reprocess-dlq`(デコードからやり直す。引数・dry-run・終了コードはこの Runbook と同じ)で処理し直す(ADR-0039 §4)。
+
 ## まず見るもの
 - サービスのログ(`make logs SERVICE=<service>`)。DLQ に送ったときは `処理できないメッセージを DLQ に送りました(reason=..., detail=..., attempts=..., <topic> partition=... offset=...)` が WARN で出る。値は出ない。
 - メトリクス(Prometheus / Grafana の Explore): `eia_consumer_dead_letters_total{reason}`・`eia_consumer_messages_total{outcome}`・`eia_consumer_retries_total`・`eia_consumer_unavailable_total{error_code}`。

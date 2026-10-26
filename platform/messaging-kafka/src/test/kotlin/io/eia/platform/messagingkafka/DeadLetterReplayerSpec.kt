@@ -210,11 +210,42 @@ class DeadLetterReplayerSpec :
                 .count(ReplayOutcome.FAILED) shouldBe 1
         }
 
+        test("処理し直し方を渡すと、条件と上限で選んだものを 1 件ずつ渡す(dry-run でも呼ぶ)。元のトピックには送らない") {
+            val (replayer, producer) = replayer(records)
+            val seen = mutableListOf<Pair<DeadLetterRecord, Boolean>>()
+            val redelivery =
+                DeadLetterRedelivery { record, execute ->
+                    seen += record to execute
+                    if (record.entry.key == "saga-2") ReplayOutcome.REJECTED else ReplayOutcome.REPLAYED
+                }
+
+            val request = ReplayRequest(DLQ, ReplayFilter(includeReplayed = false), limit = 3, execute = true)
+            val report = replayer.replay(request, redelivery).ok()
+
+            producer.history().size shouldBe 0
+            report.entries.map { it.key to it.outcome } shouldBe
+                listOf("saga-1" to ReplayOutcome.REPLAYED, "saga-2" to ReplayOutcome.REJECTED, "saga-1" to ReplayOutcome.REPLAYED)
+            report.truncated shouldBe 1
+            val first = seen.first().first
+            first.value!!.toList() shouldBe listOf<Byte>(0, 1, 0)
+            String(first.key!!) shouldBe "saga-1"
+            first.headers[DeadLetterHeaders.REASON] shouldBe "UNKNOWN_SKU"
+            first.timestamp shouldBe Instant.fromEpochMilliseconds(0)
+            seen.all { it.second } shouldBe true
+
+            replayer(records).first.replay(ReplayRequest(DLQ, ReplayFilter(), limit = 1, execute = false), redelivery).ok()
+            seen.last().second shouldBe false
+        }
+
         test("DLQ でないトピック・生の CDC の DLQ・存在しない DLQ は拒否する") {
             DeadLetterReplayer.refusal(SOURCE).shouldBeInstanceOf<ReplayError.Refused>()
             DeadLetterReplayer.refusal(".dlq").shouldBeInstanceOf<ReplayError.Refused>()
             DeadLetterReplayer.refusal("_cdc.legacy.public.t_juchu.dlq")!!.message shouldContain "cdc-resync.md"
             DeadLetterReplayer.refusal(DLQ) shouldBe null
+            // 値が Avro でない DLQ は元のトピックに戻さない(サービスの再処理のコマンドで処理し直す。ADR-0039 §4)
+            DeadLetterReplayer.refusal("iot.telemetry.reported.v1.dlq")!!.message shouldContain "reprocess-dlq"
+            DeadLetterReplayer.notDeadLetter("iot.telemetry.reported.v1.dlq") shouldBe null
+            DeadLetterReplayer.notDeadLetter(SOURCE).shouldBeInstanceOf<ReplayError.Refused>()
 
             val consumer = MockConsumer<ByteArray?, ByteArray?>(AutoOffsetResetStrategy.EARLIEST.name())
             val producer = MockProducer<ByteArray?, ByteArray?>(true, null, ByteArraySerializer(), ByteArraySerializer())

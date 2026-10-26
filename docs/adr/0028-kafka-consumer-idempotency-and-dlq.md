@@ -81,6 +81,7 @@ P06 ⑤b の legacy-order-acl は、同じ役割の読み取りのループ(`Leg
 - 戻したメッセージが再び失敗すれば、`eiaf.replay.*` が付いたまま DLQ に入る(`DeadLetterPublisher` は `eiaf.dlq.*` だけを置き換える)。一覧の `replayed_before` で分かる。
 - **生の CDC の DLQ(`_cdc.*`)は拒否する**。後から届いた変更より古い状態で上書きするため、signal 表の部分の再同期で回復する(ADR-0026 §7)。DLQ の記録の元のトピックが DLQ の名前と合わないものも戻さない。
 - 順序: 戻したメッセージは、隔離の後に届いた同じキーのメッセージより後に処理される。受信側は業務キーで冪等で、状態の遷移を検査するので、古い指示は拒否されるか何もしない。業務として正しいかは、Runbook の手順でキーごとに確かめる。
+- **値が Avro でない DLQ(Kafka 以外から受け取ったもの)は拒否する**(例 `iot.telemetry.reported.v1.dlq`。MQTT から受け取った JSON のまま)。サービスの再処理のコマンドが、`DeadLetterReplayer` に 1 件の処理し直し方(`DeadLetterRedelivery`)を渡して処理し直す(読み取り・条件・件数の上限・dry-run・表示・終了コードは同じ。同じ仕組みを 2 つ持たない。ADR-0039 §4)。処理し直し方は dry-run でも呼ばれ、送らずに見込みを返す。まだ受け付けないものは `REJECTED`(DLQ に入れ直さない)。
 - CLI の終了コード: 0 = 終えた、1 = 戻せなかったものがある(もう一度実行してよい)、2 = 実行できない。出力に値は出さない。Kafka のクライアントは `platform/messaging-kafka` の中だけで使う(Konsist。CLI は `DeadLetterReplayer.connect` を呼ぶだけ)。
 
 ## Alternatives Considered
@@ -104,3 +105,4 @@ P06 ⑤b の legacy-order-acl は、同じ役割の読み取りのループ(`Leg
   - 値がない(tombstone)レコードは、以前は ACL が `UNDECODABLE` で DLQ に送っていたが、`UNEXPECTED_TOMBSTONE` になる(Debezium のコネクタは `tombstones.on.delete=false` なので、実際には届かない)。
   - ACL の DLQ と読み直しの件数は、`eia.acl.dead_letters`・`eia.acl.retries` から `eia.consumer.dead_letters`・`eia.consumer.unavailable`(Consumer Group `legacy-order-acl.translate`)に移した。`eia.acl.records` は変換して発行した件数(`upserted`・`deleted`)だけを数える。ダッシュボード(CDC — Legacy)を合わせて直した。アラート(`acl.rules.yml`)は kafka-exporter のメトリクスで判定しているので変わらない。
   - Kafka の停止と再開(コミットの途中・読み取りの最中)とリバランスで読み取りが止まらないことを、`LegacyOrderAclIT` で確かめる。
+- 2026-10-26: P11 ⑤c で、§6 の Replay に 1 件の処理し直し方(`DeadLetterRedelivery`)を渡せるようにし、値が Avro でない DLQ を拒否する規則と、結果 `REJECTED` を加えた(iot-bridge の `reprocess-dlq`。ADR-0039 §4)。CLI の引数の解析と表示は `tools/dlq-replay` から `platform/messaging-kafka` の `ReplayCommandLine` に移し、2 つのコマンドで共有する(引数・表示・終了コードは変えていない)。
