@@ -185,9 +185,10 @@ print(d.get("iss"), ",".join(aud), " ".join(sorted(d.get("scope","").split())))'
   check "Prometheus: 送った metric を検索できる" retry 30 2 bash -c \
     "curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=eiaf_verify_probe' | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin)[\"data\"][\"result\"] else 1)'"
 
-  # Prometheus: ミドルウェア自身のメトリクスの scrape 先がすべて up(CDC の監視の 3 つは cdc / order profile の検査で確かめる)
-  check "Prometheus: scrape 先がすべて up(CDC の監視を除く)" retry 10 3 bash -c \
-    "curl -fsS http://localhost:19090/api/v1/targets | python3 -c 'import json,sys; t=[x for x in json.load(sys.stdin)[\"data\"][\"activeTargets\"] if x[\"labels\"][\"job\"] not in (\"postgres-exporter\",\"kafka-exporter\",\"kafka-connect\")]; sys.exit(0 if t and all(x[\"health\"]==\"up\" for x in t) else 1)'"
+  # Prometheus: ミドルウェア自身のメトリクスの scrape 先がすべて up(CDC の監視の 3 つは cdc / order profile、
+  # Mosquitto の $SYS(mosquitto)は iot profile の検査で確かめる)
+  check "Prometheus: scrape 先がすべて up(CDC・Mosquitto の監視を除く)" retry 10 3 bash -c \
+    "curl -fsS http://localhost:19090/api/v1/targets | python3 -c 'import json,sys; t=[x for x in json.load(sys.stdin)[\"data\"][\"activeTargets\"] if x[\"labels\"][\"job\"] not in (\"postgres-exporter\",\"kafka-exporter\",\"kafka-connect\",\"mosquitto\")]; sys.exit(0 if t and all(x[\"health\"]==\"up\" for x in t) else 1)'"
 
   # Grafana: provisioning した 3 つのデータソースが疎通する
   for uid in prometheus tempo loki; do
