@@ -1,0 +1,139 @@
+# iot.rules.yml の単体テスト(promtool test rules。make alerts-test)。
+rule_files:
+  - iot.rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: 溜め込みが上限の半分を超えて 1 分続いたら warning、8 割を超えたら critical
+    interval: 1m
+    input_series:
+      - series: 'mosquitto_store_messages_count{job="mosquitto",instance="mosquitto-exporter:9273"}'
+        values: "1000 100000 150001 150001 200000 240001 240001"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: MqttBridgeQueueHalfFull
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: MqttBridgeQueueHalfFull
+        exp_alerts:
+          - exp_labels: { severity: warning, job: mosquitto }
+            exp_annotations:
+              summary: "Mosquitto の溜め込みが上限の半分を超えた(150001 件。上限 300000)"
+              runbook: docs/runbooks/iot-bridge.md#溜め込みが増えているとき
+      - eval_time: 4m
+        alertname: MqttBridgeQueueNearlyFull
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: MqttBridgeQueueNearlyFull
+        exp_alerts:
+          - exp_labels: { severity: critical, job: mosquitto }
+            exp_annotations:
+              summary: "Mosquitto の溜め込みが上限の 8 割を超えた(240001 件。上限 300000。超えると捨てる)"
+              runbook: docs/runbooks/iot-bridge.md#溜め込みが増えているとき
+
+  - name: 捨てた数が増えたら critical。変わらなければ出さない(Broker の起動からの累計)
+    interval: 1m
+    input_series:
+      - series: 'mosquitto_publish_messages_dropped{job="mosquitto",instance="mosquitto-exporter:9273"}'
+        values: "3 3 3 3 3 3 3 3 3 3 10 10"
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: MqttMessagesDropped
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: MqttMessagesDropped
+        exp_alerts:
+          - exp_labels: { severity: critical, job: mosquitto }
+            exp_annotations:
+              summary: "Mosquitto が上限を超えたメッセージを捨てた(直近 5 分に 8.75 件。取り戻せない)"
+              runbook: docs/runbooks/iot-bridge.md#捨てたとき
+
+  - name: 1 件目を捨てて捨てた数の系列が現れたら critical($SYS は 0 のうちは出さない)。5 分たてば消える
+    interval: 1m
+    input_series:
+      - series: 'mosquitto_publish_messages_dropped{job="mosquitto",instance="mosquitto-exporter:9273"}'
+        values: "_ _ _ _ _ 7x15"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: MqttMessagesDropped
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: MqttMessagesDropped
+        exp_alerts:
+          - exp_labels: { severity: critical, job: mosquitto }
+            exp_annotations:
+              summary: "Mosquitto が上限を超えたメッセージを捨てた(直近 5 分に 7 件。取り戻せない)"
+              runbook: docs/runbooks/iot-bridge.md#捨てたとき
+      - eval_time: 12m
+        alertname: MqttMessagesDropped
+        exp_alerts: []
+
+  # 最後の値から 5 分(Prometheus の lookback)で系列が消え、その 2 分後に出す
+  - name: Mosquitto のエクスポーターが動いているのに iot-bridge のメトリクスが 2 分ないと critical
+    interval: 1m
+    input_series:
+      - series: 'up{job="mosquitto",instance="mosquitto-exporter:9273"}'
+        values: "1x12"
+      - series: 'target_info{job="iot-bridge",instance="a"}'
+        values: "1 1 1"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: IotBridgeDown
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: IotBridgeDown
+        exp_alerts:
+          - exp_labels: { job: iot-bridge, severity: critical }
+            exp_annotations:
+              summary: "iot-bridge のメトリクスがない(テレメトリが Kafka に出ず、Mosquitto に溜まる)"
+              runbook: docs/runbooks/iot-bridge.md#iot-bridge-が止まっているとき
+
+  - name: iot profile を動かしていなければ(Mosquitto のエクスポーターがなければ)、iot-bridge のメトリクスがなくても出さない
+    interval: 1m
+    input_series:
+      - series: 'up{job="prometheus",instance="localhost:9090"}'
+        values: "1x10"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: IotBridgeDown
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: MosquittoMetricsMissing
+        exp_alerts: []
+
+  - name: iot-bridge が 5 分を超えて送り直し続けると warning
+    interval: 1m
+    input_series:
+      - series: 'eia_iot_telemetry_retries_total{job="iot-bridge",instance="a"}'
+        values: "0+3x15"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: IotBridgeRetrying
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: IotBridgeRetrying
+        exp_alerts:
+          - exp_labels: { severity: warning, job: iot-bridge }
+            exp_annotations:
+              summary: "iot-bridge が Kafka に送れずに送り直し続けている(Mosquitto に溜まる)"
+              runbook: docs/runbooks/iot-bridge.md#kafka-に送れないとき
+
+  - name: エクスポーターが動いているのに $SYS が 2 分届かないと warning
+    interval: 1m
+    input_series:
+      - series: 'up{job="mosquitto",instance="mosquitto-exporter:9273"}'
+        values: "1x12"
+      - series: 'mosquitto_clients_connected{job="mosquitto",instance="mosquitto-exporter:9273"}'
+        values: "2 2"
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: MosquittoMetricsMissing
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: MosquittoMetricsMissing
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "Mosquitto の $SYS(溜め込みの数・捨てた数)が届かない(上限に近づいても気づけない)"
+              runbook: docs/runbooks/iot-bridge.md#溜め込みの数が見えないとき

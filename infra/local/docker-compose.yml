@@ -176,7 +176,7 @@ services:
   # トピックのオフセットと Consumer Group の lag(P06 ④。P07 の Consumer の DLQ・lag のアラートにも使う。ADR-0028 §5)
   kafka-exporter:
     image: ${KAFKA_EXPORTER_IMAGE:?}
-    profiles: [cdc, order, saga, batch, saas]
+    profiles: [cdc, order, saga, batch, saas, iot]
     command: ["--kafka.server=kafka:9092"]
     depends_on:
       kafka:
@@ -227,8 +227,9 @@ services:
   kafka-topics:
     image: ${KAFKA_IMAGE:?}
     # cdc: ACL の出力と DLQ。order: 注文 Saga のコマンド・返信と DLQ。saga: 参加者のコマンドの DLQ(ADR-0028・ADR-0029)。
-    # batch: 注文のイベント(保持 14 日)と DLQ(ADR-0031 §7)。saas: 取り込みのトピック(保持 7 日)・Canonical の顧客のイベントと DLQ(ADR-0035 §3)
-    profiles: [cdc, order, saga, batch, saas]
+    # batch: 注文のイベント(保持 14 日)と DLQ(ADR-0031 §7)。saas: 取り込みのトピック(保持 7 日)・Canonical の顧客のイベントと DLQ(ADR-0035 §3)。
+    # iot: テレメトリのイベントと DLQ(ADR-0039)
+    profiles: [cdc, order, saga, batch, saas, iot]
     entrypoint: ["/bin/bash", "/topics/create-topics.sh", "kafka:9092", "/topics/topics.conf"]
     depends_on:
       kafka:
@@ -702,33 +703,80 @@ services:
       <<: *healthcheck
       test: ["CMD", "/probe/bin/wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/health/ready"]
 
-  # ---------------------------------------------------------------- iot
+  # ---------------------------------------------------------------- iot(P11。ADR-0039)
+  # パスワードと ACL のファイルを、デバイスの一覧(mosquitto/devices.txt)と secrets/mqtt/device-passwords から起動のたびに作り直す
+  # (mosquitto/start.sh。ボリュームには置かない)。デバイスは自分のトピックにだけ書け、iot-bridge は読むだけ、eiaf-monitor は $SYS だけ
   mosquitto:
     image: ${MOSQUITTO_IMAGE:?}
     profiles: [iot]
-    # パスワードファイルを .env の値から起動のたびに作り直す(ボリュームには置かない。mosquitto ユーザーの所有・0700 が必要)
-    entrypoint:
-      - sh
-      - -c
-      - >-
-        rm -f /mosquitto/passwd &&
-        mosquitto_passwd -b -c /mosquitto/passwd "$$MQTT_USERNAME" "$$MQTT_PASSWORD" &&
-        chown mosquitto:mosquitto /mosquitto/passwd && chmod 0700 /mosquitto/passwd &&
-        exec /docker-entrypoint.sh mosquitto -c /mosquitto/config/mosquitto.conf
+    entrypoint: ["sh", "/mosquitto/start.sh"]
     environment:
-      MQTT_USERNAME: ${MQTT_USERNAME:?make env を実行してください}
-      MQTT_PASSWORD: ${MQTT_PASSWORD:?}
+      MQTT_BRIDGE_PASSWORD: ${MQTT_BRIDGE_PASSWORD:?make env を実行してください}
+      MQTT_MONITOR_PASSWORD: ${MQTT_MONITOR_PASSWORD:?make env を実行してください}
     ports:
       - 127.0.0.1:19883:1883
     volumes:
       - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/start.sh:/mosquitto/start.sh:ro
+      - ./mosquitto/devices.txt:/mosquitto/devices.txt:ro
+      - ./secrets/mqtt/device-passwords:/mosquitto/secrets/device-passwords:ro
       - mosquitto-data:/mosquitto/data
-    mem_limit: 64m
+    # 溜め込みの上限(max_queued_bytes 256 MiB。ADR-0039 §9)に届いても動けるだけのメモリ
+    mem_limit: 384m
     healthcheck:
       <<: *healthcheck
       test:
         - CMD-SHELL
-        - mosquitto_sub -h 127.0.0.1 -u "$$MQTT_USERNAME" -P "$$MQTT_PASSWORD" -t '$$SYS/broker/uptime' -C 1 -W 5 >/dev/null
+        - mosquitto_sub -h 127.0.0.1 -u eiaf-monitor -P "$$MQTT_MONITOR_PASSWORD" -t '$$SYS/broker/uptime' -C 1 -W 5 >/dev/null
+
+  # Mosquitto の $SYS(溜め込みの数・捨てた数)を Prometheus に出す(ADR-0039 §9)。iot-bridge が止まっている間こそ要るので別に動かす
+  mosquitto-exporter:
+    image: ${TELEGRAF_IMAGE:?}
+    profiles: [iot]
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    environment:
+      MQTT_MONITOR_PASSWORD: ${MQTT_MONITOR_PASSWORD:?make env を実行してください}
+    volumes:
+      - ./telegraf/telegraf.conf:/etc/telegraf/telegraf.conf:ro
+    mem_limit: 128m
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9273/metrics"]
+
+  # MQTT → Kafka の橋渡し(P11 ⑤。ADR-0039)。イメージは services/iot-bridge/app/Dockerfile で、中身は make up PROFILE=iot が先に作る。
+  # 書き込むイベントのスキーマ(契約)を schema-publish が登録し、トピックを kafka-topics が作ってから起動する。
+  # 永続セッションの識別子(IOT_BRIDGE_MQTT_CLIENT_ID)を変えると、Broker の溜め込みを引き継がない
+  iot-bridge:
+    build:
+      context: ../../services/iot-bridge/app
+      args:
+        JAVA_RUNTIME_IMAGE: ${JAVA_RUNTIME_IMAGE:?}
+    profiles: [iot]
+    command: ["serve"]
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      schema-publish:
+        condition: service_completed_successfully
+      kafka-topics:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_healthy
+    environment:
+      IOT_BRIDGE_KAFKA_BOOTSTRAP: kafka:9092
+      IOT_BRIDGE_SCHEMA_REGISTRY_URL: http://apicurio:8080/apis/registry/v3
+      IOT_BRIDGE_MQTT_HOST: mosquitto
+      IOT_BRIDGE_MQTT_PASSWORD: ${MQTT_BRIDGE_PASSWORD:?make env を実行してください}
+      OTEL_SERVICE_NAME: iot-bridge
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    volumes:
+      - *probe-volume
+    mem_limit: 256m
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "/probe/bin/wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/health/ready"]
 
   # ---------------------------------------------------------------- file / b2b / order
   # S3 互換オブジェクトストレージ(ADR-0015)。master・volume・filer・S3 ゲートウェイを 1 プロセスで動かす
@@ -907,8 +955,9 @@ services:
       args:
         JAVA_RUNTIME_IMAGE: ${JAVA_RUNTIME_IMAGE:?}
     # cdc: legacy-order-acl が書くイベントのスキーマ(ADR-0026)。order: order-service のイベント。saga: 参加者の返事(ADR-0029)。
-    # batch: batch-etl が読む注文のイベントの書き手のスキーマ(ADR-0031)。saas: 取り込みと Canonical の顧客のイベント(ADR-0035・ADR-0036)
-    profiles: [order, cdc, saga, batch, saas]
+    # batch: batch-etl が読む注文のイベントの書き手のスキーマ(ADR-0031)。saas: 取り込みと Canonical の顧客のイベント(ADR-0035・ADR-0036)。
+    # iot: テレメトリのイベント(ADR-0039)
+    profiles: [order, cdc, saga, batch, saas, iot]
     command: ["--registry", "http://apicurio:8080/apis/registry/v3", "--root", "/repo"]
     depends_on:
       apicurio:

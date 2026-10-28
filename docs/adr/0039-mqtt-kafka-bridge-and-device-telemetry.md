@@ -97,16 +97,38 @@ P11(IoT (MQTT) & KMP SDK。#14)では、デバイスのテレメトリを MQTT B
   | `retain_available` | false | retain を使わない(`$SYS` の保存の数を、溜め込みの数として読めるように) |
   | `persistent_client_expiration` | 2d | セッションの期限を付けない古いクライアントの後片付け |
 - **耐えられるブリッジの停止の時間 = `max_queued_messages` ÷ 流入の速さ**。前提の流入で **約 29 分**。デバイスの数・送る間隔が変わったら、この値を見直す(上限を上げると Broker のメモリが要る。Mosquitto はキューをメモリに持つ)。
-- **上限を超えたときの挙動**: Broker は、そのセッションの新しいメッセージを**黙って捨てる**(`max_queued_bytes` は mosquitto.conf(5) に明記。`max_queued_messages` も同じ扱いであることを ⑥ の検証で確かめる)。デバイスには PUBACK が返っているので、デバイスは送り直さない。**そのデータは失われる**(Broker からは取り戻せない。デバイスの中の保持は範囲外。§1)。捨てた数は `$SYS/broker/publish/messages/dropped` で数える。
-- **メトリクスとアラート**(⑥): Mosquitto の `$SYS` をエクスポーター(候補は sapcc/mosquitto-exporter(Apache-2.0)。イメージと版は ⑥ で確かめて `images.env` に固定する。合わなければ同じ役割の別のものを ADR の改訂で決める)で Prometheus に出す。iot-bridge 自身からは出さない(iot-bridge が止まっているときこそ要る)。
-  | アラート | 条件 | 重さ |
-  |---|---|---|
-  | 溜め込みが半分 | 保存のメッセージの数(`$SYS/broker/store/messages/count`)が上限の 50% を超えた(前提の流入で停止 約 15 分) | warning |
-  | 溜め込みが上限に近い | 80% を超えた | critical |
-  | 捨てた | 捨てた数が増えた | critical |
-  | ブリッジが止まった | iot-bridge のメトリクスが 2 分取れない | critical |
+- **上限を超えたときの挙動**: Broker は、そのセッションの**新しいメッセージを黙って捨てる**(古い溜め込みは残る)。⑥ の `MosquittoBrokerIT` で、実際の Mosquitto 2.1.2 と ⑥ の設定(上限だけ 5 にした)で確かめた: ブリッジの永続セッションが切れている間にデバイスが 10 件送ると、**10 件ともデバイスに PUBACK(成功)が返り**、`$SYS/broker/publish/messages/dropped` が 5 増え、ブリッジが戻ると**先に溜めた 5 件(seq 0〜4)だけ**が届く。デバイスには PUBACK が返っているので、デバイスは送り直さない。**そのデータは失われる**(Broker からは取り戻せない。デバイスの中の保持は範囲外。§1)。捨てた数は `$SYS/broker/publish/messages/dropped` で数える。
+- **メトリクスとアラート**(⑥): Mosquitto の `$SYS` をエクスポーターで Prometheus に出す。iot-bridge 自身からは出さない(iot-bridge が止まっているときこそ要る)。
+  - **エクスポーターの比較**(2026-10-28 に確かめた。ミドルウェアの追加なので、ここで決める):
+    | 候補 | ライセンス・保守 | 判断に効いた点 |
+    |---|---|---|
+    | sapcc/mosquitto-exporter(当初の候補) | Apache-2.0・最後のリリースは v0.8.0(2021-10) | Docker Hub のイメージが linux/amd64 だけで、ADR-0016 §2(linux/amd64 と linux/arm64)を満たさない。リリースが 5 年止まっている。不採用 |
+    | bpmbee/mosquitto-exporter など | 公開のソースとライセンスを確かめられない | 不採用 |
+    | **Telegraf(`inputs.mqtt_consumer` → `outputs.prometheus_client`。採用)** | MIT・InfluxData が保守(1.40.2 は 2026-10-12) | 公式のイメージが linux/amd64 と linux/arm64 を持つ。`$SYS` のトピックを購読して値を数値にし、Prometheus の形で出せる(設定だけで、コードを持たない) |
+  - 構成: コンテナ `mosquitto-exporter`(`TELEGRAF_IMAGE`。`infra/local/telegraf/telegraf.conf`)が、監視のユーザー `eiaf-monitor`(`$SYS/#` の読み取りだけ。§3)で
+    QoS 0 で購読し、`:9273` で Prometheus に出す(job `mosquitto`)。Mosquitto が止まって `$SYS` が届かなくなったら、1 分で系列が消える(古い値で判断しない)。
+    Mosquitto より先に起動しても止まらない(`startup_error_behavior = "retry"`)。
+  - **`$SYS` は値が変わったときだけ出す**。溜め込みの数・捨てた数は 0 のうちは出ず、捨てた数は 1 件目を捨てたときに系列が現れる(⑥ で確かめた)。
+    そのため、`$SYS` が届いていることは、監視のユーザー自身が数に入って常に 1 以上の接続の数で見る。ダッシュボードは、接続の数が届いている間だけ、ない値を 0 として表示する。
+  - メトリクス(`$SYS` の更新は 10 秒ごと。`sys_interval` の既定):
+    | Prometheus の名前 | `$SYS` のトピック |
+    |---|---|
+    | `mosquitto_store_messages_count` | `$SYS/broker/store/messages/count`(保存のメッセージの数) |
+    | `mosquitto_store_messages_bytes` | `$SYS/broker/store/messages/bytes` |
+    | `mosquitto_publish_messages_dropped` | `$SYS/broker/publish/messages/dropped`(捨てた数。Broker の起動からの累計) |
+    | `mosquitto_clients_connected` | `$SYS/broker/clients/connected` |
+  - アラート(`infra/local/prometheus/rules/iot.rules.yml`。単体テストは `iot.test.yml`):
+    | アラート | 条件 | 重さ |
+    |---|---|---|
+    | `MqttBridgeQueueHalfFull` | 保存のメッセージの数が上限の 50%(150000)を超えて 1 分(前提の流入で停止 約 15 分) | warning |
+    | `MqttBridgeQueueNearlyFull` | 80%(240000)を超えた | critical |
+    | `MqttMessagesDropped` | 捨てた数が増えた、または捨てた数の系列が現れた(直近 5 分) | critical |
+    | `IotBridgeDown` | Mosquitto のエクスポーターは動いているのに、iot-bridge のメトリクス(`target_info`)が 2 分ない | critical |
+    | `IotBridgeRetrying` | iot-bridge が Kafka に送れずに送り直し続けている(5 分) | warning |
+    | `MosquittoMetricsMissing` | エクスポーターは動いているのに `$SYS`(接続の数)が 2 分届かない(上限に近づいても気づけない) | warning |
   - `$SYS` の保存の数は Broker 全体の数(送り中・溜め込み・retain)。retain を使わず(上の `retain_available`)、購読するのはブリッジだけなので、ブリッジのセッションの溜め込みとして読める。
-  - 対応の手順は Runbook(`docs/runbooks/iot-bridge.md`。⑥)に書く。捨てた場合は、時間帯と件数を記録する(取り戻せない)。
+    上限の値を変えたら、しきい値・`iot.test.yml`・この節の「耐えられる時間」を同じ PR で直す。
+  - 対応の手順は Runbook(`docs/runbooks/iot-bridge.md`)。捨てた場合は、時間帯と件数を記録する(取り戻せない)。ダッシュボードは **IoT — Telemetry bridge**。
 
 ### 10. トレース
 - デバイスは MQTT v5 のユーザープロパティで `traceparent` と `correlationid` を送る。iot-bridge は、その子の CONSUMER のスパンで処理し、PRODUCER のスパンの traceparent を Kafka のヘッダに付ける。`correlationid` は引き継ぐ。
@@ -135,3 +157,4 @@ P11(IoT (MQTT) & KMP SDK。#14)では、デバイスのテレメトリを MQTT B
 - 2026-10-25: P11 ⑤a で iot-bridge の中核を実装した。§4 の形式のスキーマは契約(contracts/devices)をそのままリソースに含め、受け取ったペイロードを版ごとのスキーマで検証してから読む(契約が唯一の真実。版を足すときは契約・`DevicePayload`・受け付ける版の一覧を同じ PR で足す)。DLQ の `eiaf.dlq.detail` には、項目の位置と破った規則(JSON Schema のキーワード)だけを入れる(値は入れない)。§5 の ce_id の UUID の版 5 は RFC 9562 の既知の値で確かめた。
 - 2026-10-25: P11 ⑤b で iot-bridge の adapters を実装した。§2 の手動の ack は HiveMQ MQTT Client の `publishes(..., manualAcknowledgement = true)` で、処理(発行か DLQ)が確定してから PUBACK を返す。Kafka に送れないときは PUBACK を返さず、RetryPolicy の待ち時間(上限 30 秒)の後に同じメッセージを処理し直す(届いた順に 1 件ずつ。§6)。前のインスタンスの購読で溜まったものは、新しいクライアントからは購読していないものに見えるので、すべての PUBLISH を受け取る(ACL で `devices/+/+/telemetry` しか読めない)。§4 の DLQ は `DeadLetterPublisher.sendExternal`(Kafka 以外から受け取ったものを隔離する)で、恒久的な発行の失敗は理由 `UNPUBLISHABLE`。§5・§7 の ce_id と ce_time・レコードの時刻は `EventProducer` の `EventIdentity` で渡す。メトリクスは `eia.iot.telemetry.received{payload_version}`・`rejected{reason}`・`clock_suspect`・`lag`(秒)・`retries`。番号の振り直しで正当なデータが消費者の inbox で捨てられないこと、止まっている間の溜め込みが戻ると届くことを `IotBridgeIT` で確かめた。
 - 2026-10-26: P11 ⑤c で iot-bridge の app(`serve`・`reprocess-dlq`)を実装した。§2 にプロセスと準備の条件を、§4 に再処理のコマンドを書いた。再処理は P07 の `DeadLetterReplayer` に 1 件の処理し直し方(`DeadLetterRedelivery`)を渡す形にし、DLQ の読み取り・条件・件数の上限・dry-run・表示・終了コードを `make dlq-replay` と共有した(ADR-0028 §6)。再処理で受け取った時刻と Correlation ID を引き継ぐため、DLQ のヘッダに `eiaf.mqtt.received-at` と `correlationid` を足した。ヘルスチェックのサーバは Ktor の CIO(HiveMQ MQTT Client の Netty 4.1 と、Ktor の Netty のエンジンの Netty の版が合わないため)。`IotBridgeAppIT` で、準備の条件の順と、デコーダを足す前後の再処理(dry-run・REJECTED・REPLAYED、同じ ce_id・受け取った時刻・トレース)を確かめた。
+- 2026-10-28: P11 ⑥ でローカル基盤の iot profile を作った。§3 のパスワードと ACL のファイルは、起動のたびにデバイスの一覧(`infra/local/mosquitto/devices.txt`)と `make env` が作るパスワードから作り直す(`mosquitto/start.sh`)。§9 のエクスポーターを候補の比較のうえで Telegraf に決めた。上限を超えたときの挙動(デバイスには PUBACK が返り、新しいメッセージが捨てられ、捨てた数が増える)と、`$SYS` の溜め込みの数・捨てた数が 0 のうちは出ないことを、実際の Mosquitto で確かめた(`MosquittoBrokerIT`)。ブリッジを止めている間に溜めたものが、戻ると Kafka に届くこと(溜め込みの数が増えて 0 に戻る)を `make up PROFILE=iot` の基盤で確かめた。
