@@ -1,0 +1,8 @@
+# ローカルのデバイスの一覧(iot profile。ADR-0039 §3)。1 行に 1 台、{tenant}/{deviceId}(小文字の英数字と -)。
+# - make env が、ここにあるデバイスのパスワードを infra/local/secrets/mqtt/device-passwords に作る(.gitignore 済み)。
+# - Mosquitto は起動のたびに、この一覧からパスワードのファイルと ACL を作り直す(mosquitto/start.sh)。
+#   デバイスは自分のトピック devices/{tenant}/{deviceId}/... にだけ書ける。
+# デバイスを足すときは、ここに行を足して make env と make up PROFILE=iot を実行する。
+t1/d-001
+t1/d-002
+t1/d-003

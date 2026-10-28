@@ -185,3 +185,4 @@ Docker のヘルスチェックはコンテナの中で実行されるため、�
   - PostgreSQL 18 の CI の失敗(dbz#2581)は、テストの準備の想定の誤りで、コネクタの不具合ではない。
   - 生の CDC の Envelope の `source` の項目は、3.6.3 と同じ(両方の jar の `PostgresSourceInfoStructMaker`・`AbstractSourceInfoStructMaker` で比べた)。既にあるローカルの `cdc-raw` のスキーマとの互換性は変わらない。
   - 確かめたこと: `LegacyCdcIT`(9)・`OrderOutboxCdcIT`(3)・`LegacyOrderAclIT`(5)・`ReconcileIT`(7)・`InfraContainersIT`(2) が成功。Apicurio の Converter(3.3.3)はそのまま。
+- 2026-10-28: iot profile に、iot-bridge(P11)と、Mosquitto の `$SYS` を Prometheus に出す Telegraf(`TELEGRAF_IMAGE`。コンテナ `mosquitto-exporter`)を足した。エクスポーターの選び方は ADR-0039 §9(当初の候補 sapcc/mosquitto-exporter は linux/amd64 だけで §2 を満たさないため不採用)。Mosquitto のパスワードと ACL は、デバイスの一覧(`mosquitto/devices.txt`)と `secrets/mqtt/device-passwords` から起動のたびに作る(ADR-0039 §3)。共有のデバイスの資格情報(`MQTT_USERNAME`・`MQTT_PASSWORD`)はやめた。

@@ -75,3 +75,25 @@ if [[ ! -f "$webhook_dir/receiver-current" ]]; then
   (umask 077 && printf '%s\n' "$key" >"$webhook_dir/sender-current" && printf '%s\n' "$key" >"$webhook_dir/receiver-current")
   echo "infra/local/secrets/crm-webhook/(Webhook の署名の鍵)を生成しました"
 fi
+
+# MQTT のデバイスごとのパスワード(iot profile。P11 ⑥。ADR-0039 §3)。mosquitto/devices.txt の各デバイスについて、
+# まだなければ作る(1 行に「{tenant}/{deviceId} パスワード」)。Mosquitto は起動のたびにここからパスワードと ACL を作り直す。
+# デバイスのシミュレータ(make e2e・手で動かすとき)は、ここからそのデバイスのパスワードを読んで環境変数で渡す。
+mqtt_dir="$secrets_dir/mqtt"
+mqtt_passwords="$mqtt_dir/device-passwords"
+mkdir -p "$mqtt_dir"
+(umask 077 && touch "$mqtt_passwords")
+mqtt_added=0
+while IFS= read -r device; do
+  [[ "$device" =~ ^[[:space:]]*(#|$) ]] && continue
+  if [[ ! "$device" =~ ^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$ ]]; then
+    echo "mosquitto/devices.txt: {tenant}/{deviceId}(小文字の英数字と -)ではありません: $device" >&2
+    exit 1
+  fi
+  if ! awk -v user="$device" '$1 == user { found = 1 } END { exit !found }' "$mqtt_passwords"; then
+    printf '%s %s\n' "$device" "$(random_value)" >>"$mqtt_passwords"
+    mqtt_added=$((mqtt_added + 1))
+  fi
+done <"$here/mosquitto/devices.txt"
+if [[ "$mqtt_added" -gt 0 ]]; then echo "infra/local/secrets/mqtt/device-passwords にデバイス ${mqtt_added} 台のパスワードを追記しました"; fi
+

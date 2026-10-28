@@ -46,7 +46,7 @@ docker compose -f infra/local/docker-compose.yml --env-file infra/local/images.e
 |---|---|---|
 | `core` | kafka, apicurio, postgres, keycloak, apisix, otel-collector, prometheus, tempo, loki, grafana | 常に起動する |
 | `cdc` | kafka-connect(Debezium), postgres-exporter, kafka-exporter, legacy-migrate・kafka-topics・schema-publish(1 回だけ動いて終わる), legacy-order-acl | Outbox + CDC(P06)、レガシーの CDC と Anti-Corruption Layer(P06 ⑤。ADR-0026)と、その監視(P06 ④) |
-| `iot` | mosquitto | MQTT(P11) |
+| `iot` | mosquitto, mosquitto-exporter(Telegraf), kafka-topics・schema-publish(1 回だけ動いて終わる), iot-bridge, kafka-exporter | IoT のテレメトリ(P11。ADR-0039)。デバイスは自分のトピック `devices/{tenant}/{deviceId}/...` にだけ書け(デバイスの一覧 `mosquitto/devices.txt` から起動のたびにパスワードと ACL を作る)、iot-bridge が `iot.telemetry.reported.v1` に出す。溜め込みの数と捨てた数は Telegraf が `$SYS` から Prometheus に出す。対応は `docs/runbooks/iot-bridge.md` |
 | `file` | seaweedfs(S3), seaweedfs-init, sftp, sftp-b2b, file-exchange-migrate(1 回だけ動いて終わる), file-exchange | ファイル連携(P09。ADR-0032)。file-exchange が受け口の売上ファイルを検査し、取引先の代わりの sftp-b2b(partner01)に PGP で送る。送り手の batch-etl と一緒に動かすときは `make up PROFILE="order batch file"` |
 | `b2b` | seaweedfs(S3), sftp-b2b | B2B / EDI(P12) |
 | `chaos` | toxiproxy | 障害注入(P04b, P14) |
@@ -84,7 +84,7 @@ Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)�
 | 19443 | `order-service:8443` | order-service | order | API(`/v1/...`)。**mTLS だけ**(クライアント証明書は開発用 CA の署名で、SAN が `apisix`)。mTLS なしの接続を拒否することの検査と調査用。ヘルスチェック(8081。平文)は公開しない |
 | 19444 | `webhook-receiver:8443` | webhook-receiver | saas | Webhook の受け口(`/v1/webhooks/crm`)。**mTLS だけ**(SAN `apisix`)。mTLS なしの接続を拒否することの検査用。送り手は Gateway の `/sales/v1/webhooks/crm` に送る |
 | 19474 | `toxiproxy:8474` | Toxiproxy | chaos | 管理 API(toxic の追加・削除) |
-| 19883 | `mosquitto:1883` | Mosquitto | iot | MQTT(匿名接続は不可) |
+| 19883 | `mosquitto:1883` | Mosquitto | iot | MQTT(匿名接続は不可。デバイスごとの資格情報と ACL。ADR-0039 §3) |
 
 ## 認証情報
 
@@ -101,7 +101,8 @@ Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)�
 | Keycloak client credentials(2 つ目) | `eiaf-e2e-b`(`eiaf-e2e` と同じ設定。クライアントごとの Rate Limit・冪等の範囲の確認用。ADR-0023 §5) | `EIAF_E2E_B_CLIENT_SECRET`。**P05 ⑤c より前に作ったボリュームには無いので、`make clean` が必要** |
 | Keycloak client credentials(分析のバッチ) | `eiaf-batch-etl`(スコープ `sales.order:report` だけ。週次の照合で注文の日次の集計を読む。ADR-0031 §6) | `EIAF_BATCH_ETL_CLIENT_SECRET`。**P08 ④ より前に作ったボリュームには無いので、`make clean` が必要** |
 | Grafana | `admin` | `GRAFANA_ADMIN_PASSWORD` |
-| MQTT | `MQTT_USERNAME` | `MQTT_PASSWORD` |
+| MQTT(デバイス) | `{tenant}/{deviceId}`(`mosquitto/devices.txt` の各行) | ファイル `secrets/mqtt/device-passwords`(1 行に「ユーザー名 パスワード」)。デバイスを足すときは `docs/runbooks/iot-bridge.md` |
+| MQTT(iot-bridge・監視) | `iot-bridge`(テレメトリの読み取りだけ)・`eiaf-monitor`(`$SYS` の読み取りだけ) | `MQTT_BRIDGE_PASSWORD`・`MQTT_MONITOR_PASSWORD` |
 | S3(管理者) | `eiaf`(Admin)。バケットとポリシーの作成用 | `S3_ACCESS_KEY` / `S3_SECRET_KEY` |
 | S3(監査のアンカーの書込み。サービスごと) | `eiaf-audit-{service}`(今は `eiaf-audit-order`)。バケット `eiaf-audit` の Read / List と、`anchors/{service}/` の下だけの Write。ほかのサービスのプレフィックス・バケットの管理操作・削除・Legal Hold はできない(ADR-0017 §7。Issue #43) | `ORDER_AUDIT_S3_ACCESS_KEY` / `ORDER_AUDIT_S3_SECRET_KEY`。以前の共有の `AUDIT_S3_*` は使われない(.env に残っていても害はない) |
 | S3(監査の検査) | `eiaf-audit-verify`。バケット `eiaf-audit` の Read / List だけ。`make audit-verify` が使う | `AUDIT_VERIFY_S3_ACCESS_KEY` / `AUDIT_VERIFY_S3_SECRET_KEY` |

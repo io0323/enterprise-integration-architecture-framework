@@ -384,28 +384,90 @@ verify_legacy_cdc() {
 }
 
 # ------------------------------------------------------------------ iot
+# Mosquitto の資格情報と ACL(デバイスの一覧から起動のたびに作る)・iot-bridge から Kafka まで・溜め込みのメトリクス(ADR-0039)。
+# native のシミュレータからのトレース(DoD)は make e2e(P11 ⑦)で確かめる
 verify_iot() {
   current="iot"
-  local topic="eiaf/verify/$$" message="verify-$$" received
-  # 購読を先に始め、QoS 1 で 1 件 publish して受け取れること(ホストのポート 19883 経由はコンテナ内の 1883 と同じリスナー)
-  received="$(
-    "${compose[@]}" exec -T mosquitto sh -c \
-      "mosquitto_sub -h 127.0.0.1 -u \"\$MQTT_USERNAME\" -P \"\$MQTT_PASSWORD\" -t '$topic' -q 1 -C 1 -W 10 & sleep 1;
-       mosquitto_pub -h 127.0.0.1 -u \"\$MQTT_USERNAME\" -P \"\$MQTT_PASSWORD\" -t '$topic' -q 1 -m '$message'; wait" 2>&1 || true
-  )"
-  if [[ "$received" == *"$message"* ]]; then pass "Mosquitto: 認証つきで QoS 1 の publish / subscribe ができる"; else fail "Mosquitto: publish した値を受け取れない ('$received')"; fi
+  local passwords="$here/secrets/mqtt/device-passwords" pw1 out boot
+  pw1="$(awk '$1 == "t1/d-001" { print $2 }' "$passwords")"
+  mqtt_pub() { # mqtt_pub <ユーザー> <パスワード> <トピック> <本文>(MQTT v5・QoS 1。出力と終了コードを返す)
+    "${compose[@]}" exec -T mosquitto mosquitto_pub -h 127.0.0.1 -V mqttv5 -q 1 -i "verify-pub-$$" -u "$1" -P "$2" -t "$3" -m "$4" 2>&1
+  }
+  prom_value() {
+    curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode "query=$1" |
+      python3 -c 'import json,sys; r=json.load(sys.stdin)["data"]["result"]; print(r[0]["value"][1] if r else "")'
+  }
+  prom_present() { [[ -n "$(prom_value "$1")" ]]; }
+  # telemetry_published <boot>: iot.telemetry.reported.v1 に、キー t1/d-001・ce_source /iot/iot-bridge で届いたか。
+  # Avro の本文は改行のバイト(文字列の長さ 5 = 0x0A など)を含むので、レコードの区切りを 0x1E にして 1 レコード 1 行にする
+  telemetry_published() {
+    kafka_cli /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic iot.telemetry.reported.v1 \
+      --from-beginning --timeout-ms 5000 --property print.key=true --property print.headers=true \
+      --property line.separator=$'\x1e' 2>/dev/null |
+      LC_ALL=C tr '\n\036' ' \n' | grep -a $'\tt1/d-001\t' | grep -a 'ce_source:/iot/iot-bridge' | grep -aq "$1"
+  }
+  topic_retention() {
+    kafka_cli /opt/kafka/bin/kafka-configs.sh --bootstrap-server kafka:9092 --entity-type topics --entity-name "$1" --describe 2>/dev/null |
+      grep -o 'retention.ms=[0-9]*' | head -1
+  }
 
-  if "${compose[@]}" exec -T mosquitto mosquitto_pub -h 127.0.0.1 -t "$topic" -m anonymous >/dev/null 2>&1; then
-    fail "Mosquitto: 匿名接続が許可されている"
-  else
-    pass "Mosquitto: 匿名接続を拒否する"
-  fi
-  if "${compose[@]}" exec -T mosquitto mosquitto_pub -h 127.0.0.1 -u "$MQTT_USERNAME" -P wrong-password -t "$topic" -m x >/dev/null 2>&1; then
+  # 認証: 匿名・誤ったパスワード・一覧にないデバイスは接続できない
+  if mqtt_pub "" "" devices/t1/d-001/telemetry x >/dev/null; then fail "Mosquitto: 匿名接続が許可されている"; else pass "Mosquitto: 匿名接続を拒否する"; fi
+  if mqtt_pub t1/d-001 wrong-password devices/t1/d-001/telemetry x >/dev/null; then
     fail "Mosquitto: 誤ったパスワードで接続できる"
   else
     pass "Mosquitto: 誤ったパスワードを拒否する"
   fi
+  if mqtt_pub t1/d-999 "$pw1" devices/t1/d-999/telemetry x >/dev/null; then
+    fail "Mosquitto: 一覧(devices.txt)にないデバイスが接続できる"
+  else
+    pass "Mosquitto: 一覧(devices.txt)にないデバイスは接続できない"
+  fi
+
+  # ACL: デバイスは自分のトピックにだけ書ける。他のデバイスのトピックは拒否(MQTT v5 の 0x87 Not authorized)。iot-bridge は書けない
+  out="$(mqtt_pub t1/d-001 "$pw1" devices/t1/d-002/telemetry '{"v":2}' || true)"
+  if [[ "$out" == *"ot authori"* ]]; then
+    pass "Mosquitto: デバイスは他のデバイスのトピックに書けない(PUBACK 0x87 Not authorized)"
+  else
+    fail "Mosquitto: 他のデバイスのトピックへの書き込みが拒否されない ('$out')"
+  fi
+  out="$(mqtt_pub iot-bridge "$MQTT_BRIDGE_PASSWORD" devices/t1/d-001/telemetry '{"v":2}' || true)"
+  if [[ "$out" == *"ot authori"* ]]; then pass "Mosquitto: iot-bridge は書けない(読むだけ)"; else fail "Mosquitto: iot-bridge が書ける ('$out')"; fi
+
+  # 疎通: デバイスが自分のトピックに送ったテレメトリを、iot-bridge が iot.telemetry.reported.v1 に出す(キーは {tenant}/{deviceId})
+  boot="$(LC_ALL=C tr -dc 'a-f0-9' </dev/urandom | head -c 16 || true)"
+  out="$(mqtt_pub t1/d-001 "$pw1" devices/t1/d-001/telemetry \
+    "{\"v\":2,\"boot\":\"$boot\",\"seq\":0,\"readings\":[{\"name\":\"temperature\",\"value\":20.5,\"unit\":\"Cel\"}]}" && echo published)"
+  if [[ "$out" == *published* && "$out" != *"ot authori"* ]]; then
+    pass "Mosquitto: デバイスは自分のトピックに QoS 1 で書ける"
+  else
+    fail "Mosquitto: デバイスが自分のトピックに書けない ('$out')"
+  fi
+  check "iot-bridge: デバイスのテレメトリを iot.telemetry.reported.v1 に出す(キー t1/d-001、ce_source /iot/iot-bridge)" \
+    retry 10 3 telemetry_published "$boot"
+
+  # トピックの保持期間(kafka/topics.conf)
+  check "Kafka: iot.telemetry.reported.v1 の保持期間は 7 日" equals retention.ms=604800000 topic_retention iot.telemetry.reported.v1
+  check "Kafka: iot.telemetry.reported.v1 の DLQ の保持期間は 7 日" equals retention.ms=604800000 topic_retention iot.telemetry.reported.v1.dlq
+
+  # 溜め込みのメトリクス(Telegraf が $SYS を Prometheus に出す。ADR-0039 §9)。$SYS は 10 秒ごとに届く。
+  # 溜め込みの数・捨てた数は 0 のうちは $SYS に出ないので、届いていることは接続の数で確かめ、捨てた数はないことを 0 とみなす
+  check "Prometheus: Mosquitto の \$SYS(mosquitto_clients_connected)が届く" retry 12 5 prom_present mosquitto_clients_connected
+  check "Prometheus: Mosquitto の捨てた数(mosquitto_publish_messages_dropped)は 0" equals 0 prom_value 'sum(mosquitto_publish_messages_dropped) or vector(0)'
+  check "Prometheus: iot-bridge のメトリクス(target_info)が届く" retry 12 5 prom_present 'target_info{job="iot-bridge"}'
   check "Mosquitto: ホストのポート 19883 で待ち受けている" bash -c "exec 3<>/dev/tcp/127.0.0.1/19883"
+
+  # ダッシュボード(全パネルの式が、起動したばかりでもデータを返す。DLQ・遅れ・送り直し・アラートは空でよい)
+  local dash result
+  dash="$(curl -fsS -u "admin:$GRAFANA_ADMIN_PASSWORD" http://localhost:19300/api/dashboards/uid/eiaf-iot || true)"
+  if [[ "$(json 'd["meta"]["folderTitle"] + "/" + d["dashboard"]["title"]' <<<"$dash" 2>/dev/null)" == "EIAF/IoT — Telemetry bridge" ]]; then
+    pass "Grafana: ダッシュボード IoT — Telemetry bridge を読み込んだ"
+    result="$(dashboard_panels_return_data "$dash" "DLQ に隔離した数(理由ごと。1 時間あたり)" "遅れ(受け取った時刻 − デバイスの時刻。p95)" \
+      "送り直し(Kafka に送れない。1 時間あたり)" "IoT のアラート(firing / pending)")"
+    if [[ "$result" == ok ]]; then pass "Grafana: IoT — Telemetry bridge の全パネルの式がデータを返す"; else fail "Grafana: IoT — Telemetry bridge のパネル: $result"; fi
+  else
+    fail "Grafana: ダッシュボード eiaf-iot を読み込めない"
+  fi
 }
 
 # ------------------------------------------------------------------ file / b2b

@@ -54,3 +54,13 @@ tasks.named<Test>("test") {
             .asFile.absolutePath,
     )
 }
+
+// 統合テスト(MosquittoBrokerIT)で、ローカル基盤の Mosquitto の設定と起動のスクリプト(infra/local/mosquitto)をそのまま使う
+tasks.named<Test>("integrationTest") {
+    systemProperty(
+        "eia.infraLocal",
+        rootProject.layout.projectDirectory
+            .dir("infra/local")
+            .asFile.absolutePath,
+    )
+}

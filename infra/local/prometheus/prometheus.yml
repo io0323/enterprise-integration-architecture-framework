@@ -47,3 +47,7 @@ scrape_configs:
   - job_name: kafka-connect
     static_configs:
       - targets: ["kafka-connect:9404"]
+  # Mosquitto の $SYS(iot profile。Telegraf。ADR-0039 §9)。溜め込みの数・捨てた数
+  - job_name: mosquitto
+    static_configs:
+      - targets: ["mosquitto-exporter:9273"]

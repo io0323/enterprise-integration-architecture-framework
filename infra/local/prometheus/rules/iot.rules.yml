@@ -1,0 +1,77 @@
+# IoT の橋渡し(P11。ADR-0039)のアラート。対応は docs/runbooks/iot-bridge.md。単体テストは iot.test.yml(make alerts-test)。
+#
+# - Mosquitto の溜め込み(iot-bridge の永続セッション)は、上限(mosquitto.conf の max_queued_messages = 300000)を超えると
+#   新しいメッセージが黙って捨てられる(デバイスには PUBACK が返っているので失われる。§9)。半分・8 割で知らせ、捨てたら critical
+# - 溜め込みの数と捨てた数は Telegraf が $SYS から出す(job="mosquitto")。iot-bridge が止まっている間こそ要るので、iot-bridge からは出さない
+# - 上限の値を変えたら、しきい値(150000・240000)と iot.test.yml も同じ PR で直す
+# - DLQ に隔離したものは consumer.rules.yml の EventDeadLetters(kafka-exporter)で知らせる
+groups:
+  - name: iot
+    rules:
+      # 溜め込みが上限の半分を超えた(前提の流入で iot-bridge が約 15 分止まっている)
+      - alert: MqttBridgeQueueHalfFull
+        expr: max by (job) (mosquitto_store_messages_count) > 150000
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mosquitto の溜め込みが上限の半分を超えた({{ $value }} 件。上限 300000)"
+          runbook: docs/runbooks/iot-bridge.md#溜め込みが増えているとき
+
+      # 溜め込みが上限の 8 割を超えた(このままでは捨て始める)
+      - alert: MqttBridgeQueueNearlyFull
+        expr: max by (job) (mosquitto_store_messages_count) > 240000
+        labels:
+          severity: critical
+        annotations:
+          summary: "Mosquitto の溜め込みが上限の 8 割を超えた({{ $value }} 件。上限 300000。超えると捨てる)"
+          runbook: docs/runbooks/iot-bridge.md#溜め込みが増えているとき
+
+      # 上限を超えて捨てた(そのデータは失われている。時間帯と件数を記録する)。
+      # $SYS は 0 のうちは捨てた数を出さず、1 件目を捨てたときに系列が現れる。increase は現れたときの増え方を数えないので、
+      # 直近 5 分に現れた系列(5 分前にはなかった)も捨てたものとして扱う
+      - alert: MqttMessagesDropped
+        expr: |
+          sum by (job) (increase(mosquitto_publish_messages_dropped[5m])) > 0
+          or
+          (sum by (job) (mosquitto_publish_messages_dropped) > 0 unless sum by (job) (mosquitto_publish_messages_dropped offset 5m))
+        labels:
+          severity: critical
+        annotations:
+          summary: "Mosquitto が上限を超えたメッセージを捨てた(直近 5 分に {{ $value }} 件。取り戻せない)"
+          runbook: docs/runbooks/iot-bridge.md#捨てたとき
+
+      # iot-bridge が動いていない: Mosquitto は動いているのに、iot-bridge のメトリクスがない(溜め込みが増え続ける)
+      - alert: IotBridgeDown
+        expr: |
+          absent(target_info{job="iot-bridge"})
+          and on() (count(up{job="mosquitto"} == 1) > 0)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "iot-bridge のメトリクスがない(テレメトリが Kafka に出ず、Mosquitto に溜まる)"
+          runbook: docs/runbooks/iot-bridge.md#iot-bridge-が止まっているとき
+
+      # iot-bridge が Kafka に送れずに送り直し続けている(PUBACK を返さないので、Mosquitto に溜まる)
+      - alert: IotBridgeRetrying
+        expr: sum by (job) (increase(eia_iot_telemetry_retries_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "iot-bridge が Kafka に送れずに送り直し続けている(Mosquitto に溜まる)"
+          runbook: docs/runbooks/iot-bridge.md#kafka-に送れないとき
+
+      # 溜め込みの数が見えない: エクスポーターは動いているのに $SYS が届かない(Mosquitto が止まった・監視のユーザーで購読できない)。
+      # 溜め込みの数・捨てた数は 0 のうちは $SYS に出ないので、常に出る接続の数(監視のユーザー自身が数に入り 1 以上)で見る
+      - alert: MosquittoMetricsMissing
+        expr: |
+          absent(mosquitto_clients_connected)
+          and on() (count(up{job="mosquitto"} == 1) > 0)
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mosquitto の $SYS(溜め込みの数・捨てた数)が届かない(上限に近づいても気づけない)"
+          runbook: docs/runbooks/iot-bridge.md#溜め込みの数が見えないとき
