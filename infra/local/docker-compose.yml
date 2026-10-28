@@ -740,7 +740,7 @@ services:
       MQTT_MONITOR_PASSWORD: ${MQTT_MONITOR_PASSWORD:?make env を実行してください}
     volumes:
       - ./telegraf/telegraf.conf:/etc/telegraf/telegraf.conf:ro
-    mem_limit: 128m
+    mem_limit: 256m # amd64 の Telegraf は起動で 128m を超えて OOM で止まる(大きな実行ファイルの読み込み。#159 の CI)
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9273/metrics"]
