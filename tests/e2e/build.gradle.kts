@@ -2,7 +2,7 @@ plugins {
     id("eia.jvm-library")
 }
 
-// E2E(ROADMAP P05。MODULE_DESIGN)。起動したローカル基盤(`make up PROFILE="order cdc saga batch file saas" E2E=1`)に、公開されたエンドポイント
+// E2E(ROADMAP P05。MODULE_DESIGN)。起動したローカル基盤(`make up PROFILE="order cdc saga batch file saas iot" E2E=1`)に、公開されたエンドポイント
 // (Gateway・Keycloak・Tempo・Prometheus・Grafana・Kafka・Schema Registry)だけで接続して確かめる。サービスのコードには依存しない。
 // `make e2e`(`./gradlew :tests:e2e:e2eTest`)で実行し、`build` / `check` には含めない。CI は ci.yml の `e2e` ジョブ。
 val e2eTest: SourceSet = sourceSets.create("e2eTest")
@@ -20,7 +20,18 @@ dependencies {
     // 発行されたイベントを Kafka から読み、契約のスキーマ(Schema Registry から取る)で解釈する(P06。サービスのコードには依存しない)
     "e2eTestImplementation"(libs.kafka.clients)
     "e2eTestImplementation"(libs.avro)
+    // デバイスとしての MQTT の送信(IotE2E。他のデバイスのトピックの拒否と再送)。シミュレータと同じ SDK の MQTT の部分(P11)
+    "e2eTestImplementation"(project(":shared:integration-sdk:mqtt"))
 }
+
+// デバイスのシミュレータ(IotE2E。P11 ⑦)。この OS の native の release の実行ファイルを組み立てて使う
+// (CI の ubuntu は linuxX64、手元の Mac は macosArm64。DoD は native のバイナリから送ること)。それ以外の OS では IotE2E が失敗する
+val simulatorTarget: String? =
+    when {
+        System.getProperty("os.name") == "Linux" && System.getProperty("os.arch") in setOf("amd64", "x86_64") -> "LinuxX64"
+        System.getProperty("os.name").startsWith("Mac") && System.getProperty("os.arch") == "aarch64" -> "MacosArm64"
+        else -> null
+    }
 
 // 本番のコードがないモジュールなので、Kover を無効にする(行が 0 のモジュールの閾値の検証が失敗するため)。
 // 加えて、e2eTest を計測から外す。Kover は既定で全 Test タスクを成果物の生成の依存に加えるので、disable() だけでは
@@ -52,6 +63,16 @@ tasks.register<Test>("e2eTest") {
             .file("tools/dlq-replay/build/install/dlq-replay/bin/dlq-replay")
             .asFile.absolutePath,
     )
+    simulatorTarget?.let { target ->
+        dependsOn(":tools:device-simulator:linkReleaseExecutable$target")
+        val directory = target.replaceFirstChar(Char::lowercase)
+        systemProperty(
+            "eiaf.deviceSimulator",
+            rootProject.layout.projectDirectory
+                .file("tools/device-simulator/build/bin/$directory/releaseExecutable/device-simulator.kexe")
+                .asFile.absolutePath,
+        )
+    }
     // 秘密情報(EIAF_E2E_CLIENT_SECRET など)は make e2e が環境変数で渡し、テストのプロセスはそれを引き継ぐ。
     // ここで System.getenv を読んで environment(...) に渡すと、値が configuration cache のファイルに書き込まれるので、しない
     testLogging { events("passed", "failed", "skipped") }

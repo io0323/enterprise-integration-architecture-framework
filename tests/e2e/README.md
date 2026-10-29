@@ -5,7 +5,7 @@
 サービスのコードには依存しない(ブラックボックス)。
 
 ```bash
-make up PROFILE="order cdc saga batch file saas" E2E=1   # E2E 用の設定(e2e.env。待ち時間を短くする)を足して起動する
+make up PROFILE="order cdc saga batch file saas iot" E2E=1   # E2E 用の設定(e2e.env。待ち時間を短くする)を足して起動する
 make e2e                                            # ./gradlew :tests:e2e:e2eTest(秘密情報は infra/local/.env から渡す)
 ```
 
@@ -18,3 +18,7 @@ make e2e                                            # ./gradlew :tests:e2e:e2eTe
   Webhook を送り直す・Rate Limit を変える。リプレイの確認では、送り手の署名の鍵(`infra/local/secrets/crm-webhook/sender-current`)を読んで
   古い時刻の署名を作る。`E2E=1` のときだけ、integration-flow は `tests/e2e/flows` の Flow を追加で読む(Flow の定義を足すだけで
   新しいマッピングを追加できることの確認。本番の Flow は contracts/flows に置く)。
+- IoT のテレメトリ(`IotE2E`。P11)は、native のデバイスのシミュレータ(`tools/device-simulator`。この OS の release の実行ファイル。
+  CI は linuxX64、手元の Mac は macosArm64)をデバイスとして動かす。デバイスのパスワードは `make env` が作る
+  `infra/local/secrets/mqtt/device-passwords` から読み、環境変数でシミュレータに渡す。シミュレータではできない操作(他のデバイスの
+  トピックへの書き込み・同じメッセージの再送)は、同じ SDK の MQTT の部分(`shared/integration-sdk/mqtt`)で送る。

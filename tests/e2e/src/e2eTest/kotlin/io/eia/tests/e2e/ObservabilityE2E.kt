@@ -19,52 +19,16 @@ import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.net.URI
 import java.net.http.HttpRequest
 import java.security.SecureRandom
-import java.util.Base64
 import java.util.HexFormat
 import java.util.UUID
 
 private fun randomHex(bytes: Int): String = HexFormat.of().formatHex(ByteArray(bytes).also(SecureRandom()::nextBytes))
-
-/** Tempo の trace の span(サービス名・span ID・親の span ID)。ID は base64 で返るので 16 進にする。 */
-private data class SpanInfo(
-    val service: String,
-    val spanId: String,
-    val parentSpanId: String,
-)
-
-private fun spans(traceId: String): List<SpanInfo> {
-    val trace = json(get("$TEMPO/api/traces/$traceId")).jsonObject
-    val hex = { id: String -> if (id.isEmpty()) "" else HexFormat.of().formatHex(Base64.getDecoder().decode(id)) }
-    return trace["batches"]?.jsonArray.orEmpty().flatMap { batch ->
-        val service =
-            batch.jsonObject
-                .getValue("resource")
-                .jsonObject["attributes"]
-                ?.jsonArray
-                .orEmpty()
-                .map { it.jsonObject }
-                .first { it.getValue("key").jsonPrimitive.content == "service.name" }
-                .getValue("value")
-                .jsonObject
-                .getValue("stringValue")
-                .jsonPrimitive.content
-        batch.jsonObject["scopeSpans"]?.jsonArray.orEmpty().flatMap { scope ->
-            scope.jsonObject["spans"]?.jsonArray.orEmpty().map { span ->
-                val s = span.jsonObject
-                SpanInfo(service, hex(s.text("spanId")), hex(s.text("parentSpanId")))
-            }
-        }
-    }
-}
-
-private fun JsonObject.text(key: String): String = this[key]?.jsonPrimitive?.content.orEmpty()
 
 /** Prometheus の即時の問い合わせの結果の件数(式の誤りは例外)。 */
 private fun series(expr: String): Int {
