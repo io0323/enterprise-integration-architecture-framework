@@ -740,7 +740,9 @@ services:
       MQTT_MONITOR_PASSWORD: ${MQTT_MONITOR_PASSWORD:?make env を実行してください}
     volumes:
       - ./telegraf/telegraf.conf:/etc/telegraf/telegraf.conf:ro
-    mem_limit: 256m # amd64 の Telegraf は起動で 128m を超えて OOM で止まる(大きな実行ファイルの読み込み。#159 の CI)
+    # Telegraf の実行ファイルは 326 MB(全プラグイン入り)。動いているときの RSS は 40 MB ほどだが、起動で実行ファイルの多くのページを読むので、
+    # 256m 以下では amd64 で読み込みが詰まって OOM で止まる(#159・#160 の CI)。ADR-0039 §9
+    mem_limit: 512m
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9273/metrics"]

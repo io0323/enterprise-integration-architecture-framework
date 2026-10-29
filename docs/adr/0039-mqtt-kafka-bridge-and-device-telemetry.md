@@ -108,6 +108,7 @@ P11(IoT (MQTT) & KMP SDK。#14)では、デバイスのテレメトリを MQTT B
   - 構成: コンテナ `mosquitto-exporter`(`TELEGRAF_IMAGE`。`infra/local/telegraf/telegraf.conf`)が、監視のユーザー `eiaf-monitor`(`$SYS/#` の読み取りだけ。§3)で
     QoS 0 で購読し、`:9273` で Prometheus に出す(job `mosquitto`)。Mosquitto が止まって `$SYS` が届かなくなったら、1 分で系列が消える(古い値で判断しない)。
     Mosquitto より先に起動しても止まらない(`startup_error_behavior = "retry"`)。
+    代償: 公式のイメージの実行ファイルは全プラグイン入りで 326 MB あり、起動でその多くを読むので、メモリの上限を 512m にする(256m 以下では amd64 で OOM。動いているときの RSS は 40 MB ほど)。
   - **`$SYS` は値が変わったときだけ出す**。溜め込みの数・捨てた数は 0 のうちは出ず、捨てた数は 1 件目を捨てたときに系列が現れる(⑥ で確かめた)。
     そのため、`$SYS` が届いていることは、監視のユーザー自身が数に入って常に 1 以上の接続の数で見る。ダッシュボードは、接続の数が届いている間だけ、ない値を 0 として表示する。
   - メトリクス(`$SYS` の更新は 10 秒ごと。`sys_interval` の既定):
@@ -159,3 +160,4 @@ P11(IoT (MQTT) & KMP SDK。#14)では、デバイスのテレメトリを MQTT B
 - 2026-10-26: P11 ⑤c で iot-bridge の app(`serve`・`reprocess-dlq`)を実装した。§2 にプロセスと準備の条件を、§4 に再処理のコマンドを書いた。再処理は P07 の `DeadLetterReplayer` に 1 件の処理し直し方(`DeadLetterRedelivery`)を渡す形にし、DLQ の読み取り・条件・件数の上限・dry-run・表示・終了コードを `make dlq-replay` と共有した(ADR-0028 §6)。再処理で受け取った時刻と Correlation ID を引き継ぐため、DLQ のヘッダに `eiaf.mqtt.received-at` と `correlationid` を足した。ヘルスチェックのサーバは Ktor の CIO(HiveMQ MQTT Client の Netty 4.1 と、Ktor の Netty のエンジンの Netty の版が合わないため)。`IotBridgeAppIT` で、準備の条件の順と、デコーダを足す前後の再処理(dry-run・REJECTED・REPLAYED、同じ ce_id・受け取った時刻・トレース)を確かめた。
 - 2026-10-28: P11 ⑥ でローカル基盤の iot profile を作った。§3 のパスワードと ACL のファイルは、起動のたびにデバイスの一覧(`infra/local/mosquitto/devices.txt`)と `make env` が作るパスワードから作り直す(`mosquitto/start.sh`)。§9 のエクスポーターを候補の比較のうえで Telegraf に決めた。上限を超えたときの挙動(デバイスには PUBACK が返り、新しいメッセージが捨てられ、捨てた数が増える)と、`$SYS` の溜め込みの数・捨てた数が 0 のうちは出ないことを、実際の Mosquitto で確かめた(`MosquittoBrokerIT`)。ブリッジを止めている間に溜めたものが、戻ると Kafka に届くこと(溜め込みの数が増えて 0 に戻る)を `make up PROFILE=iot` の基盤で確かめた。
 - 2026-10-29: P11 ⑦ の E2E(`tests/e2e` の `IotE2E`)で、native のシミュレータ(CI は linuxX64、手元は macosArm64 の release の実行ファイル)から送ったテレメトリが `iot.telemetry.reported.v1` に届き、§10 の traceparent で Tempo までたどれる(デバイスの span の子に iot-bridge の CONSUMER、その子に PRODUCER)ことを確かめた。あわせて、形式の版 1 のそろえ方(§4)、通信が切れていた間の分が過去のデバイスの時刻のまま届き疑われないこと(§7・§8)、再送が同じ ce_id になること(§6)、他のデバイスのトピックの拒否(§3)を確かめた。
+- 2026-10-30: §9 のエクスポーター(Telegraf)のメモリの上限を 512m にした。256m では CI(amd64)の起動で OOM になることがあった(実行ファイルが 326 MB)。
