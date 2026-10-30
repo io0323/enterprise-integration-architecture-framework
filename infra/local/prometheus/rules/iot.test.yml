@@ -119,18 +119,32 @@ tests:
               summary: "iot-bridge が Kafka に送れずに送り直し続けている(Mosquitto に溜まる)"
               runbook: docs/runbooks/iot-bridge.md#kafka-に送れないとき
 
-  - name: エクスポーターが動いているのに $SYS が 2 分届かないと warning
+  - name: Mosquitto の稼働時間が 2 分増えないと warning(Mosquitto が止まった。エクスポーターは最後の値を出し続ける)
     interval: 1m
     input_series:
       - series: 'up{job="mosquitto",instance="mosquitto-exporter:9273"}'
         values: "1x12"
-      - series: 'mosquitto_clients_connected{job="mosquitto",instance="mosquitto-exporter:9273"}'
-        values: "2 2"
+      - series: 'mosquitto_uptime_seconds{job="mosquitto",instance="mosquitto-exporter:9273"}'
+        values: "0+60x3 180x9"
     alert_rule_test:
-      - eval_time: 7m
+      - eval_time: 4m
         alertname: MosquittoMetricsMissing
         exp_alerts: []
-      - eval_time: 10m
+      - eval_time: 8m
+        alertname: MosquittoMetricsMissing
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "Mosquitto の $SYS(溜め込みの数・捨てた数)が届かない(上限に近づいても気づけない)"
+              runbook: docs/runbooks/iot-bridge.md#溜め込みの数が見えないとき
+
+  - name: エクスポーターは動いているのに稼働時間が届かない(監視のユーザーで購読できない)と warning
+    interval: 1m
+    input_series:
+      - series: 'up{job="mosquitto",instance="mosquitto-exporter:9273"}'
+        values: "1x5"
+    alert_rule_test:
+      - eval_time: 2m
         alertname: MosquittoMetricsMissing
         exp_alerts:
           - exp_labels: { severity: warning }

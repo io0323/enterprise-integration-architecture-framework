@@ -106,11 +106,14 @@ P11(IoT (MQTT) & KMP SDK。#14)では、デバイスのテレメトリを MQTT B
     | bpmbee/mosquitto-exporter など | 公開のソースとライセンスを確かめられない | 不採用 |
     | **Telegraf(`inputs.mqtt_consumer` → `outputs.prometheus_client`。採用)** | MIT・InfluxData が保守(1.40.2 は 2026-10-12) | 公式のイメージが linux/amd64 と linux/arm64 を持つ。`$SYS` のトピックを購読して値を数値にし、Prometheus の形で出せる(設定だけで、コードを持たない) |
   - 構成: コンテナ `mosquitto-exporter`(`TELEGRAF_IMAGE`。`infra/local/telegraf/telegraf.conf`)が、監視のユーザー `eiaf-monitor`(`$SYS/#` の読み取りだけ。§3)で
-    QoS 0 で購読し、`:9273` で Prometheus に出す(job `mosquitto`)。Mosquitto が止まって `$SYS` が届かなくなったら、1 分で系列が消える(古い値で判断しない)。
+    QoS 0 で購読し、`:9273` で Prometheus に出す(job `mosquitto`)。
     Mosquitto より先に起動しても止まらない(`startup_error_behavior = "retry"`)。
     代償: 公式のイメージの実行ファイルは全プラグイン入りで 326 MB あり、起動でその多くを読むので、メモリの上限を 512m にする(256m 以下では amd64 で OOM。動いているときの RSS は 40 MB ほど)。
-  - **`$SYS` は値が変わったときだけ出す**。溜め込みの数・捨てた数は 0 のうちは出ず、捨てた数は 1 件目を捨てたときに系列が現れる(⑥ で確かめた)。
-    そのため、`$SYS` が届いていることは、監視のユーザー自身が数に入って常に 1 以上の接続の数で見る。ダッシュボードは、接続の数が届いている間だけ、ない値を 0 として表示する。
+  - **`$SYS` は値が変わったときだけ出し、retain もしない**(`retain_available false`)。溜め込みの数・捨てた数・接続の数は、変わらない間は
+    新しく購読した人にも届かない。溜め込みの数・捨てた数は 0 のうちは出ず、捨てた数は 1 件目を捨てたときに系列が現れる(⑥・⑦ で確かめた)。
+    - そのため、エクスポーターは系列を消さずに最後の値を出し続ける(`expiration_interval = 0`。消すと、溜め込みが一定の間に系列が消える)。
+    - `$SYS` が届いているかは、間隔ごとに必ず届く稼働時間(`mosquitto_uptime_seconds`)が増えているかで見る。ダッシュボードは、稼働時間が届いている間だけ、ない値を 0 として表示する。
+    - 制約: Mosquitto を再起動すると、溜め込みの数が 0 に戻っても届かず、エクスポーターは再起動の前の値を出し続ける。Mosquitto を再起動したら `mosquitto-exporter` も再起動する(Runbook)。
   - メトリクス(`$SYS` の更新は 10 秒ごと。`sys_interval` の既定):
     | Prometheus の名前 | `$SYS` のトピック |
     |---|---|
@@ -118,6 +121,7 @@ P11(IoT (MQTT) & KMP SDK。#14)では、デバイスのテレメトリを MQTT B
     | `mosquitto_store_messages_bytes` | `$SYS/broker/store/messages/bytes` |
     | `mosquitto_publish_messages_dropped` | `$SYS/broker/publish/messages/dropped`(捨てた数。Broker の起動からの累計) |
     | `mosquitto_clients_connected` | `$SYS/broker/clients/connected` |
+    | `mosquitto_uptime_seconds` | `$SYS/broker/uptime`(間隔ごとに必ず届く。`$SYS` が届いていることの目印) |
   - アラート(`infra/local/prometheus/rules/iot.rules.yml`。単体テストは `iot.test.yml`):
     | アラート | 条件 | 重さ |
     |---|---|---|
@@ -126,7 +130,7 @@ P11(IoT (MQTT) & KMP SDK。#14)では、デバイスのテレメトリを MQTT B
     | `MqttMessagesDropped` | 捨てた数が増えた、または捨てた数の系列が現れた(直近 5 分) | critical |
     | `IotBridgeDown` | Mosquitto のエクスポーターは動いているのに、iot-bridge のメトリクス(`target_info`)が 2 分ない | critical |
     | `IotBridgeRetrying` | iot-bridge が Kafka に送れずに送り直し続けている(5 分) | warning |
-    | `MosquittoMetricsMissing` | エクスポーターは動いているのに `$SYS`(接続の数)が 2 分届かない(上限に近づいても気づけない) | warning |
+    | `MosquittoMetricsMissing` | エクスポーターは動いているのに、稼働時間がない・2 分増えない(`$SYS` が届かない。上限に近づいても気づけない) | warning |
   - `$SYS` の保存の数は Broker 全体の数(送り中・溜め込み・retain)。retain を使わず(上の `retain_available`)、購読するのはブリッジだけなので、ブリッジのセッションの溜め込みとして読める。
     上限の値を変えたら、しきい値・`iot.test.yml`・この節の「耐えられる時間」を同じ PR で直す。
   - 対応の手順は Runbook(`docs/runbooks/iot-bridge.md`)。捨てた場合は、時間帯と件数を記録する(取り戻せない)。ダッシュボードは **IoT — Telemetry bridge**。
@@ -161,3 +165,4 @@ P11(IoT (MQTT) & KMP SDK。#14)では、デバイスのテレメトリを MQTT B
 - 2026-10-28: P11 ⑥ でローカル基盤の iot profile を作った。§3 のパスワードと ACL のファイルは、起動のたびにデバイスの一覧(`infra/local/mosquitto/devices.txt`)と `make env` が作るパスワードから作り直す(`mosquitto/start.sh`)。§9 のエクスポーターを候補の比較のうえで Telegraf に決めた。上限を超えたときの挙動(デバイスには PUBACK が返り、新しいメッセージが捨てられ、捨てた数が増える)と、`$SYS` の溜め込みの数・捨てた数が 0 のうちは出ないことを、実際の Mosquitto で確かめた(`MosquittoBrokerIT`)。ブリッジを止めている間に溜めたものが、戻ると Kafka に届くこと(溜め込みの数が増えて 0 に戻る)を `make up PROFILE=iot` の基盤で確かめた。
 - 2026-10-29: P11 ⑦ の E2E(`tests/e2e` の `IotE2E`)で、native のシミュレータ(CI は linuxX64、手元は macosArm64 の release の実行ファイル)から送ったテレメトリが `iot.telemetry.reported.v1` に届き、§10 の traceparent で Tempo までたどれる(デバイスの span の子に iot-bridge の CONSUMER、その子に PRODUCER)ことを確かめた。あわせて、形式の版 1 のそろえ方(§4)、通信が切れていた間の分が過去のデバイスの時刻のまま届き疑われないこと(§7・§8)、再送が同じ ce_id になること(§6)、他のデバイスのトピックの拒否(§3)を確かめた。
 - 2026-10-30: §9 のエクスポーター(Telegraf)のメモリの上限を 512m にした。256m では CI(amd64)の起動で OOM になることがあった(実行ファイルが 326 MB)。
+- 2026-10-30: §9 の `$SYS` が retain されず、変わらない値は届かないことが分かった(CI の `MosquittoBrokerIT`)。エクスポーターの系列を消さず(`expiration_interval = 0`)、`$SYS` が届いていることは稼働時間(`mosquitto_uptime_seconds`)が増えているかで見るようにした。

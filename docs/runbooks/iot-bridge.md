@@ -60,8 +60,10 @@
 2. Kafka が戻れば、送り直しが成功して自然に進む(待ち時間は最大 30 秒)。溜め込みの数が下がることを確かめる。
 
 ## 溜め込みの数が見えないとき
-`MosquittoMetricsMissing`(エクスポーター(Telegraf。`mosquitto-exporter`)は動いているのに、`$SYS` の接続の数が届かない)。
-上限に近づいても気づけない状態なので、早く戻す。溜め込みの数・捨てた数は 0 のうちは `$SYS` に出ないので、それらがないだけなら正常。
+`MosquittoMetricsMissing`(エクスポーター(Telegraf。`mosquitto-exporter`)は動いているのに、Mosquitto の稼働時間(`mosquitto_uptime_seconds`)が
+ない・2 分増えない)。上限に近づいても気づけない状態なので、早く戻す。溜め込みの数・捨てた数は 0 のうちは `$SYS` に出ないので、それらがないだけなら正常。
+- **Mosquitto を再起動したら、`mosquitto-exporter` も再起動する**(`$SYS` は変わったときだけ届くので、エクスポーターは再起動の前の溜め込みの数を
+  出し続けることがある。ADR-0039 §9)。
 1. Mosquitto が動いているか(`make ps`)。
 2. Telegraf のログ(`make logs SERVICE=mosquitto-exporter`)。監視のユーザー(`eiaf-monitor`。`$SYS` の読み取りだけ)で接続・購読できているか。
    パスワードは `.env` の `MQTT_MONITOR_PASSWORD`(Mosquitto は起動のたびにパスワードと ACL を作り直すので、`.env` を変えたら Mosquitto も作り直す)。

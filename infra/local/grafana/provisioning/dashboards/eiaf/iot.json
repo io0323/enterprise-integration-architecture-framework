@@ -94,7 +94,7 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "max(mosquitto_store_messages_count) or (0 * max(mosquitto_clients_connected))",
+          "expr": "max(mosquitto_store_messages_count) or (0 * max(mosquitto_uptime_seconds))",
           "legendFormat": "溜め込み"
         }
       ],
@@ -161,7 +161,7 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "sum(increase(mosquitto_publish_messages_dropped[1h])) or (0 * max(mosquitto_clients_connected))",
+          "expr": "sum(increase(mosquitto_publish_messages_dropped[1h])) or (0 * max(mosquitto_uptime_seconds))",
           "legendFormat": "捨てた"
         }
       ],
@@ -228,7 +228,7 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "max(mosquitto_store_messages_bytes) or (0 * max(mosquitto_clients_connected))",
+          "expr": "max(mosquitto_store_messages_bytes) or (0 * max(mosquitto_uptime_seconds))",
           "legendFormat": "バイト数"
         }
       ],

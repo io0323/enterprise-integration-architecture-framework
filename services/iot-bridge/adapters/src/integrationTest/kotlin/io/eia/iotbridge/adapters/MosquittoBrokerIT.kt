@@ -95,8 +95,9 @@ class MosquittoBrokerIT :
                 .buildBlocking()
 
         /**
-         * 監視のユーザーで $SYS の [topic] の値を読む(1 秒ごとに更新される)。[accept] を満たすまで [wait] だけ待つ。
-         * まだ出ていない値(捨てた数は 1 件目を捨てるまで出ない)は -1。
+         * 監視のユーザーで $SYS の [topic] の値(先頭の数。稼働時間は「42 seconds」)を読む。[accept] を満たすまで [wait] だけ待つ。
+         * $SYS の多くは値が変わったときだけ届き retain もしないので、まだ出ていない・購読してから変わっていない値は -1
+         * (捨てた数は 1 件目を捨てるまで出ない。間隔(1 秒)ごとに必ず届くのは稼働時間)。
          */
         fun sys(
             topic: String,
@@ -114,7 +115,9 @@ class MosquittoBrokerIT :
                 val deadline = System.nanoTime() + wait.inWholeNanoseconds
                 var last = -1L
                 while (System.nanoTime() < deadline && !(last >= 0 && accept(last))) {
-                    publishes.receive(1, TimeUnit.SECONDS).ifPresent { last = String(it.payloadAsBytes).trim().toLong() }
+                    publishes.receive(1, TimeUnit.SECONDS).ifPresent { publish ->
+                        last = String(publish.payloadAsBytes).trim().substringBefore(' ').toLong()
+                    }
                 }
                 monitor.disconnect()
                 return last
@@ -166,7 +169,7 @@ class MosquittoBrokerIT :
                         .send()
                 }.mqttMessage.reasonCode shouldBe Mqtt5PubAckReasonCode.NOT_AUTHORIZED
                 bridge.disconnect()
-                (sys("\$SYS/broker/clients/connected") { it >= 0 } >= 0) shouldBe true
+                (sys("\$SYS/broker/uptime") { it >= 0 } >= 0) shouldBe true
             }
 
             test("匿名接続は拒否する") {
