@@ -1,0 +1,19 @@
+id: INT-B2B-001
+name: Partner Purchase Orders (EDIFACT ORDERS)
+description: >-
+  取引先が SFTP に置く受注の文書(UN/EDIFACT ORDERS D.96A のサブセット)を、b2b-gateway が受け取って原本を保管し、
+  構文・スキーマ・業務の 3 段階で検査して、社内の受注(order の API)に取り込む(P12。ADR-0040・ADR-0041)。
+  取引先ごとの参加(識別子・接続先・鍵・締め時刻・応答の期限)は、カタログではなく取引先の台帳(TPA)で持つ
+style: edi
+pattern: file-transfer
+provider: { owner: team-integration, system: trading-partners }
+consumers:
+  - { owner: team-integration, system: b2b-gateway }
+contract: contracts/files/edi/edifact-orders.v1.yaml
+tier: 2
+dataClassification: confidential
+# latencyP99 は、書き終わったファイルを見つけてから、構文とスキーマの段階の応答(CONTRL。INT-B2B-002)を送るまで
+slo: { availability: "99.9", latencyP99: "15m" }
+# 受け取った文書ごとに、原本の SHA-256 と保管の参照を記録する(ADR-0017 §1・ADR-0040)。保持期間は法令に従う(環境ごとの設定)
+audit: { actions: [b2b.document.receive], dataClassification: confidential, retention: legal }
+lifecycle: design

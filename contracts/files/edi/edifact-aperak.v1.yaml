@@ -1,0 +1,156 @@
+# 業務の段階の応答(INT-B2B-003。P12)。b2b-gateway が受注の文書(ORDERS)のメッセージごとに返す UN/EDIFACT の APERAK(D.96A)のサブセット。
+# 形式は contracts/files/edi-spec.v1.schema.json。返す条件(拒否は必ず、受け付けは取引先の台帳で選ぶ)と期限は ADR-0041 §5。
+name: edifact-aperak
+version: 1
+description: >-
+  受注の文書(edifact-orders.v1)の 1 つのメッセージに対する、業務の検査の結果。拒否は BGM の 4343 = RE と、理由ごとの ERC と FTX、
+  受け付け(肯定の応答。取引先の台帳で返すかを選ぶ)は 4343 = AP で ERC を付けない。理由は ERC の 9321(業務の規則のコード。
+  3055 = ZZZ)と、FTX の固定の文言(edifact-orders.v1 の businessRules と、この仕様の errorTexts)だけで表し、社内の情報は入れない。
+  受け取った交換と同じ文字セットと構文の版で返す。
+owner: team-integration
+direction: outbound
+dataClassification: internal
+containsPersonalData: false
+standard: UN/EDIFACT
+message: { type: APERAK, version: D, release: 96A, agency: UN }
+syntax:
+  versions: [3]
+  characterSets: [UNOA, UNOB, UNOC]
+  una: required
+  functionalGroups: false
+  maxMessagesPerInterchange: 100
+segments:
+  UNB:
+    name: Interchange header
+    elements:
+      - id: S001
+        name: Syntax identifier
+        status: M
+        components:
+          - { id: "0001", name: Syntax identifier, status: M, format: a4, codes: [{ value: UNOA, name: UN/ECE level A }, { value: UNOB, name: UN/ECE level B }, { value: UNOC, name: UN/ECE level C }] }
+          - { id: "0002", name: Syntax version number, status: M, format: n1, codes: [{ value: "3", name: Version 3 }] }
+      - id: S002
+        name: Interchange sender
+        status: M
+        description: 自社(受け取った交換の S003)
+        components:
+          - { id: "0004", name: Sender identification, status: M, format: an..35 }
+          - { id: "0007", name: Partner identification code qualifier, status: M, format: an..4 }
+      - id: S003
+        name: Interchange recipient
+        status: M
+        description: 取引先(受け取った交換の S002)
+        components:
+          - { id: "0010", name: Recipient identification, status: M, format: an..35 }
+          - { id: "0007", name: Partner identification code qualifier, status: M, format: an..4 }
+      - id: S004
+        name: Date/time of preparation
+        status: M
+        components:
+          - { id: "0017", name: Date of preparation, status: M, format: n6, description: YYMMDD(UTC) }
+          - { id: "0019", name: Time of preparation, status: M, format: n4, semantic: time }
+      - { id: "0020", name: Interchange control reference, status: M, format: an..14, description: 自社が取引先ごとに振る管理番号(受け取った交換の管理番号とは別) }
+      - { id: S005, name: "Recipient's reference, password", status: X, components: [{ id: "0022", name: "Recipient's reference/password", status: X, format: an..14 }] }
+      - { id: "0026", name: Application reference, status: X, format: an..14 }
+      - { id: "0029", name: Processing priority code, status: X, format: a1 }
+      - { id: "0031", name: Acknowledgement request, status: X, format: n1, description: CONTRL に CONTRL を求めない }
+      - { id: "0032", name: Communications agreement ID, status: X, format: an..35 }
+      - { id: "0035", name: Test indicator, status: C, format: n1, codes: [{ value: "1", name: Interchange is a test }], description: 受け取った ORDERS の交換が試験なら 1 }
+  UNH:
+    name: Message header
+    elements:
+      - { id: "0062", name: Message reference number, status: M, format: an..14 }
+      - id: S009
+        name: Message identifier
+        status: M
+        components:
+          - { id: "0065", name: Message type, status: M, format: an..6, codes: [{ value: APERAK, name: Application error and acknowledgement message }] }
+          - { id: "0052", name: Message version number, status: M, format: an..3, codes: [{ value: D, name: Draft version }] }
+          - { id: "0054", name: Message release number, status: M, format: an..3, codes: [{ value: 96A, name: Release 1996 - A }] }
+          - { id: "0051", name: Controlling agency, status: M, format: an..2, codes: [{ value: UN, name: UN/CEFACT }] }
+  BGM:
+    name: Beginning of message
+    elements:
+      - id: C002
+        name: Document/message name
+        status: M
+        components:
+          - { id: "1001", name: "Document/message name, coded", status: M, format: an..3, codes: [{ value: "23", name: Status information }], description: D.96A の 1001 には APERAK の専用のコードがないため、関連するメッセージの状態を表す 23 を使う(ADR-0041 §5) }
+      - { id: "1004", name: Document/message number, status: M, format: an..35, description: 自社が振る応答の番号 }
+      - { id: "1225", name: "Message function, coded", status: M, format: an..3, codes: [{ value: "9", name: Original }] }
+      - { id: "4343", name: "Response type, coded", status: M, format: an..3, codes: [{ value: AP, name: Accepted }, { value: RE, name: Rejected }] }
+  DTM:
+    name: Date/time/period
+    elements:
+      - id: C507
+        name: Date/time/period
+        status: M
+        components:
+          - { id: "2005", name: Date/time/period qualifier, status: M, format: an..3, codes: [{ value: "137", name: Document/message date/time }] }
+          - { id: "2380", name: Date/time/period, status: M, format: n8, semantic: date }
+          - { id: "2379", name: Date/time/period format qualifier, status: M, format: an..3, codes: [{ value: "102", name: CCYYMMDD }] }
+  RFF:
+    name: Reference
+    elements:
+      - id: C506
+        name: Reference
+        status: M
+        components:
+          - { id: "1153", name: Reference qualifier, status: M, format: an..3, codes: [{ value: CO, name: Buyers order number }] }
+          - { id: "1154", name: Reference number, status: M, format: an..35, description: 受け取った ORDERS の BGM の 1004(取引先の注文番号) }
+  ERC:
+    name: Application error information
+    elements:
+      - id: C901
+        name: Application error detail
+        status: M
+        components:
+          - { id: "9321", name: Application error identification, status: M, format: an..8, description: 業務の規則のコード(edifact-orders.v1 の businessRules と、この仕様の errorTexts の code) }
+          - { id: "1131", name: Code list qualifier, status: X, format: an..3 }
+          - { id: "3055", name: "Code list responsible agency, coded", status: M, format: an..3, codes: [{ value: ZZZ, name: Mutually defined }] }
+  FTX:
+    name: Free text
+    elements:
+      - { id: "4451", name: Text subject qualifier, status: M, format: an..3, codes: [{ value: AAO, name: Error description (free text) }] }
+      - { id: "4453", name: "Text function, coded", status: X, format: an..3 }
+      - id: C107
+        name: Text reference
+        status: X
+        components:
+          - { id: "4441", name: "Free text, coded", status: X, format: an..3 }
+      - id: C108
+        name: Text literal
+        status: M
+        components:
+          - { id: "4440", name: Free text, status: M, format: an..70, description: 規則の固定の文言(text) }
+  UNT:
+    name: Message trailer
+    elements:
+      - { id: "0074", name: Number of segments in the message, status: M, format: n..6 }
+      - { id: "0062", name: Message reference number, status: M, format: an..14 }
+  UNZ:
+    name: Interchange trailer
+    elements:
+      - { id: "0036", name: Interchange control count, status: M, format: n..6 }
+      - { id: "0020", name: Interchange control reference, status: M, format: an..14 }
+structure:
+  - { segment: BGM, status: M, max: 1 }
+  - segment: DTM
+    status: M
+    max: 1
+    qualifiers:
+      - { value: "137", status: M, max: 1 }
+  - group: SG1
+    status: M
+    max: 1
+    content:
+      - { segment: RFF, status: M, max: 1 }
+  - group: SG3
+    status: C
+    max: 99
+    description: 拒否(RE)では 1 つ以上、受け付け(AP)では付けない
+    content:
+      - { segment: ERC, status: M, max: 1 }
+      - { segment: FTX, status: M, max: 1 }
+errorTexts:
+  - { code: APR901, text: ORDER NOT ACCEPTED BY SUPPLIER SYSTEM, description: 業務の検査に合格した後、社内の受注のシステム(order の API)が受け付けなかった(422 など。理由の詳細は返さない。ADR-0040) }

@@ -1,0 +1,227 @@
+# 受注の文書(INT-B2B-001。P12)。取引先が SFTP で置く UN/EDIFACT の ORDERS(D.96A)のサブセット。
+# 形式は contracts/files/edi-spec.v1.schema.json。構文・文字セット・応答の方針は ADR-0041。
+# データ要素の番号・形式・コード値は UN/CEFACT のディレクトリ(D.96A・構文の版 3)に従う(確かめた資料は ADR-0041 §8)。
+name: edifact-orders
+version: 1
+description: >-
+  取引先(買い手)からの注文。1 つのメッセージが 1 つの注文。買い手・売り手(自社)・届け先は GLN(NAD の C082、3055 = 9)で、
+  商品は GTIN(LIN の C212、7143 = EN)と、任意で取引先の商品コード(PIA、7143 = BP)で表す。社内の ID への対応は、
+  取引先ごとのコードの対応表で行う(b2b-gateway。業務の段階の検査)。個人の住所や氏名は含めない(届け先は GLN で表す)。
+owner: team-integration
+direction: inbound
+dataClassification: confidential
+containsPersonalData: false
+standard: UN/EDIFACT
+message: { type: ORDERS, version: D, release: 96A, agency: UN }
+syntax:
+  versions: [3]
+  characterSets: [UNOA, UNOB, UNOC]
+  una: required
+  functionalGroups: false
+  maxMessagesPerInterchange: 100
+acknowledgements:
+  syntax: contracts/files/edi/edifact-contrl.v1.yaml
+  business: contracts/files/edi/edifact-aperak.v1.yaml
+segments:
+  UNB:
+    name: Interchange header
+    elements:
+      - id: S001
+        name: Syntax identifier
+        status: M
+        components:
+          - { id: "0001", name: Syntax identifier, status: M, format: a4, codes: [{ value: UNOA, name: UN/ECE level A }, { value: UNOB, name: UN/ECE level B }, { value: UNOC, name: UN/ECE level C }] }
+          - { id: "0002", name: Syntax version number, status: M, format: n1, codes: [{ value: "3", name: Version 3 }] }
+      - id: S002
+        name: Interchange sender
+        status: M
+        description: 取引先の ID。取引先の台帳の識別子(ID と識別の機関)と一致しなければ構文の段階のエラー(0085 = 23)
+        components:
+          - { id: "0004", name: Sender identification, status: M, format: an..35 }
+          - { id: "0007", name: Partner identification code qualifier, status: M, format: an..4, description: 識別の機関。取引先の台帳の値と一致すること }
+          - { id: "0008", name: Address for reverse routing, status: X, format: an..14 }
+      - id: S003
+        name: Interchange recipient
+        status: M
+        description: 自社の ID。自社の GLN でなければ構文の段階のエラー(0085 = 7)
+        components:
+          - { id: "0010", name: Recipient identification, status: M, format: an..35 }
+          - { id: "0007", name: Partner identification code qualifier, status: M, format: an..4, description: 識別の機関。取引先の台帳の値と一致すること }
+          - { id: "0014", name: Routing address, status: X, format: an..14 }
+      - id: S004
+        name: Date/time of preparation
+        status: M
+        components:
+          - { id: "0017", name: Date of preparation, status: M, format: n6, description: YYMMDD }
+          - { id: "0019", name: Time of preparation, status: M, format: n4, semantic: time }
+      - { id: "0020", name: Interchange control reference, status: M, format: an..14, description: 取引先が交換ごとに変える管理番号。重複の判定に使う(ADR-0040) }
+      - { id: S005, name: "Recipient's reference, password", status: X, components: [{ id: "0022", name: "Recipient's reference/password", status: X, format: an..14 }] }
+      - { id: "0026", name: Application reference, status: X, format: an..14 }
+      - { id: "0029", name: Processing priority code, status: X, format: a1 }
+      - { id: "0031", name: Acknowledgement request, status: C, format: n1, codes: [{ value: "1", name: Requested }], description: 値によらず CONTRL を返す(返すかどうかは取引先の台帳で決める。ADR-0041 §5) }
+      - { id: "0032", name: Communications agreement ID, status: X, format: an..35 }
+      - { id: "0035", name: Test indicator, status: C, format: n1, codes: [{ value: "1", name: Interchange is a test }], description: 試験の交換は検査して応答を返すが、社内に取り込まない(ADR-0041 §6) }
+  UNH:
+    name: Message header
+    elements:
+      - { id: "0062", name: Message reference number, status: M, format: an..14 }
+      - id: S009
+        name: Message identifier
+        status: M
+        components:
+          - { id: "0065", name: Message type, status: M, format: an..6, codes: [{ value: ORDERS, name: Purchase order message }] }
+          - { id: "0052", name: Message version number, status: M, format: an..3, codes: [{ value: D, name: Draft version }] }
+          - { id: "0054", name: Message release number, status: M, format: an..3, codes: [{ value: 96A, name: Release 1996 - A }] }
+          - { id: "0051", name: Controlling agency, status: M, format: an..2, codes: [{ value: UN, name: UN/CEFACT }] }
+          - { id: "0057", name: Association assigned code, status: X, format: an..6 }
+  BGM:
+    name: Beginning of message
+    elements:
+      - id: C002
+        name: Document/message name
+        status: M
+        components:
+          - { id: "1001", name: "Document/message name, coded", status: M, format: an..3, codes: [{ value: "220", name: Order }] }
+      - { id: "1004", name: Document/message number, status: M, format: an..35, description: 取引先の注文番号。業務の段階で、取引先ごとの重複を検査する(ORD007) }
+      - { id: "1225", name: "Message function, coded", status: M, format: an..3, codes: [{ value: "9", name: Original }], description: 変更・取消(ORDCHG など)は範囲外 }
+  DTM:
+    name: Date/time/period
+    elements:
+      - id: C507
+        name: Date/time/period
+        status: M
+        components:
+          - { id: "2005", name: Date/time/period qualifier, status: M, format: an..3, codes: [{ value: "137", name: Document/message date/time }, { value: "2", name: "Delivery date/time, requested" }] }
+          - { id: "2380", name: Date/time/period, status: M, format: n8, semantic: date }
+          - { id: "2379", name: Date/time/period format qualifier, status: M, format: an..3, codes: [{ value: "102", name: CCYYMMDD }] }
+  NAD:
+    name: Name and address
+    elements:
+      - { id: "3035", name: Party qualifier, status: M, format: an..3, codes: [{ value: BY, name: Buyer }, { value: SU, name: Supplier }, { value: DP, name: Delivery party }] }
+      - id: C082
+        name: Party identification details
+        status: M
+        components:
+          - { id: "3039", name: Party id. identification, status: M, format: an..35, description: GLN }
+          - { id: "1131", name: Code list qualifier, status: X, format: an..3 }
+          - { id: "3055", name: "Code list responsible agency, coded", status: M, format: an..3, codes: [{ value: "9", name: EAN (International Article Numbering association) }] }
+  CUX:
+    name: Currencies
+    elements:
+      - id: C504
+        name: Currency details
+        status: M
+        components:
+          - { id: "6347", name: Currency details qualifier, status: M, format: an..3, codes: [{ value: "2", name: Reference currency }] }
+          - { id: "6345", name: "Currency, coded", status: M, format: an..3, description: ISO 4217。取引先と合意した通貨か(ORD005)は業務の段階で検査する }
+          - { id: "6343", name: Currency qualifier, status: M, format: an..3, codes: [{ value: "9", name: Order currency }] }
+  LIN:
+    name: Line item
+    elements:
+      - { id: "1082", name: Line item number, status: M, format: n..6 }
+      - { id: "1229", name: "Action request/notification, coded", status: X, format: an..3 }
+      - id: C212
+        name: Item number identification
+        status: M
+        components:
+          - { id: "7140", name: Item number, status: M, format: an..35, description: GTIN }
+          - { id: "7143", name: "Item number type, coded", status: M, format: an..3, codes: [{ value: EN, name: International Article Numbering Association (EAN) }] }
+  PIA:
+    name: Additional product id
+    elements:
+      - { id: "4347", name: Product id. function qualifier, status: M, format: an..3, codes: [{ value: "1", name: Additional identification }] }
+      - id: C212
+        name: Item number identification
+        status: M
+        components:
+          - { id: "7140", name: Item number, status: M, format: an..35, description: 取引先の商品コード }
+          - { id: "7143", name: "Item number type, coded", status: M, format: an..3, codes: [{ value: BP, name: "Buyer's part number" }] }
+  QTY:
+    name: Quantity
+    elements:
+      - id: C186
+        name: Quantity details
+        status: M
+        components:
+          - { id: "6063", name: Quantity qualifier, status: M, format: an..3, codes: [{ value: "21", name: Ordered quantity }] }
+          - { id: "6060", name: Quantity, status: M, format: n..15, description: 正の整数であることは業務の段階で検査する(ORD010) }
+  PRI:
+    name: Price details
+    elements:
+      - id: C509
+        name: Price information
+        status: M
+        components:
+          - { id: "5125", name: Price qualifier, status: M, format: an..3, codes: [{ value: AAA, name: Calculation net }] }
+          - { id: "5118", name: Price, status: M, format: n..15, description: 税抜の単価。通貨の小数桁数に収まることは業務の段階で検査する(ORD011) }
+  UNS:
+    name: Section control
+    elements:
+      - { id: "0081", name: Section identification, status: M, format: a1, codes: [{ value: S, name: Detail/summary section separation }] }
+  CNT:
+    name: Control total
+    elements:
+      - id: C270
+        name: Control
+        status: M
+        components:
+          - { id: "6069", name: Control qualifier, status: M, format: an..3, codes: [{ value: "2", name: Number of line items in message }] }
+          - { id: "6066", name: Control value, status: M, format: n..18, description: 明細の数。一致しなければ業務の段階のエラー(ORD008) }
+  UNT:
+    name: Message trailer
+    elements:
+      - { id: "0074", name: Number of segments in the message, status: M, format: n..6, description: UNH と UNT を含む }
+      - { id: "0062", name: Message reference number, status: M, format: an..14, description: UNH の 0062 と同じ値 }
+  UNZ:
+    name: Interchange trailer
+    elements:
+      - { id: "0036", name: Interchange control count, status: M, format: n..6, description: 交換に入っているメッセージの数 }
+      - { id: "0020", name: Interchange control reference, status: M, format: an..14, description: UNB の 0020 と同じ値 }
+structure:
+  - { segment: BGM, status: M, max: 1 }
+  - segment: DTM
+    status: M
+    max: 2
+    qualifiers:
+      - { value: "137", status: M, max: 1 }
+      - { value: "2", status: C, max: 1 }
+  - group: SG2
+    status: M
+    max: 3
+    qualifiers:
+      - { value: BY, status: M, max: 1 }
+      - { value: SU, status: M, max: 1 }
+      - { value: DP, status: C, max: 1 }
+    content:
+      - { segment: NAD, status: M, max: 1 }
+  - group: SG7
+    status: M
+    max: 1
+    content:
+      - { segment: CUX, status: M, max: 1 }
+  - group: SG25
+    status: M
+    max: 999
+    content:
+      - { segment: LIN, status: M, max: 1 }
+      - { segment: PIA, status: C, max: 1 }
+      - { segment: QTY, status: M, max: 1 }
+      - group: SG28
+        status: M
+        max: 1
+        content:
+          - { segment: PRI, status: M, max: 1 }
+  - { segment: UNS, status: M, max: 1 }
+  - { segment: CNT, status: C, max: 1 }
+businessRules:
+  - { code: ORD001, text: UNKNOWN BUYER, description: NAD+BY の GLN が、その取引先のコードの対応表にない }
+  - { code: ORD002, text: UNKNOWN DELIVERY PARTY, description: NAD+DP の GLN が、その取引先のコードの対応表にない(NAD+DP がなければ、買い手の既定の届け先を使う) }
+  - { code: ORD003, text: SUPPLIER IS NOT THE RECIPIENT, description: NAD+SU の GLN が自社の GLN(取引先の台帳)と一致しない }
+  - { code: ORD004, text: UNKNOWN ITEM, description: 明細の商品(PIA の取引先の商品コード、なければ LIN の GTIN)が、その取引先のコードの対応表にない }
+  - { code: ORD005, text: CURRENCY NOT AGREED, description: CUX の通貨が、取引先の台帳で合意した通貨でない }
+  - { code: ORD006, text: DELIVERY DATE BEFORE ORDER DATE, description: DTM+2(納期)が DTM+137(注文日)より前 }
+  - { code: ORD007, text: DUPLICATE ORDER NUMBER, description: BGM の注文番号を、その取引先から前に受け付けている(別の交換の管理番号で届いた同じ注文) }
+  - { code: ORD008, text: LINE COUNT MISMATCH, description: CNT+2 の値が明細(SG25)の数と一致しない }
+  - { code: ORD009, text: DUPLICATE LINE NUMBER, description: LIN の明細番号が、メッセージの中で重複している }
+  - { code: ORD010, text: INVALID QUANTITY, description: QTY+21 の数量が正の整数でない }
+  - { code: ORD011, text: INVALID PRICE, description: PRI+AAA の単価が負か、通貨の小数桁数を超える }

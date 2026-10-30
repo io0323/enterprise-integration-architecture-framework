@@ -76,6 +76,9 @@ data class Contracts(
     // デバイスの形式のスキーマ(contracts/devices の {message}.v{n}.schema.json。ADR-0039 §4)と、contracts/devices の全ファイル(名前の検査用)
     val devicePayloads: List<ContractDocument> = emptyList(),
     val deviceFiles: List<String> = emptyList(),
+    // EDI のサブセットの仕様(contracts/files/edi の {name}.v{n}.yaml)と、その形式(edi-spec.v{n}.schema.json。ADR-0041)
+    val ediSpecs: List<ContractDocument> = emptyList(),
+    val ediSpecSchemas: List<ContractDocument> = emptyList(),
     val loadViolations: List<Violation>,
 ) {
     fun relative(file: Path): String = root.relativize(file).invariantSeparatorsPathString
@@ -86,6 +89,7 @@ data class Contracts(
         const val EXTERNAL_DIR = "contracts/external/"
         const val FLOW_SUFFIX = ".flow.yaml"
         const val DEVICES_DIR = "contracts/devices/"
+        const val EDI_DIR = "contracts/files/edi/"
 
         private val yaml = YAMLMapper.builder().build()
         private val json = JsonMapper.builder().build()
@@ -133,7 +137,7 @@ data class Contracts(
                         .filter { it.name.startsWith("manifest.") && it.name.endsWith(".schema.json") }
                         .mapNotNull(::readTree),
                 fileSpecs = files(filesDir).map { filesDir.relativize(it).invariantSeparatorsPathString },
-                // ファイルの仕様({system}_{dataset}.v{n}.yaml。edi/ は P12)と、その形式のスキーマ(file-spec.v{n}.schema.json)
+                // ファイルの仕様({system}_{dataset}.v{n}.yaml)と、その形式のスキーマ(file-spec.v{n}.schema.json)
                 fileSpecDocuments = fileSpecFiles(filesDir).mapNotNull(::readTree),
                 fileSpecSchemas = files(filesDir).filter(::isFileSpecSchema).mapNotNull(::readTree),
                 externalOpenApis = files(contracts.resolve("external")).filter(::isYamlOrJson).mapNotNull(::readTree),
@@ -144,6 +148,8 @@ data class Contracts(
                         .mapNotNull(::readTree),
                 devicePayloads = files(contracts.resolve("devices")).filter { it.name.endsWith(".schema.json") }.mapNotNull(::readTree),
                 deviceFiles = files(contracts.resolve("devices")).map(::relative),
+                ediSpecs = ediSpecFiles(filesDir).mapNotNull(::readTree),
+                ediSpecSchemas = files(filesDir).filter(::isEdiSpecSchema).mapNotNull(::readTree),
                 loadViolations = violations,
             )
         }
@@ -164,6 +170,11 @@ data class Contracts(
 
         private fun fileSpecFiles(filesDir: Path): List<Path> =
             files(filesDir).filter { it.parent == filesDir && it.extension == "yaml" && '_' in it.name }
+
+        private fun ediSpecFiles(filesDir: Path): List<Path> = files(filesDir.resolve("edi")).filter { it.extension == "yaml" }
+
+        private fun isEdiSpecSchema(file: Path): Boolean =
+            file.parent.name == "files" && file.name.startsWith("edi-spec.") && file.name.endsWith(".schema.json")
 
         private fun isFileSpecSchema(file: Path): Boolean = file.name.startsWith("file-spec.") && file.name.endsWith(".schema.json")
 

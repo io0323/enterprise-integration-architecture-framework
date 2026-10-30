@@ -49,12 +49,12 @@ ID は `CC-{区分}-{連番}`。定義は `src/main/kotlin/io/eia/tools/contract
 | `CC-STRUCT-002` | OpenAPI として正しいこと(swagger-parser の検証) | 5, 15.2 | OpenAPI 3.1 の仕様に合わせて記述を直す |
 | `CC-STRUCT-003` | AsyncAPI 3.0 の公式 JSON Schema に適合すること | 6.3, 15.2 | AsyncAPI 3.0 の仕様に合わせて記述を直す |
 | `CC-STRUCT-004` | Avro スキーマとして読めること | 6.3 | Avro 1.12 の仕様に合わせて直す(default の型、名前の参照順など) |
-| `CC-STRUCT-005` | JSON Schema(manifest・カタログ・ファイルの仕様・デバイスの形式)がメタスキーマに適合すること | 9, 16.1 | JSON Schema 2020-12 の仕様に合わせて直す |
+| `CC-STRUCT-005` | JSON Schema(manifest・カタログ・ファイルの仕様・EDI の仕様・デバイスの形式)がメタスキーマに適合すること | 9, 16.1 | JSON Schema 2020-12 の仕様に合わせて直す |
 | `CC-NAMING-001` | Topic は {domain}.{entity}.{event}.v{n} | 6.2, 16.1 | 小文字・kebab-case の 4 セグメントに直す(例 sales.order.created.v1)。DLQ は {topic}.dlq |
 | `CC-NAMING-002` | Command Topic の event セグメントは cmd-{command} | 6.2, ADR-0006 | event セグメントを cmd-{command}(kebab-case)にする(例 inventory.stock.cmd-reserve.v1) |
 | `CC-NAMING-003` | OpenAPI の servers[*].url は /{domain} で終わる | 5.2, ADR-0005 | servers には Gateway 公開 URL を /{domain} まで書く(例 http://localhost:19080/sales) |
 | `CC-NAMING-004` | OpenAPI の paths は /v{n}/{resource}(kebab-case) | 5.3, ADR-0005 | paths を /v{n}/ で始め、リソース名を小文字の kebab-case にする(例 /v1/orders/{orderId}) |
-| `CC-NAMING-005` | contracts/files のファイル名 | 9, 16.1 | {system}_{dataset}.v{n}.yaml、manifest.v{n}.schema.json、file-spec.v{n}.schema.json、edi/{name}.v{n}.yaml のいずれかにする |
+| `CC-NAMING-005` | contracts/files のファイル名 | 9, 16.1 | {system}_{dataset}.v{n}.yaml、manifest.v{n}.schema.json、file-spec.v{n}.schema.json、edi-spec.v{n}.schema.json、edi/{name}.v{n}.yaml のいずれかにする |
 | `CC-NAMING-006` | 連携 ID は INT-{DOMAIN}-{NNN} で、カタログのファイル名は {id}.yaml | 16.1 | id を INT-{DOMAIN}-{NNN} にし、ファイル名を id と一致させる |
 | `CC-NAMING-007` | Consumer Group は {service}.{purpose} | 6.4 | 小文字・kebab-case の 2 セグメントにする(例 inventory.reservation) |
 | `CC-NAMING-008` | Avro の namespace は io.eia.events.{domain}、record は PascalCase、ファイル名は {Record}.avsc | 6.3, INTEGRATION_STANDARDS §1 | contracts/avro/{domain}/{Record}.avsc に置き、namespace と名前を合わせる(共通型は io.eia.events.common) |
@@ -83,10 +83,14 @@ ID は `CC-{区分}-{連番}`。定義は `src/main/kotlin/io/eia/tools/contract
 | `CC-FILE-002` | ファイルの仕様がファイルの仕様のスキーマに適合する(形式・列・機密区分・個人情報の有無など) | 9, 12.2 | contracts/files/file-spec.v{n}.schema.json の必須項目と値を満たす |
 | `CC-FILE-003` | ファイルの仕様のファイル名と、中の system・dataset・version が一致する | 9, INTEGRATION_STANDARDS §1 | ファイル名を {system}_{dataset}.v{version}.yaml にする(manifest の schemaVersion は {system}_{dataset}.v{version}) |
 | `CC-FILE-004` | ファイルの仕様はカタログに登録されている | 16.1 | contracts/catalog/{id}.yaml(style: file)を追加し、contract にこの仕様を指定する |
+| `CC-EDI-001` | EDI のサブセットの仕様が EDI の仕様のスキーマに適合する(メッセージ・構文・セグメント・並び・業務の規則) | 11.1, ADR-0041 | contracts/files/edi-spec.v{n}.schema.json の必須項目と値を満たす。inbound の仕様には acknowledgements と businessRules を書く |
+| `CC-EDI-002` | EDI の仕様の中の参照が食い違わない(ファイル名と name・version、並びのセグメント・修飾子、UNH のメッセージの型、応答の仕様、規則のコード) | 11.1, ADR-0041 | 並び(structure)のセグメントを segments に定義し、使わない定義を消す。グループの最初は status M のセグメントにする。修飾子は最初のデータ要素の codes の値にする。acknowledgements は outbound の仕様を指す |
+| `CC-EDI-003` | EDI の仕様は style: edi のカタログに登録され、style: edi のカタログの contract は contracts/files/edi/ の仕様 | 11.1, 16.1 | contracts/catalog/{id}.yaml(style: edi)を追加し、contract にこの仕様を指定する(文書の種類と向きごとに 1 件) |
 | `CC-COMPAT-001` | Avro スキーマが main の版に対して FULL 互換(BACKWARD かつ FORWARD) | 6.3, 13, 15.3, ADR-0014 | 追加・削除できるのは default 付きの項目だけ。必須項目の追加・削除、型変更、リネーム、enum 値の増減は新しいバージョンのトピック(.v{n+1})で行う |
 | `CC-COMPAT-002` | OpenAPI に main の版からの破壊的変更がない(oasdiff) | 5.3 | 互換な変更(任意項目の追加など)にするか、/v{n+1} を新設して並行提供する |
 | `CC-COMPAT-003` | ファイルの仕様が main の版に対して互換(列の削除・型や必須性の変更・並べ替え・enum の変更・形式の変更がない) | 9, 15.3 | 足してよいのは、末尾の任意(nullable: true)の列と、新しい形式だけ。ほかの変更は新しい版のファイル({system}_{dataset}.v{n+1}.yaml)で行う |
 | `CC-COMPAT-004` | デバイスの形式のスキーマ(contracts/devices)を main の版から変えていない・消していない(説明の文だけは変えてよい) | 15.3, 17.3, ADR-0039 | 出したデバイスの形式は変えない(古いファームウェアのデバイスが送り続ける)。変更は新しい版のファイル({message}.v{n+1}.schema.json)で足す。版をやめるときは ADR-0039 §4 の手順で例外を承認してもらう |
+| `CC-COMPAT-005` | EDI のサブセットの仕様(contracts/files/edi)を main の版から変えていない(説明の文だけは変えてよい) | 11.1, 15.3, ADR-0041 | 取引先は出した版に合わせて EDI の製品を設定しているので、版の中身は変えない。変更は新しい版のファイル({name}.v{n+1}.yaml)で足し、取引先ごとの切り替えは取引先の台帳で行う |
 | `CC-EXTERNAL-001` | 外部の契約(contracts/external)の破壊的変更(警告。ジョブは失敗させない) | 10.4, 16.1, ADR-0035 | ベンダーの変更に合わせて、取り込みの側(Connector・Flow の定義)を直す。カタログの external.source に変更の出典を書く |
 | `CC-WAIVER-001` | 互換性検査の例外リストの形式が正しい | 16.1, ADR-0013 | 各例外に rule(CC-COMPAT-*)・file・contains・reason・issue・expires(YYYY-MM-DD)を書く |
 | `CC-WAIVER-002` | 期限切れの互換性検査の例外が残っていない | 16.1, ADR-0013 | 例外が不要になっていれば削除する。まだ必要なら理由を Issue に残して expires を延ばす |
@@ -107,6 +111,13 @@ ID は `CC-{区分}-{連番}`。定義は `src/main/kotlin/io/eia/tools/contract
 - **Webhook の受け口**(自社の OpenAPI の操作に `x-eia-webhook: true`)は、Idempotency-Key の代わりに、署名の 3 つのヘッダ(`webhook-id`・`webhook-timestamp`・`webhook-signature`。required)と、security の署名の方式(`apiKey`・`in: header`・`name: webhook-signature`)を検査する(`CC-API-004`)。429 は従来どおり必須。
 - **外部の契約**(`contracts/external/`。SaaS のベンダーが持ち主の API の写し)には、自社の API の規則(命名・Idempotency-Key・429・security)を当てない。構造(`CC-STRUCT-002`)・ファイル名(`CC-NAMING-009`)・登録(`CC-CATALOG-006`)・ライフサイクルの検査は当てる。使う連携は `external` が必須(`CC-CATALOG-007`)。比較元に対する破壊的変更は、違反ではなく警告(`CC-EXTERNAL-001`。Step Summary に出る)。
 - **Flow の定義**(`contracts/flows/{id}.v{version}.flow.yaml`)は、`flow.v1.schema.json` への適合・ファイル名・振り分けの形(`CC-FLOW-001`)と、参照(カタログの連携・トピック・対応表。mapping が Canonical Model の項目だけで、必須の項目をすべて書いていること。`CC-FLOW-002`)を検査する。
+
+## EDI のサブセットの仕様(ADR-0041)
+
+- `contracts/files/edi/{name}.v{n}.yaml` は、取引先と交わす UN/EDIFACT の文書のサブセット(使うセグメント・データ要素・コード値・並びと回数・業務の規則)。形は `contracts/files/edi-spec.v{n}.schema.json`(`CC-EDI-001`)。b2b-gateway は仕様を読み込んで、スキーマの段階の検査と応答の組み立てを行う。
+- 仕様の中の参照(並びのセグメントの定義・グループの最初のセグメント・修飾子・UNH の S009 と `message`・UNB の S001 と `syntax`・応答の仕様・業務の規則のコードの一意)は `CC-EDI-002` で検査する。
+- カタログの単位は「文書の種類 × 向き」(`style: edi`。`CC-EDI-003`)。取引先ごとの参加は、カタログではなく取引先の台帳(TPA)で持つ。
+- 取引先は出した版に合わせて EDI の製品を設定するので、**出した版の中身は変えない**(`CC-COMPAT-005`。説明の文 `description` とデータ要素・コードの名前 `name` だけは直してよい)。変更は新しい版のファイルで足す。
 
 ## MQTT の契約とデバイスの形式(ADR-0039)
 

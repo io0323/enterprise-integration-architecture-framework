@@ -1,0 +1,17 @@
+id: INT-B2B-003
+name: Business Acknowledgements (EDIFACT APERAK)
+description: >-
+  b2b-gateway が、受注の文書(INT-B2B-001)のメッセージごとに、業務の段階の結果を APERAK で取引先に返す(P12。ADR-0041 §5)。
+  拒否は必ず返し、受け付け(肯定の応答)を返すかは取引先の台帳で選ぶ。返すまでの期限も取引先の台帳(TPA)で決める
+style: edi
+pattern: file-transfer
+provider: { owner: team-integration, system: b2b-gateway }
+consumers:
+  - { owner: team-integration, system: trading-partners }
+contract: contracts/files/edi/edifact-aperak.v1.yaml
+tier: 2
+dataClassification: internal
+# latencyP99 は、業務の検査を終えてから APERAK を置き終えるまで(取引先ごとの期限は TPA で決め、近づいたらアラートにする。ADR-0040)
+slo: { availability: "99.9", latencyP99: "1h" }
+audit: { actions: [b2b.ack.send], dataClassification: internal, retention: legal }
+lifecycle: design

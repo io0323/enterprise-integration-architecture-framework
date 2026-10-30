@@ -23,6 +23,9 @@ private const val WEBHOOK = "contracts/openapi/crm-webhook.v1.yaml"
 private const val EXTERNAL_API = "contracts/external/crm-api.v1.yaml"
 private const val EXTERNAL_CATALOG = "contracts/catalog/INT-SALES-006.yaml"
 private const val FLOW = "contracts/flows/crm-customer.v1.flow.yaml"
+private const val EDI_ORDERS = "contracts/files/edi/edifact-orders.v1.yaml"
+private const val CATALOG_EDI_ORDERS = "contracts/catalog/INT-B2B-001.yaml"
+private const val CATALOG_EDI_APERAK = "contracts/catalog/INT-B2B-003.yaml"
 private const val REFUND_FIELD = """{ "name": "refundAmount", "type": "long" },"""
 
 /**
@@ -42,6 +45,9 @@ private class Case(
  * 許すので(ADR-0013 §7)、ファイルの仕様の互換性の違反のサンプルは、比較元と変更後の両方で active にして検査する。
  */
 private fun Workspace.fileIntegrationActive(): Workspace = setLifecycle(CATALOG_FILE, "lifecycle: active")
+
+/** 受注の文書(INT-B2B-001)を active にする。EDI の仕様の互換性の違反のサンプルは、比較元と変更後の両方で active にして検査する。 */
+private fun Workspace.ediIntegrationActive(): Workspace = setLifecycle(CATALOG_EDI_ORDERS, "lifecycle: active")
 
 private val cases =
     listOf(
@@ -252,6 +258,41 @@ private val cases =
             replace(FILE_SPEC, "dataset: daily", "dataset: monthly").replace(FILE_SPEC, "version: 1", "version: 2")
         },
         Case("ファイルの仕様がカタログに登録されていない", setOf("CC-FILE-004")) { delete(CATALOG_FILE) },
+        // --- EDI のサブセットの仕様 ---
+        Case("EDI の仕様: 個人情報の有無がない", setOf("CC-EDI-001")) {
+            replace(EDI_ORDERS, "containsPersonalData: false\n", "")
+        },
+        Case("EDI の仕様: inbound なのに業務の規則がない", setOf("CC-EDI-001")) {
+            replace(EDI_ORDERS, "businessRules:\n", "errorTexts:\n")
+        },
+        Case("EDI の仕様: 並びのセグメントが定義されておらず、定義が使われていない", setOf("CC-EDI-002")) {
+            replace(EDI_ORDERS, "  - { segment: CNT, status: C, max: 1 }", "  - { segment: MOA, status: C, max: 1 }")
+        },
+        Case("EDI の仕様: 修飾子が最初のデータ要素の codes にない", setOf("CC-EDI-002")) {
+            replace(EDI_ORDERS, "      - { value: DP, status: C, max: 1 }", "      - { value: IV, status: C, max: 1 }")
+        },
+        Case("EDI の仕様: グループの最初が任意のセグメント", setOf("CC-EDI-002")) {
+            replace(EDI_ORDERS, "      - { segment: NAD, status: M, max: 1 }", "      - { segment: NAD, status: C, max: 1 }")
+        },
+        Case("EDI の仕様: name がファイル名と異なる", setOf("CC-EDI-002")) {
+            replace(EDI_ORDERS, "name: edifact-orders\n", "name: edifact-order\n")
+        },
+        Case("EDI の仕様: UNH のメッセージの型が message と異なる", setOf("CC-EDI-002")) {
+            replace(EDI_ORDERS, "message: { type: ORDERS,", "message: { type: ORDCHG,")
+        },
+        Case("EDI の仕様: コード値が format に収まらず、構文の版が syntax と異なる", setOf("CC-EDI-002")) {
+            replace(EDI_ORDERS, "codes: [{ value: \"3\", name: Version 3 }]", "codes: [{ value: \"30\", name: Version 3 }]")
+        },
+        Case("EDI の仕様: 業務の応答が outbound の仕様でない", setOf("CC-EDI-002")) {
+            replace(EDI_ORDERS, "business: contracts/files/edi/edifact-aperak.v1.yaml", "business: $EDI_ORDERS")
+        },
+        Case("EDI の仕様: 業務の規則のコードが重複", setOf("CC-EDI-002")) {
+            replace(EDI_ORDERS, "code: ORD011,", "code: ORD010,")
+        },
+        Case("EDI の仕様がカタログに登録されていない", setOf("CC-EDI-003")) { delete(CATALOG_EDI_APERAK) },
+        Case("style: edi のカタログの contract が EDI の仕様でない", setOf("CC-EDI-003")) {
+            replace(CATALOG_EDI_ORDERS, "contract: contracts/files/edi/edifact-orders.v1.yaml", "contract: $FILE_SPEC")
+        },
         // --- 互換性(main との差分) ---
         Case("Avro: default のない必須フィールドの追加", setOf("CC-COMPAT-001"), withBaseline = true) {
             replace(
@@ -289,6 +330,17 @@ private val cases =
                 "required: [id, customerId, status, orderedAt, lines, totalAmount, shippingAddress]",
                 "required: [id, customerId, status, orderedAt, lines, shippingAddress]",
             )
+        },
+        Case("EDI の仕様: グループの回数の変更", setOf("CC-COMPAT-005"), withBaseline = true, prepareBaseline = { ediIntegrationActive() }) {
+            ediIntegrationActive().replace(EDI_ORDERS, "    max: 999\n", "    max: 500\n")
+        },
+        Case("EDI の仕様: 説明の文と名前だけの変更は許す", emptySet(), withBaseline = true, prepareBaseline = { ediIntegrationActive() }) {
+            ediIntegrationActive()
+                .replace(EDI_ORDERS, "description: GTIN }", "description: 商品の GTIN }")
+                .replace(EDI_ORDERS, "name: Buyer }", "name: Buyer party }")
+        },
+        Case("EDI の仕様: 設計中(design)の連携だけが使う仕様の変更は許す", emptySet(), withBaseline = true) {
+            replace(EDI_ORDERS, "    max: 999\n", "    max: 500\n")
         },
         Case("ファイルの仕様: 列の削除と型の変更", setOf("CC-COMPAT-003"), withBaseline = true, prepareBaseline = { fileIntegrationActive() }) {
             fileIntegrationActive()

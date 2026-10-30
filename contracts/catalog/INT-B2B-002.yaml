@@ -1,0 +1,18 @@
+id: INT-B2B-002
+name: Syntax Acknowledgements (EDIFACT CONTRL)
+description: >-
+  b2b-gateway が、受け取った交換(INT-B2B-001)ごとに、構文とスキーマの段階の検査の結果を CONTRL で取引先に返す(P12。ADR-0041 §5)。
+  エラーは標準のコードと位置だけで表し、社内の情報を入れない
+style: edi
+pattern: file-transfer
+provider: { owner: team-integration, system: b2b-gateway }
+consumers:
+  - { owner: team-integration, system: trading-partners }
+contract: contracts/files/edi/edifact-contrl.v1.yaml
+tier: 2
+dataClassification: internal
+# latencyP99 は、書き終わったファイルを見つけてから、CONTRL を取引先の SFTP に置き終えるまで
+slo: { availability: "99.9", latencyP99: "15m" }
+# 送った応答も原本として保管し、SHA-256 を記録する(Framework 11.1 の「全ドキュメントを原本保管」。ADR-0040)
+audit: { actions: [b2b.ack.send], dataClassification: internal, retention: legal }
+lifecycle: design
