@@ -1,0 +1,156 @@
+# 構文とスキーマの段階の応答(INT-B2B-002。P12)。b2b-gateway が受け取った交換ごとに返す UN/EDIFACT の CONTRL(構文の版 3)のサブセット。
+# 形式は contracts/files/edi-spec.v1.schema.json。返す条件・エラーの位置の数え方・文字セットは ADR-0041 §4・§5。
+name: edifact-contrl
+version: 1
+description: >-
+  受け取った交換(UNB〜UNZ)に対する受領と、構文(ISO 9735)とスキーマ(サブセットの仕様)の検査の結果。
+  受け付けたら UCI の 0083 = 7(下位のメッセージも、UCM で拒否しない限り受け付けた)、拒否したら 4。
+  エラーは標準のコード(0085)と位置(UCS のセグメントの位置・UCD のデータ要素の位置)だけで表し、文言や社内の情報は入れない。
+  受け取った交換と同じ文字セット(UNB の 0001)と構文の版で返す(取引先の識別子や管理番号をそのまま写すため)。
+owner: team-integration
+direction: outbound
+dataClassification: internal
+containsPersonalData: false
+standard: UN/EDIFACT
+message: { type: CONTRL, version: D, release: "3", agency: UN }
+syntax:
+  versions: [3]
+  characterSets: [UNOA, UNOB, UNOC]
+  una: required
+  functionalGroups: false
+  maxMessagesPerInterchange: 1
+segments:
+  UNB:
+    name: Interchange header
+    elements:
+      - id: S001
+        name: Syntax identifier
+        status: M
+        components:
+          - { id: "0001", name: Syntax identifier, status: M, format: a4, codes: [{ value: UNOA, name: UN/ECE level A }, { value: UNOB, name: UN/ECE level B }, { value: UNOC, name: UN/ECE level C }] }
+          - { id: "0002", name: Syntax version number, status: M, format: n1, codes: [{ value: "3", name: Version 3 }] }
+      - id: S002
+        name: Interchange sender
+        status: M
+        description: 自社(受け取った交換の S003)
+        components:
+          - { id: "0004", name: Sender identification, status: M, format: an..35 }
+          - { id: "0007", name: Partner identification code qualifier, status: M, format: an..4 }
+      - id: S003
+        name: Interchange recipient
+        status: M
+        description: 取引先(受け取った交換の S002)
+        components:
+          - { id: "0010", name: Recipient identification, status: M, format: an..35 }
+          - { id: "0007", name: Partner identification code qualifier, status: M, format: an..4 }
+      - id: S004
+        name: Date/time of preparation
+        status: M
+        components:
+          - { id: "0017", name: Date of preparation, status: M, format: n6, description: YYMMDD(UTC) }
+          - { id: "0019", name: Time of preparation, status: M, format: n4, semantic: time }
+      - { id: "0020", name: Interchange control reference, status: M, format: an..14, description: 自社が取引先ごとに振る管理番号(受け取った交換の管理番号とは別) }
+      - { id: S005, name: "Recipient's reference, password", status: X, components: [{ id: "0022", name: "Recipient's reference/password", status: X, format: an..14 }] }
+      - { id: "0026", name: Application reference, status: X, format: an..14 }
+      - { id: "0029", name: Processing priority code, status: X, format: a1 }
+      - { id: "0031", name: Acknowledgement request, status: X, format: n1, description: CONTRL に CONTRL を求めない }
+      - { id: "0032", name: Communications agreement ID, status: X, format: an..35 }
+      - { id: "0035", name: Test indicator, status: C, format: n1, codes: [{ value: "1", name: Interchange is a test }], description: 受け取った交換が試験なら 1 }
+  UNH:
+    name: Message header
+    elements:
+      - { id: "0062", name: Message reference number, status: M, format: an..14 }
+      - id: S009
+        name: Message identifier
+        status: M
+        components:
+          - { id: "0065", name: Message type, status: M, format: an..6, codes: [{ value: CONTRL, name: Syntax and service report message }] }
+          - { id: "0052", name: Message version number, status: M, format: an..3, codes: [{ value: D, name: Draft version }] }
+          - { id: "0054", name: Message release number, status: M, format: an..3, codes: [{ value: "3", name: Release 3 }] }
+          - { id: "0051", name: Controlling agency, status: M, format: an..2, codes: [{ value: UN, name: UN/CEFACT }] }
+  UCI:
+    name: Interchange response
+    description: 受け取った交換を識別する(0020・S002・S003 は受け取った UNB の値をそのまま写す)
+    elements:
+      - { id: "0020", name: Interchange control reference, status: M, format: an..14 }
+      - id: S002
+        name: Interchange sender
+        status: M
+        components:
+          - { id: "0004", name: Sender identification, status: M, format: an..35 }
+          - { id: "0007", name: Partner identification code qualifier, status: C, format: an..4 }
+      - id: S003
+        name: Interchange recipient
+        status: M
+        components:
+          - { id: "0010", name: Recipient identification, status: M, format: an..35 }
+          - { id: "0007", name: Partner identification code qualifier, status: C, format: an..4 }
+      - { id: "0083", name: "Action, coded", status: M, format: an..3, codes: [{ value: "4", name: This level and all lower levels rejected }, { value: "7", name: "This level acknowledged, next lower level acknowledged if not explicitly rejected" }] }
+      - { id: "0085", name: "Syntax error, coded", status: C, format: an..3, codes: [{ value: "2", name: Syntax version or level not supported }, { value: "7", name: Interchange recipient not actual recipient }, { value: "12", name: Invalid value }, { value: "13", name: Missing }, { value: "15", name: Not supported in this position }, { value: "16", name: Too many constituents }, { value: "18", name: Unspecified error }, { value: "19", name: Invalid decimal notation }, { value: "20", name: Character invalid as service character }, { value: "21", name: Invalid character(s) }, { value: "23", name: Unknown Interchange sender }, { value: "26", name: Duplicate detected }, { value: "28", name: References do not match }, { value: "29", name: Control count does not match number of instances received }, { value: "32", name: Lower level empty }, { value: "35", name: Too many segment repetitions }, { value: "36", name: Too many segment group repetitions }, { value: "37", name: Invalid type of character(s) }, { value: "38", name: Missing digit in front of decimal sign }, { value: "39", name: Data element too long }, { value: "40", name: Data element too short }] }
+      - { id: "0013", name: "Service segment tag, coded", status: C, format: a3, codes: [{ value: UNA, name: Service string advice }, { value: UNB, name: Interchange header }, { value: UNH, name: Message header }, { value: UNT, name: Message trailer }, { value: UNZ, name: Interchange trailer }] }
+      - id: S011
+        name: Data element identification
+        status: C
+        components:
+          - { id: "0098", name: Erroneous data element position in segment, status: M, format: n..3 }
+          - { id: "0104", name: Erroneous component data element position, status: C, format: n..3 }
+  UCM:
+    name: Message/package response
+    description: 受け取った交換の中のメッセージごとに 1 つ(0062・S009 は受け取った UNH の値をそのまま写す)
+    elements:
+      - { id: "0062", name: Message reference number, status: M, format: an..14 }
+      - id: S009
+        name: Message identifier
+        status: M
+        components:
+          - { id: "0065", name: Message type, status: M, format: an..6 }
+          - { id: "0052", name: Message version number, status: M, format: an..3 }
+          - { id: "0054", name: Message release number, status: M, format: an..3 }
+          - { id: "0051", name: Controlling agency, status: M, format: an..2 }
+      - { id: "0083", name: "Action, coded", status: M, format: an..3, codes: [{ value: "4", name: This level and all lower levels rejected }, { value: "7", name: "This level acknowledged, next lower level acknowledged if not explicitly rejected" }] }
+      - { id: "0085", name: "Syntax error, coded", status: C, format: an..3, codes: [{ value: "2", name: Syntax version or level not supported }, { value: "7", name: Interchange recipient not actual recipient }, { value: "12", name: Invalid value }, { value: "13", name: Missing }, { value: "15", name: Not supported in this position }, { value: "16", name: Too many constituents }, { value: "18", name: Unspecified error }, { value: "19", name: Invalid decimal notation }, { value: "20", name: Character invalid as service character }, { value: "21", name: Invalid character(s) }, { value: "23", name: Unknown Interchange sender }, { value: "26", name: Duplicate detected }, { value: "28", name: References do not match }, { value: "29", name: Control count does not match number of instances received }, { value: "32", name: Lower level empty }, { value: "35", name: Too many segment repetitions }, { value: "36", name: Too many segment group repetitions }, { value: "37", name: Invalid type of character(s) }, { value: "38", name: Missing digit in front of decimal sign }, { value: "39", name: Data element too long }, { value: "40", name: Data element too short }] }
+      - { id: "0013", name: "Service segment tag, coded", status: C, format: a3, codes: [{ value: UNA, name: Service string advice }, { value: UNB, name: Interchange header }, { value: UNH, name: Message header }, { value: UNT, name: Message trailer }, { value: UNZ, name: Interchange trailer }] }
+      - id: S011
+        name: Data element identification
+        status: C
+        components:
+          - { id: "0098", name: Erroneous data element position in segment, status: M, format: n..3 }
+          - { id: "0104", name: Erroneous component data element position, status: C, format: n..3 }
+  UCS:
+    name: Segment error indication
+    elements:
+      - { id: "0096", name: Segment position in message, status: M, format: n..6, description: UNH を 1 として数えたセグメントの位置 }
+      - { id: "0085", name: "Syntax error, coded", status: C, format: an..3, codes: [{ value: "2", name: Syntax version or level not supported }, { value: "7", name: Interchange recipient not actual recipient }, { value: "12", name: Invalid value }, { value: "13", name: Missing }, { value: "15", name: Not supported in this position }, { value: "16", name: Too many constituents }, { value: "18", name: Unspecified error }, { value: "19", name: Invalid decimal notation }, { value: "20", name: Character invalid as service character }, { value: "21", name: Invalid character(s) }, { value: "23", name: Unknown Interchange sender }, { value: "26", name: Duplicate detected }, { value: "28", name: References do not match }, { value: "29", name: Control count does not match number of instances received }, { value: "32", name: Lower level empty }, { value: "35", name: Too many segment repetitions }, { value: "36", name: Too many segment group repetitions }, { value: "37", name: Invalid type of character(s) }, { value: "38", name: Missing digit in front of decimal sign }, { value: "39", name: Data element too long }, { value: "40", name: Data element too short }] }
+  UCD:
+    name: Data element error indication
+    elements:
+      - { id: "0085", name: "Syntax error, coded", status: M, format: an..3, codes: [{ value: "2", name: Syntax version or level not supported }, { value: "7", name: Interchange recipient not actual recipient }, { value: "12", name: Invalid value }, { value: "13", name: Missing }, { value: "15", name: Not supported in this position }, { value: "16", name: Too many constituents }, { value: "18", name: Unspecified error }, { value: "19", name: Invalid decimal notation }, { value: "20", name: Character invalid as service character }, { value: "21", name: Invalid character(s) }, { value: "23", name: Unknown Interchange sender }, { value: "26", name: Duplicate detected }, { value: "28", name: References do not match }, { value: "29", name: Control count does not match number of instances received }, { value: "32", name: Lower level empty }, { value: "35", name: Too many segment repetitions }, { value: "36", name: Too many segment group repetitions }, { value: "37", name: Invalid type of character(s) }, { value: "38", name: Missing digit in front of decimal sign }, { value: "39", name: Data element too long }, { value: "40", name: Data element too short }] }
+      - id: S011
+        name: Data element identification
+        status: M
+        components:
+          - { id: "0098", name: Erroneous data element position in segment, status: M, format: n..3, description: セグメントのタグの次を 1 として数えたデータ要素の位置 }
+          - { id: "0104", name: Erroneous component data element position, status: C, format: n..3 }
+  UNT:
+    name: Message trailer
+    elements:
+      - { id: "0074", name: Number of segments in the message, status: M, format: n..6 }
+      - { id: "0062", name: Message reference number, status: M, format: an..14 }
+  UNZ:
+    name: Interchange trailer
+    elements:
+      - { id: "0036", name: Interchange control count, status: M, format: n..6 }
+      - { id: "0020", name: Interchange control reference, status: M, format: an..14 }
+structure:
+  - { segment: UCI, status: M, max: 1 }
+  - group: SG1
+    status: C
+    max: 100
+    content:
+      - { segment: UCM, status: M, max: 1 }
+      - group: SG2
+        status: C
+        max: 99
+        content:
+          - { segment: UCS, status: M, max: 1 }
+          - { segment: UCD, status: C, max: 99 }

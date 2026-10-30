@@ -69,11 +69,15 @@ class NamingSpec :
             "sales_daily.v1.yaml" to true,
             "manifest.v1.schema.json" to true,
             "edi/edifact-orders.v1.yaml" to true,
+            "edi-spec.v1.schema.json" to true,
             "README.md" to true,
             "sales_daily.yaml" to false,
             "SalesDaily.v1.yaml" to false,
             "sales-daily.v1.yaml" to false,
             "manifest.schema.json" to false,
+            "edi/edifact-orders.yaml" to false,
+            "edi/orders/edifact-orders.v1.yaml" to false,
+            "edi/edi-spec.v1.schema.json" to false,
         ).forEach { (file, ok) ->
             test("contracts/files/$file → ${if (ok) "準拠" else "違反"}") {
                 (Naming.checkFileSpec(file) == null) shouldBe ok

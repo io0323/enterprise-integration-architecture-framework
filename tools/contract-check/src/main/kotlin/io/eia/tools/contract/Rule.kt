@@ -39,7 +39,7 @@ enum class Rule(
     ),
     STRUCT_JSON_SCHEMA(
         "CC-STRUCT-005",
-        "JSON Schema(manifest・カタログ・ファイルの仕様・デバイスの形式)がメタスキーマに適合すること",
+        "JSON Schema(manifest・カタログ・ファイルの仕様・EDI の仕様・デバイスの形式)がメタスキーマに適合すること",
         "9, 16.1",
         "JSON Schema 2020-12 の仕様に合わせて直す",
     ),
@@ -73,7 +73,8 @@ enum class Rule(
         "CC-NAMING-005",
         "contracts/files のファイル名",
         "9, 16.1",
-        "{system}_{dataset}.v{n}.yaml、manifest.v{n}.schema.json、file-spec.v{n}.schema.json、edi/{name}.v{n}.yaml のいずれかにする",
+        "{system}_{dataset}.v{n}.yaml、manifest.v{n}.schema.json、file-spec.v{n}.schema.json、edi-spec.v{n}.schema.json、" +
+            "edi/{name}.v{n}.yaml のいずれかにする",
     ),
     NAMING_INTEGRATION_ID(
         "CC-NAMING-006",
@@ -259,6 +260,27 @@ enum class Rule(
         "contracts/catalog/{id}.yaml(style: file)を追加し、contract にこの仕様を指定する",
     ),
 
+    // --- EDI のサブセットの仕様(contracts/files/edi。ADR-0041) ---
+    EDI_SPEC(
+        "CC-EDI-001",
+        "EDI のサブセットの仕様が EDI の仕様のスキーマに適合する(メッセージ・構文・セグメント・並び・業務の規則)",
+        "11.1, ADR-0041",
+        "contracts/files/edi-spec.v{n}.schema.json の必須項目と値を満たす。inbound の仕様には acknowledgements と businessRules を書く",
+    ),
+    EDI_SPEC_CONSISTENCY(
+        "CC-EDI-002",
+        "EDI の仕様の中の参照が食い違わない(ファイル名と name・version、並びのセグメント・修飾子、UNH のメッセージの型、応答の仕様、規則のコード)",
+        "11.1, ADR-0041",
+        "並び(structure)のセグメントを segments に定義し、使わない定義を消す。グループの最初は status M のセグメントにする。" +
+            "修飾子は最初のデータ要素の codes の値にする。acknowledgements は outbound の仕様を指す",
+    ),
+    EDI_SPEC_UNREGISTERED(
+        "CC-EDI-003",
+        "EDI の仕様は style: edi のカタログに登録され、style: edi のカタログの contract は contracts/files/edi/ の仕様",
+        "11.1, 16.1",
+        "contracts/catalog/{id}.yaml(style: edi)を追加し、contract にこの仕様を指定する(文書の種類と向きごとに 1 件)",
+    ),
+
     // --- 互換性(main との差分) ---
     COMPAT_AVRO(
         "CC-COMPAT-001",
@@ -284,6 +306,13 @@ enum class Rule(
         "15.3, 17.3, ADR-0039",
         "出したデバイスの形式は変えない(古いファームウェアのデバイスが送り続ける)。変更は新しい版のファイル({message}.v{n+1}.schema.json)で足す。" +
             "版をやめるときは ADR-0039 §4 の手順で例外を承認してもらう",
+    ),
+    COMPAT_EDI(
+        "CC-COMPAT-005",
+        "EDI のサブセットの仕様(contracts/files/edi)を main の版から変えていない(説明の文だけは変えてよい)",
+        "11.1, 15.3, ADR-0041",
+        "取引先は出した版に合わせて EDI の製品を設定しているので、版の中身は変えない。変更は新しい版のファイル({name}.v{n+1}.yaml)で足し、" +
+            "取引先ごとの切り替えは取引先の台帳で行う",
     ),
 
     EXTERNAL_BREAKING(

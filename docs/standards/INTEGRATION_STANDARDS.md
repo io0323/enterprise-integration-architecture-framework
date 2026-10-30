@@ -13,6 +13,7 @@
 | Avro | namespace `{basePackage}.events.{domain}`、record は PascalCase | OrderCreated |
 | File | `{system}_{dataset}_{yyyyMMddHHmmss}_{seq}.{ext}` + 同名の `.manifest.json` | sales_daily_20260925010000_001.parquet / sales_daily_20260925010000_001.manifest.json |
 | File 仕様 | `contracts/files/{system}_{dataset}.v{n}.yaml` | contracts/files/sales_daily.v1.yaml |
+| EDI 仕様 | `contracts/files/edi/{name}.v{n}.yaml`(UN/EDIFACT のサブセット。形は `edi-spec.v1.schema.json`。ADR-0041) | contracts/files/edi/edifact-orders.v1.yaml |
 | MQTT | `devices/{tenant}/{deviceId}/{channel}`(ACL で自分のトピックにしか書けない。ADR-0039 §3) | devices/t1/d-001/telemetry |
 | デバイスの形式 | `contracts/devices/{message}.v{n}.schema.json`(ペイロードの `v` が n。ADR-0039 §4) | contracts/devices/telemetry.v2.schema.json |
 
@@ -78,6 +79,13 @@ DLQ のトピックは、元のメッセージと同じ機密区分として扱�
 - 互換でない変更(列の削除・型や必須性の変更・並べ替え・enum の値の増減・形式の設定の変更)は、新しい版のファイル(`v{n+1}`)で行う。足してよいのは、末尾の任意の列と新しい形式だけ。
 - contract-check の `CC-FILE-002`〜`004`・`CC-COMPAT-003` が検査する。
 - ファイルの仕様もカタログ(`style: file`)に登録する。
+
+### EDI の仕様(`contracts/files/edi/{name}.v{n}.yaml`。ADR-0041)
+- 取引先と交わす UN/EDIFACT の文書のサブセット。形式は `contracts/files/edi-spec.v1.schema.json`。使うセグメント・データ要素(状態 M・C・X、形式、コード値)・並びと回数(修飾子ごとの回数を含む)・業務の規則(取引先に返すコードと固定の文言)を書く。
+- 構文の版は 3、UNA は必須、文字セットは UNOA・UNOB・UNOC。応答は受け取った交換と同じ文字セットで返す。
+- 取引先に返す応答(CONTRL・APERAK)には、標準のコードと位置、仕様に書いた固定の文言だけを入れる(例外のメッセージや社内の情報は入れない)。
+- 出した版の中身は変えない(説明の文と名前だけは直してよい)。変更は新しい版のファイルで足す。
+- contract-check の `CC-EDI-001`〜`003`・`CC-COMPAT-005` が検査する。カタログ(`style: edi`)には「文書の種類 × 向き」ごとに登録し、取引先ごとの参加は取引先の台帳(TPA)で持つ。
 
 ### MQTT(デバイスと Broker の間。ADR-0039)
 - `traceparent` と `correlationid` は **MQTT v5 のユーザープロパティ**で運ぶ。MQTT v3.1.1 のデバイスは送れないので必須にしない(iot-bridge が新しいトレースを始める。contract-check の `CC-MQTT-001`)。

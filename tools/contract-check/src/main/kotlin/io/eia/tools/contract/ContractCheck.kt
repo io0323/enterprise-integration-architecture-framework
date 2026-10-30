@@ -8,6 +8,7 @@ import io.eia.tools.contract.rules.AvroRules
 import io.eia.tools.contract.rules.CatalogRules
 import io.eia.tools.contract.rules.ContractUsage
 import io.eia.tools.contract.rules.DeviceRules
+import io.eia.tools.contract.rules.EdiRules
 import io.eia.tools.contract.rules.FileCompatibility
 import io.eia.tools.contract.rules.FileRules
 import io.eia.tools.contract.rules.FlowRules
@@ -60,7 +61,8 @@ class ContractCheck(
                     AvroRules.checkFullCompatibility(contracts, it) +
                         OpenApiCompatibility(oasdiff).check(contracts, it) +
                         FileCompatibility.check(contracts, it) +
-                        DeviceRules.checkUnchanged(contracts, it)
+                        DeviceRules.checkUnchanged(contracts, it) +
+                        EdiRules.checkUnchanged(contracts, it)
                 }.orEmpty()
         val lifecycle = LifecycleRules(contracts, baseline, today)
         // 比較元で設計中(proposed・design)の連携だけが使う契約は、破壊的変更を許す(消費者がまだいない。ADR-0013 §7)
@@ -82,6 +84,7 @@ class ContractCheck(
                 CatalogRules(contracts, asyncApi.addressesByFile, openApi.domainsByFile).check() +
                 FileRules.check(contracts) +
                 DeviceRules.check(contracts) +
+                EdiRules.check(contracts) +
                 checkCanonical(contracts) +
                 lifecycle.check() +
                 waived.violations

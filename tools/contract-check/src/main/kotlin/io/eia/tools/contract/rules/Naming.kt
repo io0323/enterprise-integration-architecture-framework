@@ -20,8 +20,9 @@ object Naming {
     private val FILE_SPEC = Regex("^$SEGMENT(_$SEGMENT)\\.v[1-9][0-9]*\\.yaml$")
     private val MANIFEST_SCHEMA = Regex("^manifest\\.v[1-9][0-9]*\\.schema\\.json$")
     private val FILE_SPEC_SCHEMA = Regex("^file-spec\\.v[1-9][0-9]*\\.schema\\.json$")
-    private val EDI_SPEC = Regex("^edi/$SEGMENT\\.v[1-9][0-9]*\\.yaml$")
-    private val FILE_PATTERNS = listOf(FILE_SPEC, MANIFEST_SCHEMA, FILE_SPEC_SCHEMA, EDI_SPEC)
+    private val EDI_SPEC = Regex("^edi/($SEGMENT)\\.v([1-9][0-9]*)\\.yaml$")
+    private val EDI_SPEC_SCHEMA = Regex("^edi-spec\\.v[1-9][0-9]*\\.schema\\.json$")
+    private val FILE_PATTERNS = listOf(FILE_SPEC, MANIFEST_SCHEMA, FILE_SPEC_SCHEMA, EDI_SPEC_SCHEMA, EDI_SPEC)
     private val FILES_README = setOf("README.md")
     private val MQTT_TOPIC = Regex("^devices/\\{tenant\\}/\\{deviceId\\}/$SEGMENT$")
     private val DEVICE_PAYLOAD = Regex("^($SEGMENT)\\.v([1-9][0-9]*)\\.schema\\.json$")
@@ -99,8 +100,12 @@ object Naming {
         } else {
             Rule.NAMING_FILE to
                 "'$relativePath' は {system}_{dataset}.v{n}.yaml / manifest.v{n}.schema.json / file-spec.v{n}.schema.json / " +
-                "edi/{name}.v{n}.yaml のいずれでもありません"
+                "edi-spec.v{n}.schema.json / edi/{name}.v{n}.yaml のいずれでもありません"
         }
+
+    /** EDI の仕様(contracts/files からの相対パス edi/{name}.v{n}.yaml)の name と版。形式が違えば null。 */
+    fun ediSpec(relativePath: String): Pair<String, Int>? =
+        EDI_SPEC.matchEntire(relativePath)?.destructured?.let { (name, version) -> name to version.toInt() }
 
     /** MQTT のトピック(AsyncAPI の address。{tenant}・{deviceId} はパラメータ)の検査。 */
     fun checkMqttTopic(topic: String): Pair<Rule, String>? =

@@ -1,0 +1,258 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eia.io/contracts/files/edi-spec.v1.schema.json",
+  "title": "EDI subset specification v1",
+  "description": "取引先と交わす EDI の文書のサブセットの仕様(contracts/files/edi/{name}.v{n}.yaml。Framework 11.1、ADR-0041)。UN/EDIFACT の標準のうち、使うセグメント・データ要素・コード値と、その並びと回数だけを書く。b2b-gateway はこの仕様を読み込んで、スキーマの段階の検査と応答の組み立てを行う(仕様が単一の真実)。状態(status)は標準より厳しくだけできる(標準の C を M か X にする。M を C にはしない)。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "version", "description", "owner", "direction", "dataClassification", "containsPersonalData", "standard", "message", "syntax", "segments", "structure"],
+  "properties": {
+    "name": {
+      "description": "仕様の名前(ファイル名の {name})",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+    },
+    "version": {
+      "description": "仕様の版(ファイル名の v{n})。出した版は変えない(説明の文だけは直してよい。CC-COMPAT-005)。変更は新しい版のファイルで足す",
+      "type": "integer",
+      "minimum": 1
+    },
+    "description": { "type": "string", "minLength": 1 },
+    "owner": {
+      "description": "仕様を持つチーム(個人名は不可。Framework 16.2)",
+      "type": "string",
+      "pattern": "^team-[a-z][a-z0-9-]*$"
+    },
+    "direction": {
+      "description": "自社から見た向き。inbound = 取引先から受け取る、outbound = 取引先に送る",
+      "enum": ["inbound", "outbound"]
+    },
+    "dataClassification": {
+      "description": "機密区分(連携カタログと同じ値)",
+      "enum": ["public", "internal", "confidential", "restricted"]
+    },
+    "containsPersonalData": { "type": "boolean" },
+    "standard": { "const": "UN/EDIFACT" },
+    "message": {
+      "description": "UNH の S009 に入るメッセージの識別",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "version", "release", "agency"],
+      "properties": {
+        "type": { "description": "0065(例 ORDERS)", "type": "string", "pattern": "^[A-Z]{6}$" },
+        "version": { "description": "0052(例 D)", "type": "string", "pattern": "^[A-Z0-9]{1,3}$" },
+        "release": { "description": "0054(例 96A。CONTRL は 3)", "type": "string", "pattern": "^[A-Z0-9]{1,3}$" },
+        "agency": { "description": "0051(例 UN)", "type": "string", "pattern": "^[A-Z0-9]{1,2}$" }
+      }
+    },
+    "syntax": {
+      "description": "交換(UNA〜UNZ)の構文の規則(ISO 9735)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["versions", "characterSets", "una", "functionalGroups", "maxMessagesPerInterchange"],
+      "properties": {
+        "versions": {
+          "description": "受け付ける・出す構文の版(UNB の 0002)。v1 の仕様は版 3 だけ(ADR-0041 §2)",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "const": 3 }
+        },
+        "characterSets": {
+          "description": "受け付ける・出す文字セット(UNB の 0001)。outbound では、受け取った交換と同じ文字セットで返す(ADR-0041 §3)",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["UNOA", "UNOB", "UNOC"] }
+        },
+        "una": {
+          "description": "UNA(区切り文字の指定)を必須にする。UNA がないときの既定の小数点(版 3 はカンマ)の取り違えを避けるため(ADR-0041 §2)",
+          "const": "required"
+        },
+        "functionalGroups": {
+          "description": "UNG / UNE(機能グループ)を使うか。v1 の仕様は使わない",
+          "const": false
+        },
+        "maxMessagesPerInterchange": {
+          "description": "1 つの交換に入れてよいメッセージの数の上限",
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "acknowledgements": {
+      "description": "inbound の文書に返す応答の仕様(contracts/ からの相対パス)。syntax = 構文とスキーマの段階(CONTRL)、business = 業務の段階(APERAK)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["syntax", "business"],
+      "properties": {
+        "syntax": { "type": "string", "pattern": "^contracts/files/edi/[a-z][a-z0-9-]*\\.v[1-9][0-9]*\\.yaml$" },
+        "business": { "type": "string", "pattern": "^contracts/files/edi/[a-z][a-z0-9-]*\\.v[1-9][0-9]*\\.yaml$" }
+      }
+    },
+    "segments": {
+      "description": "使うセグメントの定義(タグ → データ要素の並び)。サービスセグメント(UNB・UNH・UNT・UNZ)も書く。データ要素は位置で読むので、使わない位置も最後に使う位置までは X で書く",
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^[A-Z]{3}$" },
+      "additionalProperties": { "$ref": "#/$defs/segment" }
+    },
+    "structure": {
+      "description": "UNH と UNT の間のセグメントの並びと回数(セグメントグループを含む)",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/node" }
+    },
+    "businessRules": {
+      "description": "業務の段階の検査の規則(inbound)。違反は APERAK の ERC(9321 = code)と FTX(AAO。text)で返す。text は取引先に返す固定の文言で、UNOA で表せる文字だけ(英大文字・数字・記号)にする。例外のメッセージや内部の情報は入れない",
+      "type": "array",
+      "items": { "$ref": "#/$defs/businessRule" }
+    },
+    "errorTexts": {
+      "description": "outbound の応答(APERAK)が使う、業務の規則以外の理由の固定の文言(例 社内のシステムが受け付けなかった)",
+      "type": "array",
+      "items": { "$ref": "#/$defs/businessRule" }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "direction": { "const": "inbound" } } },
+      "then": { "required": ["acknowledgements", "businessRules"] },
+      "else": { "not": { "anyOf": [{ "required": ["acknowledgements"] }, { "required": ["businessRules"] }] } }
+    }
+  ],
+  "$defs": {
+    "status": {
+      "description": "M = 必須、C = 任意、X = このサブセットでは使わない(空でなければスキーマの段階のエラー)",
+      "enum": ["M", "C", "X"]
+    },
+    "format": {
+      "description": "ISO 9735 の表現(a = 英字、n = 数字、an = 英数字。..n は最大の長さ、なければ固定の長さ)。n の長さには小数点と符号を数えない",
+      "type": "string",
+      "pattern": "^(a|n|an)(\\.\\.)?[1-9][0-9]*$"
+    },
+    "code": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "name"],
+      "properties": {
+        "value": { "description": "コード値(長さはデータ要素の format に収まること)", "type": "string", "minLength": 1, "maxLength": 35 },
+        "name": { "description": "コードの名前(英語。標準のコード表の表記。コード表のない値は、その意味)", "type": "string", "minLength": 1 }
+      }
+    },
+    "simple": {
+      "description": "単純データ要素",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "status", "format"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[0-9]{4}$" },
+        "name": { "type": "string", "minLength": 1 },
+        "status": { "$ref": "#/$defs/status" },
+        "format": { "$ref": "#/$defs/format" },
+        "codes": {
+          "description": "このサブセットで受け付ける・出すコード値。書けば、ほかの値はスキーマの段階のエラー(0085 = 12)",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/code" }
+        },
+        "semantic": {
+          "description": "形式に加えた意味の検査。date = CCYYMMDD の実在する日付、time = HHMM",
+          "enum": ["date", "time"]
+        },
+        "description": { "type": "string", "minLength": 1 }
+      }
+    },
+    "composite": {
+      "description": "複合データ要素",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "status", "components"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[CS][0-9]{3}$" },
+        "name": { "type": "string", "minLength": 1 },
+        "status": { "$ref": "#/$defs/status" },
+        "components": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/simple" }
+        },
+        "description": { "type": "string", "minLength": 1 }
+      }
+    },
+    "segment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "elements"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string", "minLength": 1 },
+        "elements": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "oneOf": [{ "$ref": "#/$defs/simple" }, { "$ref": "#/$defs/composite" }] }
+        }
+      }
+    },
+    "qualifier": {
+      "description": "修飾子(セグメントの最初のデータ要素の最初の値)ごとの回数。例 DTM の 137 は必須で 1 回",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "status", "max"],
+      "properties": {
+        "value": { "type": "string", "minLength": 1, "maxLength": 3 },
+        "status": { "enum": ["M", "C"] },
+        "max": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "node": {
+      "oneOf": [
+        {
+          "description": "セグメント",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["segment", "status", "max"],
+          "properties": {
+            "segment": { "type": "string", "pattern": "^[A-Z]{3}$" },
+            "status": { "enum": ["M", "C"] },
+            "max": { "type": "integer", "minimum": 1 },
+            "qualifiers": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/qualifier" } },
+            "description": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "description": "セグメントグループ。最初の要素(トリガーセグメント)は status M のセグメント。qualifiers はトリガーセグメントの修飾子ごとのグループの回数",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["group", "status", "max", "content"],
+          "properties": {
+            "group": { "type": "string", "pattern": "^SG[1-9][0-9]*$" },
+            "status": { "enum": ["M", "C"] },
+            "max": { "type": "integer", "minimum": 1 },
+            "qualifiers": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/qualifier" } },
+            "content": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/node" } },
+            "description": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "businessRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "text", "description"],
+      "properties": {
+        "code": {
+          "description": "APERAK の ERC の 9321(an..8)。規則の識別",
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9]{0,7}$"
+        },
+        "text": {
+          "description": "取引先に返す固定の文言(FTX の 4440。an..70。UNOA の文字だけ。区切り文字の ' + : ? は使わない)",
+          "type": "string",
+          "pattern": "^[A-Z0-9 .,()/=!\"%&*;<>-]{1,70}$"
+        },
+        "description": { "description": "規則の内容(社内向け)", "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

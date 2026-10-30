@@ -129,7 +129,7 @@
 - **DoD**: native バイナリのシミュレータから送信したテレメトリが Kafka に到達し、MQTT v5 のユーザープロパティで運んだ traceparent でトレースできる。
 
 ## P12 B2B / EDI Gateway
-- `b2b-gateway`: Trading Partner 台帳、SFTP 受信(AS2 は範囲外: ADR-0008)、EDIFACT ORDERS(サブセット。仕様は `contracts/files/edi/`)パーサ、3 段 Validation、Canonical 変換、CONTRL 相当の受領応答
+- `b2b-gateway`: Trading Partner 台帳、SFTP 受信(AS2 は範囲外: ADR-0008)、EDIFACT ORDERS(サブセット。仕様は `contracts/files/edi/`)パーサ、3 段 Validation、Canonical 変換、CONTRL 相当の受領応答(構文とスキーマの段階は CONTRL、業務の段階は APERAK と読み替える: ADR-0041 §9)
 - 原本保管(S3 互換ストレージ, Object Lock)と `platform/audit` への記録
 - **DoD**: 構文・スキーマ・業務のそれぞれのエラーで、正しいエラー応答と運用通知が出る。受信した全ドキュメントが Audit に記録され、ハッシュチェーンの検証が通る。
 
