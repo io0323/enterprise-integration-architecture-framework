@@ -64,12 +64,13 @@ groups:
           runbook: docs/runbooks/iot-bridge.md#kafka-に送れないとき
 
       # 溜め込みの数が見えない: エクスポーターは動いているのに $SYS が届かない(Mosquitto が止まった・監視のユーザーで購読できない)。
-      # 溜め込みの数・捨てた数は 0 のうちは $SYS に出ないので、常に出る接続の数(監視のユーザー自身が数に入り 1 以上)で見る
+      # $SYS の多くは変わったときだけ届き、エクスポーターは最後の値を出し続ける(telegraf.conf)ので、間隔ごとに必ず届く稼働時間が
+      # ない・2 分増えないことで見る
       - alert: MosquittoMetricsMissing
         expr: |
-          absent(mosquitto_clients_connected)
+          (absent(mosquitto_uptime_seconds) or sum(changes(mosquitto_uptime_seconds[2m])) == 0)
           and on() (count(up{job="mosquitto"} == 1) > 0)
-        for: 2m
+        for: 1m
         labels:
           severity: warning
         annotations:

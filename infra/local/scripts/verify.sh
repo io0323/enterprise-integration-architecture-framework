@@ -452,8 +452,9 @@ verify_iot() {
   check "Kafka: iot.telemetry.reported.v1 の DLQ の保持期間は 7 日" equals retention.ms=604800000 topic_retention iot.telemetry.reported.v1.dlq
 
   # 溜め込みのメトリクス(Telegraf が $SYS を Prometheus に出す。ADR-0039 §9)。$SYS は 10 秒ごとに届く。
-  # 溜め込みの数・捨てた数は 0 のうちは $SYS に出ないので、届いていることは接続の数で確かめ、捨てた数はないことを 0 とみなす
-  check "Prometheus: Mosquitto の \$SYS(mosquitto_clients_connected)が届く" retry 12 5 prom_present mosquitto_clients_connected
+  # 溜め込みの数・捨てた数は変わったときだけ $SYS に出る(0 のうちは出ない)ので、届いていることは間隔ごとに届く稼働時間で確かめ、
+  # 捨てた数はないことを 0 とみなす
+  check "Prometheus: Mosquitto の \$SYS(mosquitto_uptime_seconds)が届く" retry 12 5 prom_present mosquitto_uptime_seconds
   check "Prometheus: Mosquitto の捨てた数(mosquitto_publish_messages_dropped)は 0" equals 0 prom_value 'sum(mosquitto_publish_messages_dropped) or vector(0)'
   check "Prometheus: iot-bridge のメトリクス(target_info)が届く" retry 12 5 prom_present 'target_info{job="iot-bridge"}'
   check "Mosquitto: ホストのポート 19883 で待ち受けている" bash -c "exec 3<>/dev/tcp/127.0.0.1/19883"
