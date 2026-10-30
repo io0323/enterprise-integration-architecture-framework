@@ -11,4 +11,4 @@ channels:
 tier: 2
 dataClassification: internal
 slo: { availability: "99.9", latencyP99: "5s" }
-lifecycle: design
+lifecycle: active
