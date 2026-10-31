@@ -15,9 +15,11 @@ import tools.jackson.databind.JsonNode
 import tools.jackson.databind.json.JsonMapper
 import java.time.DateTimeException
 import java.time.Duration
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
+import java.time.ZoneOffset
 import java.util.Locale
 
 /**
@@ -171,10 +173,25 @@ public sealed interface Completion {
     ) : Completion
 }
 
+/**
+ * 取引先の PGP の公開鍵。[previous] は、取引先が署名の鍵を差し替える間だけ署名を受け付ける旧い鍵(暗号化には使わない。ADR-0040 §8)。
+ */
 public data class PgpPublicKey(
     val publicKey: SecretName,
     val validUntil: LocalDate,
-)
+    val previous: List<PreviousPublicKey> = emptyList(),
+) {
+    /** [now] の時点で、まだ署名を受け付ける旧い鍵。 */
+    public fun acceptedPrevious(now: Instant): List<SecretName> = previous.filter { now < it.acceptedUntil }.map { it.publicKey }
+}
+
+/** 署名の鍵の差し替えの間の旧い公開鍵。[acceptUntil] の日の終わり(UTC)まで受け付ける。 */
+public data class PreviousPublicKey(
+    val publicKey: SecretName,
+    val acceptUntil: LocalDate,
+) {
+    public val acceptedUntil: Instant get() = acceptUntil.plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant()
+}
 
 /**
  * 取引先との合意(TPA)。
@@ -228,7 +245,7 @@ private class LedgerReader(
                 edifact = node.get("edifact")?.let(::identification),
                 documents = documents,
                 sftp = sftp,
-                pgp = node.get("pgp")?.let { PgpPublicKey(SecretName(it.text("publicKeySecret")), date(it, "validUntil", "pgp")) },
+                pgp = node.get("pgp")?.let(::pgp),
                 agreement = agreement,
                 contacts =
                     node.get("contacts").values().map {
@@ -262,12 +279,29 @@ private class LedgerReader(
         expect(!inbound || directories.inbound != null, "sftp/directories/inbound", "文書を受け取る取引先には、受け取りのディレクトリが要ります")
         expect(!inbound || partner.sftp.completion != null, "sftp/completion", "文書を受け取る取引先には、書き終わりの判断の方式が要ります")
         expect(!files || directories.outbound != null, "sftp/directories/outbound", "ファイルを送る取引先には、送り先のディレクトリが要ります")
-        expect(!files || partner.pgp != null, "pgp", "ファイルを送る取引先には、PGP の公開鍵が要ります(取引先への経路では暗号化が必須。ADR-0032 §8)")
+        // B2B の文書は、送るものも受け取るものも PGP で暗号化と署名をする(Framework 9.2。ADR-0032 §8・ADR-0040 §8)
+        expect(partner.pgp != null, "pgp", "取引先には PGP の公開鍵が要ります(B2B の文書は暗号化と署名が必須。Framework 9.2)")
         expect(!acknowledgements || directories.acknowledgements != null, "sftp/directories/acknowledgements", "応答を返す取引先には、応答のディレクトリが要ります")
         partner.documents.groupBy { it }.filterValues { it.size > 1 }.keys.forEach {
             violations += FieldViolation("$path/documents", "文書 ${it.integration} が同じ向き(とデータセット)で重複しています")
         }
     }
+
+    private fun pgp(node: JsonNode): PgpPublicKey =
+        PgpPublicKey(
+            publicKey = SecretName(node.text("publicKeySecret")),
+            validUntil = date(node, "validUntil", "pgp"),
+            previous =
+                node
+                    .get("previousPublicKeys")
+                    ?.values()
+                    ?.mapIndexed { index, previous ->
+                        PreviousPublicKey(
+                            SecretName(previous.text("publicKeySecret")),
+                            date(previous, "acceptUntil", "pgp/previousPublicKeys/$index"),
+                        )
+                    }.orEmpty(),
+        )
 
     private fun sftp(node: JsonNode): SftpEndpoint {
         val hostKey = node.get("hostKey")

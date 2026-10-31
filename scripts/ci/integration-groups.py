@@ -10,7 +10,7 @@
   統合テストを同じ Gradle の実行で測る必要があるので、集約の対象はすべてこのグループに入れる。
 - platform: platform/* と shared/integration-sdk/*(実際の Mosquitto に対する SDK の MQTT の統合テスト。P11)
 - participants: 注文 Saga の参加者(inventory・payment・shipping)、分析のバッチ(batch-etl)、ファイル授受(file-exchange)、
-  SaaS 連携(webhook-receiver・integration-flow)、IoT の橋渡し(iot-bridge)と tools/*
+  B2B / EDI(b2b-gateway)、SaaS 連携(webhook-receiver・integration-flow)、IoT の橋渡し(iot-bridge)と tools/*
 
 統合テストを持たないモジュールの閾値は、build ジョブ(./gradlew build)で検証する。
 """
@@ -31,6 +31,7 @@ GROUPS: dict[str, list[str]] = {
         "services/shipping/",
         "services/batch-etl/",
         "services/file-exchange/",
+        "services/b2b-gateway/",
         "services/webhook-receiver/",
         "services/integration-flow/",
         "services/iot-bridge/",

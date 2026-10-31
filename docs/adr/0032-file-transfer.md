@@ -217,3 +217,4 @@ S3 の部分は P09 ③a、SFTP と PGP(§8)は ③b で決めた。Parquet の�
 - 2026-10-17: P09 ⑤b で、取引先への配送(§8「取引先への配送」: 配送のステップ・取引先の台帳・配送の記録・送る前の正式名の確認による冪等・取引先ごとの Resilience)を書いた。`SftpSender` に正式名の確認(`exists`)を足した。
 - 2026-10-18: P09 ⑥ で、ローカル基盤(§7: バケットと identity とバケットポリシー・置き場の停止と取り込みの独立・ホスト鍵の固定・GnuPG の鍵と相互運用・アラート・ダッシュボード・Runbook)を書いた。
 - 2026-10-31: P12 ③ で、取引先の台帳を b2b-gateway と共有する 1 つの台帳(`infra/local/b2b/partners.json`。読み込みは `platform/trading-partner`)に移した(ADR-0040 §2)。§8 の台帳の項目は、送るデータセットを `documents`(連携カタログの ID・向き・データセット)に移し、識別子・鍵の期日・合意・連絡先を足した形になった。file-exchange の `PartnerRegistry` は、台帳からファイルの送り先(`PartnerDestination`)を作る変換になった。取引先への送信は P12 ⑦ で b2b-gateway に移す。
+- 2026-10-31: P12 ④a で、`PgpKeys` に取引先の旧い公開鍵(署名の検証にだけ使う)を持たせ、署名の鍵の差し替えの間は新旧の両方の署名を受け付けるようにした(`PgpVerification.Verified` は実際に署名した鍵のフィンガープリント。ADR-0040 §8)。原本の保管のために、Object Lock(COMPLIANCE)で置く `LockedObjectWriter`(`S3ObjectStore.putLocked`)を足した。

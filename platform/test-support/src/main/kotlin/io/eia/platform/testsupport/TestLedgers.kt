@@ -26,6 +26,8 @@ public object TestLedgers {
         val edifactId: String = "4912345000019",
         val positiveAperak: Boolean = true,
         val validUntil: String = "2099-12-31",
+        // 署名の鍵の差し替えの間の旧い公開鍵(秘密情報の名前 → 受け付ける期日)
+        val previousPgpPublicKeys: Map<String, String> = emptyMap(),
     )
 
     public fun json(vararg partners: Partner): String =
@@ -52,6 +54,14 @@ public object TestLedgers {
                 """"acknowledgements": "/config/from-eiaf"""".takeIf { p.edi },
             )
         val passphrase = p.passphraseSecret?.let { """, "passphraseSecret": "$it"""" }.orEmpty()
+        val previous =
+            if (p.previousPgpPublicKeys.isEmpty()) {
+                ""
+            } else {
+                """, "previousPublicKeys": [${p.previousPgpPublicKeys.entries.joinToString(",") { (name, until) ->
+                    """{"publicKeySecret": "$name", "acceptUntil": "$until"}"""
+                }}]"""
+            }
         return """
             {"id": "${p.id}", "name": "${p.id} (test)",
              ${if (p.edi) """"edifact": {"id": "${p.edifactId}", "qualifier": "14"},""" else ""}
@@ -61,7 +71,7 @@ public object TestLedgers {
                       "clientKey": {"privateKeySecret": "${p.privateKeySecret}"$passphrase, "validUntil": "${p.validUntil}"},
                       "directories": {${directories.joinToString(",")}}
                       ${if (p.edi) """, "completion": {"method": "rename", "temporarySuffix": ".part"}""" else ""}},
-             ${if (p.datasets.isNotEmpty()) """"pgp": {"publicKeySecret": "${p.pgpPublicKeySecret}", "validUntil": "${p.validUntil}"},""" else ""}
+             "pgp": {"publicKeySecret": "${p.pgpPublicKeySecret}", "validUntil": "${p.validUntil}"$previous},
              "agreement": {"currencies": ["JPY"],
                            "acknowledgements": {"positiveAperak": ${p.positiveAperak}, "aperakDeadline": "PT4H"},
                            "cutoff": {"time": "15:00", "timeZone": "Asia/Tokyo"},

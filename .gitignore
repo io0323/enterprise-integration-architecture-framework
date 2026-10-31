@@ -8,6 +8,8 @@ local.properties
 .env
 .env.*
 **/secrets/
+# 取引先の台帳は make env がテンプレートから作る(鍵の期日を書き込む。ADR-0040 §3)
+infra/local/b2b/partners.json
 infra/local/data/
 *.log
 .vscode/

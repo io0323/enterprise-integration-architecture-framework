@@ -32,11 +32,14 @@ import java.util.HexFormat
  *
  * 鍵は ASCII armor の文字列で、[SecretProvider] から読む(`NAME_FILE` で Docker secrets のファイルを渡せる)。
  * 秘密鍵はパスフレーズで保護されたものだけを受け付ける。読み込み時に、用途の鍵(暗号化・署名)がそろっているかと、パスフレーズを確かめる。
+ *
+ * 取引先が署名の鍵を差し替える間は、旧い公開鍵([previousPartners])の署名も受け付ける(暗号化には今の鍵だけを使う。ADR-0040 §8)。
  */
 public class PgpKeys private constructor(
     internal val partner: PGPPublicKeyRing,
     internal val own: PGPSecretKeyRing,
     private val passphrase: CharArray,
+    internal val previousPartners: List<PGPPublicKeyRing> = emptyList(),
 ) {
     /** 取引先の主鍵のフィンガープリント(16 進の大文字。ログと運用の照合に使う)。 */
     public val partnerFingerprint: String get() = fingerprint(partner.publicKey)
@@ -49,6 +52,15 @@ public class PgpKeys private constructor(
 
     /** 自社の署名の鍵(署名に使える鍵。主鍵)。 */
     internal fun ownSigningKey(): PGPPrivateKey = privateKey(own.publicKey.keyID)!!
+
+    /** [keyId] の署名の鍵と、その鍵の主鍵のフィンガープリント(今の鍵、なければ旧い鍵から探す)。どれにもなければ null。 */
+    internal fun signer(keyId: Long): Pair<PGPPublicKey, String>? =
+        (listOf(partner) + previousPartners).firstNotNullOfOrNull { ring ->
+            ring.getPublicKey(keyId)?.let {
+                it to
+                    fingerprint(ring.publicKey)
+            }
+        }
 
     /** 自社の [keyId] の秘密鍵(復号に使う)。自社の鍵でなければ null。 */
     internal fun privateKey(keyId: Long): PGPPrivateKey? =
@@ -69,7 +81,7 @@ public class PgpKeys private constructor(
             names: PgpKeyNames,
         ): Result<PgpKeys, FileTransferError> {
             val values =
-                listOf(names.partnerPublicKey, names.ownSecretKey, names.ownPassphrase).map { name ->
+                (listOf(names.partnerPublicKey, names.ownSecretKey, names.ownPassphrase) + names.previousPartnerPublicKeys).map { name ->
                     when (val got = secrets.get(name)) {
                         is Result.Err -> {
                             return err(
@@ -86,22 +98,22 @@ public class PgpKeys private constructor(
                         }
                     }
                 }
-            return parse(values[0], values[1], values[2])
+            return parse(values[0], values[1], values[2], values.drop(PRIMARY_KEYS))
         }
 
-        /** ASCII armor の鍵から作る。形式・用途の鍵・パスフレーズの誤りは [CredentialRejected](値は入れない)。 */
+        /**
+         * ASCII armor の鍵から作る。形式・用途の鍵・パスフレーズの誤りは [CredentialRejected](値は入れない)。
+         * [previousPartnerPublicKeys] は、署名の鍵の差し替えの間だけ受け付ける取引先の旧い公開鍵(署名の検証にだけ使う)。
+         */
         @Suppress("ReturnCount") // 公開鍵・秘密鍵・用途・パスフレーズのそれぞれの誤りで返す
         public fun parse(
             partnerPublicKey: Secret,
             ownSecretKey: Secret,
             ownPassphrase: Secret,
+            previousPartnerPublicKeys: List<Secret> = emptyList(),
         ): Result<PgpKeys, FileTransferError> {
-            val partner =
-                try {
-                    PGPPublicKeyRing(PGPUtil.getDecoderStream(partnerPublicKey.reveal().byteInputStream()), JcaKeyFingerprintCalculator())
-                } catch (_: IOException) {
-                    return err(CredentialRejected("取引先の公開鍵を読めません"))
-                }
+            val partner = publicRing(partnerPublicKey) ?: return err(CredentialRejected("取引先の公開鍵を読めません"))
+            val previous = previousPartnerPublicKeys.map { publicRing(it) ?: return err(CredentialRejected("取引先の旧い公開鍵を読めません")) }
             val own =
                 try {
                     PGPSecretKeyRing(PGPUtil.getDecoderStream(ownSecretKey.reveal().byteInputStream()), JcaKeyFingerprintCalculator())
@@ -113,7 +125,7 @@ public class PgpKeys private constructor(
             if (encryptionKey(partner.publicKeys.asSequence()) == null) return err(CredentialRejected("取引先の公開鍵に暗号化の鍵がありません"))
             if (!own.publicKey.isMasterKey || own.secretKey.isPrivateKeyEmpty) return err(CredentialRejected("自社の秘密鍵に署名の鍵がありません"))
             if (own.secretKey.keyEncryptionAlgorithm == 0) return err(CredentialRejected("自社の秘密鍵がパスフレーズで保護されていません"))
-            val keys = PgpKeys(partner, own, ownPassphrase.reveal().toCharArray())
+            val keys = PgpKeys(partner, own, ownPassphrase.reveal().toCharArray(), previous)
             return try {
                 keys.ownSigningKey()
                 ok(keys)
@@ -127,16 +139,20 @@ public class PgpKeys private constructor(
          * (読めない鍵は送信のときに [CredentialRejected] になる)。鍵の期限の監視に使う(ADR-0040 §3)。
          */
         public fun publicKeyExpiry(partnerPublicKey: Secret): Instant? {
-            val ring =
-                try {
-                    PGPPublicKeyRing(PGPUtil.getDecoderStream(partnerPublicKey.reveal().byteInputStream()), JcaKeyFingerprintCalculator())
-                } catch (_: IOException) {
-                    return null
-                }
+            val ring = publicRing(partnerPublicKey) ?: return null
             return listOfNotNull(ring.publicKey, encryptionKey(ring.publicKeys.asSequence()))
                 .filter { it.validSeconds > 0 }
                 .minOfOrNull { it.creationTime.toInstant().plusSeconds(it.validSeconds) }
         }
+
+        private const val PRIMARY_KEYS = 3
+
+        private fun publicRing(armored: Secret): PGPPublicKeyRing? =
+            try {
+                PGPPublicKeyRing(PGPUtil.getDecoderStream(armored.reveal().byteInputStream()), JcaKeyFingerprintCalculator())
+            } catch (_: IOException) {
+                null
+            }
 
         private fun encryptionKey(keys: Sequence<PGPPublicKey>): PGPPublicKey? =
             keys.filter { it.isEncryptionKey && !it.hasRevocation() }.sortedBy { it.isMasterKey }.firstOrNull()
@@ -150,4 +166,6 @@ public data class PgpKeyNames(
     val partnerPublicKey: SecretName,
     val ownSecretKey: SecretName,
     val ownPassphrase: SecretName,
+    // 署名の鍵の差し替えの間だけ受け付ける、取引先の旧い公開鍵(ADR-0040 §8)
+    val previousPartnerPublicKeys: List<SecretName> = emptyList(),
 )

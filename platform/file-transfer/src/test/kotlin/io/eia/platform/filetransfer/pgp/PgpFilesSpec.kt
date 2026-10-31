@@ -71,6 +71,34 @@ class PgpFilesSpec :
             receiving.partnerFingerprint shouldBe sending.ownFingerprint
         }
 
+        test("署名の鍵の差し替えの間は、旧い鍵の署名も受け付ける。結果は実際に署名した鍵。旧い鍵を外せば、旧い鍵の署名は不合格") {
+            val renewed = TestKeys.pgp("EIAF renewed <eiaf@example.com>")
+            // 取引先(受け手)の側から見て、自社の今の鍵は renewed、旧い鍵は ours
+            val rotating =
+                PgpKeys
+                    .parse(
+                        Secret(renewed.publicKey),
+                        Secret(partner.secretKey),
+                        Secret(partner.passphrase),
+                        listOf(Secret(ours.publicKey)),
+                    ).ok()
+            val afterRotation = keys(partner, renewed)
+
+            val (byOld, _) = decrypt(encrypt("old".encodeToByteArray()), rotating)
+            byOld.shouldBeInstanceOf<PgpVerification.Verified>().signerFingerprint shouldBe keys(partner, ours).partnerFingerprint
+            val (byNew, _) = decrypt(encrypt("new".encodeToByteArray(), keys(renewed, partner)), rotating)
+            byNew.shouldBeInstanceOf<PgpVerification.Verified>().signerFingerprint shouldBe afterRotation.partnerFingerprint
+            decrypt(encrypt("old".encodeToByteArray()), afterRotation).first shouldBe PgpVerification.Rejected(PgpRejection.UNKNOWN_SIGNER)
+            PgpKeys
+                .parse(
+                    Secret(renewed.publicKey),
+                    Secret(partner.secretKey),
+                    Secret(partner.passphrase),
+                    listOf(Secret("x")),
+                ).err() shouldBe
+                CredentialRejected("取引先の旧い公開鍵を読めません")
+        }
+
         test("改竄した暗号文は不合格。書き出しかけた本文は消す") {
             val encrypted = encrypt(Random(2).nextBytes(100_000))
             val bytes = Files.readAllBytes(encrypted)

@@ -42,6 +42,8 @@ mkdir -p "$secrets_dir"
 for name in sftp-file sftp-b2b; do
   if [[ ! -f "$secrets_dir/$name" ]]; then
     ssh-keygen -q -t ed25519 -N '' -C "eiaf-$name" -f "$secrets_dir/$name"
+    # 取引先の鍵を作り直したら、台帳の鍵の期日も作り直す(下の「取引先の台帳」)
+    [[ "$name" == sftp-b2b ]] && rm -f "$secrets_dir/partner01-keys.valid-until"
     echo "infra/local/secrets/$name を生成しました"
   fi
 done
@@ -54,7 +56,7 @@ chmod 644 "$secrets_dir"/*.pub
 host_key="$secrets_dir/sftp-b2b-host-key"
 if [[ ! -f "$host_key" ]]; then
   ssh-keygen -q -t ed25519 -N '' -C "eiaf-sftp-b2b-host" -f "$host_key"
-  rm -f "$secrets_dir/sftp-b2b.known_hosts"
+  rm -f "$secrets_dir/sftp-b2b.known_hosts" "$secrets_dir/partner01-keys.valid-until"
   echo "infra/local/secrets/sftp-b2b-host-key を生成しました"
 fi
 if [[ ! -f "$secrets_dir/sftp-b2b.known_hosts" ]]; then
@@ -62,6 +64,17 @@ if [[ ! -f "$secrets_dir/sftp-b2b.known_hosts" ]]; then
   printf '[sftp-b2b]:2222,[127.0.0.1]:19223 %s %s\n' "$key_type" "$key_body" >"$secrets_dir/sftp-b2b.known_hosts"
 fi
 chmod 644 "$host_key.pub" "$secrets_dir/sftp-b2b.known_hosts"
+
+# 取引先の台帳(b2b/partners.json。P12 ③。ADR-0040 §3)。鍵とホスト鍵の期日(TPA で合意した差し替えの期日)は、コミットした台帳
+# (b2b/partners.template.json の @KEYS_VALID_UNTIL@)に書かず、鍵を作った日から 1 年後をここで決めて書き込む。固定の期日を
+# コミットすると、日が経つだけで鍵の期限のアラートが出始め、verify と e2e が失敗するため。期日は鍵を作り直すまで変えない
+# (secrets/partner01-keys.valid-until に残す)。台帳は毎回テンプレートから作り直す(b2b/partners.json は .gitignore 済み)。
+valid_file="$secrets_dir/partner01-keys.valid-until"
+if [[ ! -f "$valid_file" ]]; then
+  python3 -c 'import datetime; print((datetime.date.today() + datetime.timedelta(days=365)).isoformat())' >"$valid_file"
+  echo "infra/local/secrets/partner01-keys.valid-until(取引先の鍵の期日)を生成しました: $(cat "$valid_file")"
+fi
+sed "s/@KEYS_VALID_UNTIL@/$(cat "$valid_file")/g" "$here/b2b/partners.template.json" >"$here/b2b/partners.json"
 
 # CRM の Webhook の署名の鍵(saas profile。P10 ⑥。ADR-0035 §2)。Standard Webhooks の形(whsec_ に続く base64)。
 # 送り手(saas-mock)と受け口(webhook-receiver)は本来は別の置き場なので、ファイルを分ける。最初は同じ値にする。
