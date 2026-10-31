@@ -1,7 +1,5 @@
 package io.eia.b2bgateway.domain.ack
 
-import io.eia.b2bgateway.domain.edifact.EdifactWriter
-import io.eia.b2bgateway.domain.edifact.Latin1
 import io.eia.b2bgateway.domain.edifact.Segment
 import io.eia.b2bgateway.domain.spec.EdiSpec
 import io.eia.b2bgateway.domain.validation.InterchangeHeader
@@ -31,7 +29,6 @@ public data class ResponseEnvelope(
 public object Contrl {
     private const val REJECTED = "4"
     private const val ACKNOWLEDGED = "7"
-    private const val TEST_INDICATOR_POSITION = 11
     private const val S009_COMPONENTS = 4
 
     /** CONTRL のセグメント。UNB を読めない交換([InterchangeResult.Unreadable])は宛先がわからないので、応答を作らずに null。 */
@@ -57,40 +54,15 @@ public object Contrl {
             }
         val unh = Segment.of("UNH", listOf(envelope.messageReference), spec.message.values)
         val unt = Segment.of("UNT", listOf((body.size + 2).toString()), listOf(envelope.messageReference))
-        return listOf(unb(spec, header, envelope)) + unh + body + unt + Segment.of("UNZ", listOf("1"), listOf(envelope.controlReference))
+        return listOf(Envelopes.unb(spec, header, envelope)) + unh + body + unt +
+            Segment.of("UNZ", listOf("1"), listOf(envelope.controlReference))
     }
 
     /** 組み立てた CONTRL を、受け取った交換の区切り文字で書き、受け取った文字セットのバイト列にする。 */
     public fun write(
         header: InterchangeHeader,
         segments: List<Segment>,
-    ): ByteArray = Latin1.encode(EdifactWriter.write(header.serviceCharacters, segments))
-
-    private fun unb(
-        spec: EdiSpec,
-        header: InterchangeHeader,
-        envelope: ResponseEnvelope,
-    ): Segment {
-        val prepared = UtcStamp.of(envelope.preparedAt)
-        val elements =
-            mutableListOf(
-                listOf(
-                    header.characterSet.identifier,
-                    spec.syntax.versions
-                        .min()
-                        .toString(),
-                ),
-                listOf(header.recipient.id, header.recipient.qualifier),
-                listOf(header.sender.id, header.sender.qualifier),
-                listOf(prepared.date, prepared.time),
-                listOf(envelope.controlReference),
-            )
-        if (header.test) {
-            while (elements.size < TEST_INDICATOR_POSITION - 1) elements += listOf("")
-            elements += listOf("1")
-        }
-        return Segment("UNB", elements)
-    }
+    ): ByteArray = Envelopes.write(header, segments)
 
     private fun uci(
         header: InterchangeHeader,

@@ -24,6 +24,7 @@ import tools.jackson.dataformat.yaml.YAMLMapper
 public class YamlEdiSpecs : EdiSpecs {
     override val orders: EdiSpec = load(ORDERS)
     override val contrl: EdiSpec = load(CONTRL)
+    override val aperak: EdiSpec = load(APERAK)
 
     public companion object {
         public const val ORDERS: String = "edifact-orders.v1.yaml"
