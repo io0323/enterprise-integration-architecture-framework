@@ -24,6 +24,7 @@ import software.amazon.awssdk.services.s3.model.GetObjectRequest
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException
+import software.amazon.awssdk.services.s3.model.ObjectLockMode
 import software.amazon.awssdk.services.s3.model.PutObjectRequest
 import software.amazon.awssdk.services.s3.model.S3Exception
 import java.io.IOException
@@ -31,7 +32,10 @@ import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
 import java.time.Duration
+import java.time.Instant
+import java.util.Base64
 
 /**
  * S3 互換ストレージ(SeaweedFS。ADR-0015)の置き場(ADR-0032 §1)。ファイルの到着の監視(platform/batch。ADR-0030 §4)と、
@@ -39,10 +43,12 @@ import java.time.Duration
  *
  * 資格情報は呼び出しのたびに [SecretProvider] から取る。用途ごとに権限を絞った identity の名前を渡す(監視は読み取りだけ、など)。
  */
+@Suppress("TooManyFunctions") // 置き場の操作(ObjectStore・LockedObjectWriter)ごとに 1 つの関数にする
 public class S3ObjectStore(
     private val config: S3StoreConfig,
     secrets: SecretProvider,
 ) : ObjectStore,
+    LockedObjectWriter,
     AutoCloseable {
     private val client: S3Client =
         S3Client
@@ -161,6 +167,30 @@ public class S3ObjectStore(
             ok(Unit)
         }
 
+    /**
+     * Object Lock(COMPLIANCE)で置く(ADR-0040 §5)。保持のモードと期限は put のたびに明示し、バケットの既定の保持設定には頼らない(ADR-0017 §5 と同じ)。
+     * SDK の既定のチェックサムの計算は使わないので、Object Lock つきの put に要るチェックサム(Content-MD5 と SHA-256)を自分で付ける。
+     */
+    override fun putLocked(
+        key: String,
+        bytes: ByteArray,
+        retainUntil: Instant,
+    ): Result<String, FileTransferError> =
+        s3Catching {
+            val request =
+                PutObjectRequest
+                    .builder()
+                    .bucket(config.bucket)
+                    .key(key)
+                    .contentMD5(base64Digest("MD5", bytes))
+                    .checksumSHA256(base64Digest("SHA-256", bytes))
+                    .objectLockMode(ObjectLockMode.COMPLIANCE)
+                    .objectLockRetainUntilDate(retainUntil)
+                    .build()
+            val versionId = client.putObject(request, RequestBody.fromBytes(bytes)).versionId()
+            if (versionId.isNullOrEmpty()) err(StoreRejected("NoVersionId")) else ok(versionId)
+        }
+
     override fun copy(
         sourceKey: String,
         targetKey: String,
@@ -268,3 +298,9 @@ private class SecretCredentials(
         return AwsBasicCredentials.create(access.value.reveal(), secret.value.reveal())
     }
 }
+
+/** Object Lock つきの put に付けるチェックサム(Content-MD5・x-amz-checksum-sha256。base64)。 */
+private fun base64Digest(
+    algorithm: String,
+    bytes: ByteArray,
+): String = Base64.getEncoder().encodeToString(MessageDigest.getInstance(algorithm).digest(bytes))

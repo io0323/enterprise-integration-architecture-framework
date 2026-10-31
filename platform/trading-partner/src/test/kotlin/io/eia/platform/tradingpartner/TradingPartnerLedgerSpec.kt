@@ -18,7 +18,13 @@ import java.time.LocalTime
 import java.time.ZoneId
 import kotlin.io.path.readText
 
-private val LOCAL_LEDGER: String = Path.of(System.getProperty("eia.partnersFile")).readText()
+/** ローカル基盤の台帳のテンプレート(鍵の期日は make env が書き込む。ADR-0040 §3)。 */
+private val TEMPLATE: String = Path.of(System.getProperty("eia.partnersFile")).readText()
+
+/** テストで書き込む鍵の期日(make env と同じく、今日から 1 年後)。 */
+internal val VALID_UNTIL: LocalDate = LocalDate.now().plusDays(365)
+
+internal val LOCAL_LEDGER: String = TEMPLATE.replace("@KEYS_VALID_UNTIL@", VALID_UNTIL.toString())
 
 private fun Result<TradingPartnerLedger, ValidationError>.ledger(): TradingPartnerLedger =
     shouldBeInstanceOf<Result.Ok<TradingPartnerLedger>>().value
@@ -48,7 +54,7 @@ class TradingPartnerLedgerSpec :
                 partner.sftp.knownHosts shouldBe SecretName("PARTNER01_SFTP_KNOWN_HOSTS")
                 partner.sftp.directories shouldBe SftpDirectories("/config/outbox", "/config/to-eiaf", "/config/from-eiaf")
                 partner.sftp.completion shouldBe Completion.Rename(".part")
-                partner.pgp shouldBe PgpPublicKey(SecretName("PARTNER01_PGP_PUBLIC_KEY"), LocalDate.parse("2027-10-31"))
+                partner.pgp shouldBe PgpPublicKey(SecretName("PARTNER01_PGP_PUBLIC_KEY"), VALID_UNTIL)
                 with(partner.agreement) {
                     currencies shouldBe setOf("JPY")
                     positiveAperak shouldBe true
@@ -77,6 +83,11 @@ class TradingPartnerLedgerSpec :
                 }
             }
 
+            test("コミットした台帳に固定の鍵の期日を書かない(日が経つだけで期限のアラートが出ないように、make env が書き込む)") {
+                Regex("\"validUntil\": \"([^\"]*)\"").findAll(TEMPLATE).map { it.groupValues[1] }.toSet() shouldBe
+                    setOf("@KEYS_VALID_UNTIL@")
+            }
+
             test("連携と向きで取引先を探す") {
                 val ledger = TradingPartnerLedger.parse(LOCAL_LEDGER).ledger()
 
@@ -101,7 +112,7 @@ class TradingPartnerLedgerSpec :
 
             test("実在しない日付・0 の期間・知らないタイムゾーン") {
                 parseReplacing(
-                    "\"knownHostsSecret\": \"PARTNER01_SFTP_KNOWN_HOSTS\", \"validUntil\": \"2027-10-31\"" to
+                    "\"knownHostsSecret\": \"PARTNER01_SFTP_KNOWN_HOSTS\", \"validUntil\": \"$VALID_UNTIL\"" to
                         "\"knownHostsSecret\": \"PARTNER01_SFTP_KNOWN_HOSTS\", \"validUntil\": \"2027-02-30\"",
                     "\"aperakDeadline\": \"PT4H\"" to "\"aperakDeadline\": \"PT0S\"",
                     "Asia/Tokyo" to "Asia/Nowhere",
@@ -113,12 +124,12 @@ class TradingPartnerLedgerSpec :
                     )
             }
 
-            test("扱う文書ごとに要る設定: 受け取るなら送り手・受け取りのディレクトリ・書き終わりの判断、送るファイルには PGP、応答にはそのディレクトリ") {
+            test("扱う文書ごとに要る設定: 受け取るなら送り手・受け取りのディレクトリ・書き終わりの判断、PGP の公開鍵、応答にはそのディレクトリ") {
                 parseReplacing(
                     "\"edifact\": { \"id\": \"4912345000019\", \"qualifier\": \"14\" },\n      \"documents\"" to "\"documents\"",
                     "          \"inbound\": \"/config/to-eiaf\",\n" to "",
                     ",\n        \"completion\": { \"method\": \"rename\", \"temporarySuffix\": \".part\" }" to "",
-                    "\"pgp\": { \"publicKeySecret\": \"PARTNER01_PGP_PUBLIC_KEY\", \"validUntil\": \"2027-10-31\" },\n" to "",
+                    "\"pgp\": { \"publicKeySecret\": \"PARTNER01_PGP_PUBLIC_KEY\", \"validUntil\": \"$VALID_UNTIL\" },\n" to "",
                     ",\n          \"acknowledgements\": \"/config/from-eiaf\"" to "",
                 ).fields() shouldContainExactlyInAnyOrder
                     listOf(
@@ -147,6 +158,23 @@ class TradingPartnerLedgerSpec :
                     "{ \"method\": \"rename\", \"temporarySuffix\": \".part\" }" to "{ \"method\": \"rename\" }",
                 ).fields().first() shouldContain
                     "/partners/0/sftp/completion"
+            }
+
+            test("署名の鍵の差し替えの間は、旧い公開鍵を期日まで受け付ける(期日の日の終わり UTC まで)") {
+                val pgp =
+                    checkNotNull(
+                        parseReplacing(
+                            "\"publicKeySecret\": \"PARTNER01_PGP_PUBLIC_KEY\", \"validUntil\": \"$VALID_UNTIL\" }" to
+                                "\"publicKeySecret\": \"PARTNER01_PGP_PUBLIC_KEY\", \"validUntil\": \"$VALID_UNTIL\", " +
+                                "\"previousPublicKeys\": [{ \"publicKeySecret\": \"PARTNER01_PGP_PUBLIC_KEY_OLD\", " +
+                                "\"acceptUntil\": \"2026-11-30\" }] }",
+                        ).ledger()["partner01"]?.pgp,
+                    )
+
+                pgp.previous shouldBe listOf(PreviousPublicKey(SecretName("PARTNER01_PGP_PUBLIC_KEY_OLD"), LocalDate.parse("2026-11-30")))
+                pgp.acceptedPrevious(java.time.Instant.parse("2026-11-30T23:59:59Z")) shouldBe
+                    listOf(SecretName("PARTNER01_PGP_PUBLIC_KEY_OLD"))
+                pgp.acceptedPrevious(java.time.Instant.parse("2026-12-01T00:00:00Z")) shouldBe emptyList()
             }
 
             test("台帳を直接作るときも、取引先の ID の重複は誤り") {

@@ -12,11 +12,13 @@ public data class InterchangeKey(
     public val controlReference: String,
 )
 
-/** 前に受け取った交換。[contrl]・[aperak] は、そのときに返した応答(返していなければ null)。 */
-public class PreviousReceipt(
+/**
+ * 前に受け取った交換。[sha256] は復号した交換の SHA-256(PGP の暗号文は送るたびに変わるので、暗号文では比べない。ADR-0041 §11)、
+ * [documentId] はその受け取りの記録(送り直しのときは、その記録の応答をもう一度送る)。
+ */
+public data class PreviousReceipt(
     public val sha256: String,
-    public val contrl: ByteArray?,
-    public val aperak: ByteArray?,
+    public val documentId: String,
 )
 
 /** 重複の判定の結果。 */
@@ -24,7 +26,7 @@ public sealed interface DuplicateCheck {
     /** 初めて届いた管理番号 */
     public data object First : DuplicateCheck
 
-    /** 同じ管理番号・同じ中身(SHA-256)の送り直し。取り込まず、前に返した応答を返し直す */
+    /** 同じ管理番号・同じ中身(SHA-256)の送り直し。取り込まず、前に返した応答([PreviousReceipt.documentId] の応答)を返し直す */
     public data class Resend(
         public val previous: PreviousReceipt,
     ) : DuplicateCheck

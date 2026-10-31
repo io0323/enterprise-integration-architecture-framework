@@ -6,15 +6,13 @@ import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.shouldBe
 import io.opentelemetry.sdk.metrics.SdkMeterProvider
 import io.opentelemetry.sdk.testing.exporter.InMemoryMetricReader
-import java.nio.file.Path
 import java.time.Instant
-import kotlin.io.path.readText
+import java.time.ZoneOffset
 
-private val LEDGER: TradingPartnerLedger =
-    (TradingPartnerLedger.parse(Path.of(System.getProperty("eia.partnersFile")).readText()) as Result.Ok).value
+private val LEDGER: TradingPartnerLedger = (TradingPartnerLedger.parse(LOCAL_LEDGER) as Result.Ok).value
 
-/** 2027-10-31 の終わり(UTC)。ローカル基盤の台帳の鍵の期日。 */
-private val AGREED: Instant = Instant.parse("2027-11-01T00:00:00Z")
+/** 台帳の鍵の期日(VALID_UNTIL)の日の終わり(UTC)。 */
+private val AGREED: Instant = VALID_UNTIL.plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant()
 
 class CredentialExpirySpec :
     FunSpec({
@@ -28,8 +26,8 @@ class CredentialExpirySpec :
         }
 
         test("鍵の中の期限が台帳の期日より早ければ、そちらを使う(遅ければ台帳の期日)") {
-            val early = Instant.parse("2027-03-01T12:00:00Z")
-            val late = Instant.parse("2030-01-01T00:00:00Z")
+            val early = AGREED.minusSeconds(86_400 * 30)
+            val late = AGREED.plusSeconds(86_400 * 30)
 
             CredentialExpiries
                 .of(LEDGER) { _, kind -> if (kind == CredentialKind.PGP_PUBLIC_KEY) early else late }

@@ -292,7 +292,7 @@ class ReceiveInterchangeSpec :
             test("同じ管理番号で中身が違う(使い回し)→ 26。構文の誤りより先に報告する") {
                 val receipt =
                     Fakes(
-                        previous = PreviousReceipt("other", null, null),
+                        previous = PreviousReceipt("other", "doc-1"),
                     ).receipt(interchange(order()).replace("UNOA:3", "UNOA:4"))
 
                 receipt.duplicate shouldBe DuplicateCheck.Reused
@@ -302,15 +302,15 @@ class ReceiveInterchangeSpec :
             }
         }
 
-        test("同じ管理番号・同じ中身の送り直し: 取り込まず、前に返した応答をそのまま返し直す(管理番号も振らない)") {
-            val fakes = Fakes(previous = PreviousReceipt("sha-1", "OLD-CONTRL".encodeToByteArray(), "OLD-APERAK".encodeToByteArray()))
+        test("同じ管理番号・同じ中身の送り直し: 取り込まず、新しい応答も作らない(前の記録の応答を送り直す。管理番号も振らない)") {
+            val fakes = Fakes(previous = PreviousReceipt("sha-1", "doc-1"))
 
             val receipt = fakes.receipt(interchange(order()))
 
-            receipt.duplicate.shouldBeInstanceOf<DuplicateCheck.Resend>()
+            receipt.duplicate shouldBe DuplicateCheck.Resend(PreviousReceipt("sha-1", "doc-1"))
             receipt.orders.shouldBeEmpty()
-            receipt.contrl.text() shouldBe "OLD-CONTRL"
-            receipt.aperak.text() shouldBe "OLD-APERAK"
+            receipt.contrl shouldBe null
+            receipt.aperak shouldBe null
             fakes.references shouldBe 0
             fakes.lookups.shouldBeEmpty()
         }

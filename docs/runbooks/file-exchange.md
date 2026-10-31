@@ -114,6 +114,6 @@
   `make verify PROFILE=file` が、取引先の側として届いたファイルを GnuPG で復号し、署名と改竄の検知を確かめる(Bouncy Castle と GnuPG の相互運用)。
 
 ## 取引先を足す
-1. 台帳(`infra/local/b2b/partners.json`)に取引先を足す。項目(識別子・扱う文書・送り先・鍵とその期日・合意・連絡先)は `docs/runbooks/b2b-partner-credentials.md` の「取引先を足す」を参照。送るデータセットは `documents` に `{"integration": "INT-SALES-004", "direction": "outbound", "dataset": "sales_daily"}` で書く。
+1. 台帳(ローカル基盤ではテンプレート `infra/local/b2b/partners.template.json`。`make env` が `partners.json` を作る)に取引先を足す。項目(識別子・扱う文書・送り先・鍵とその期日・合意・連絡先)は `docs/runbooks/b2b-partner-credentials.md` の「取引先を足す」を参照。送るデータセットは `documents` に `{"integration": "INT-SALES-004", "direction": "outbound", "dataset": "sales_daily"}` で書く。
 2. 秘密情報(ホスト鍵・クライアントの鍵・PGP の公開鍵)を、上の照合をしてから置く。compose では `<名前>_FILE` で渡す。
 3. file-exchange を再起動する(台帳は起動時に読む。Resilience `sftp-{ID}` とメトリクスも取引先ごとに作られる)。

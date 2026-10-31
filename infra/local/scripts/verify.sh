@@ -680,6 +680,13 @@ EOF
     retry 18 10 bash -c "curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=sum(eia_file_exchange_deliveries_total{file_exchange_partner=\"partner01\",file_exchange_outcome=\"sent\"})' | grep -q '\"value\"'"
   check "Prometheus: ファイル授受のアラートのルールを読み込んでいる" \
     bash -c "curl -fsS http://localhost:19090/api/v1/rules | python3 -c 'import json,sys; n={r[\"name\"] for g in json.load(sys.stdin)[\"data\"][\"groups\"] for r in g[\"rules\"]}; sys.exit(0 if {\"FileExchangeQuarantined\",\"FileExchangeNameReused\",\"FileExchangeInboxStale\",\"FileExchangeDeliveryFailed\",\"FileExchangePartnerCircuitOpen\"} <= n else 1)'"
+  # 取引先の台帳の鍵の期限(P12 ③。ADR-0040 §3)。期日は make env が鍵を作った日から 1 年後を書くので、いつ動かしても期限内のはず
+  check "台帳(b2b/partners.json)は make env が作り、鍵とホスト鍵の期日がどれも 30 日より先" \
+    python3 -c 'import datetime,json,sys; d=json.load(open(sys.argv[1])); dates=[k["validUntil"] for p in d["partners"] for k in [p["sftp"]["hostKey"],p["sftp"]["clientKey"]]+([p["pgp"]] if "pgp" in p else [])]; sys.exit(0 if dates and min(dates) > (datetime.date.today()+datetime.timedelta(days=30)).isoformat() else 1)' "$here/b2b/partners.json"
+  check "Prometheus: 鍵の期限のメトリクス(partner01)を出し、どれも 30 日より先" \
+    retry 18 10 bash -c "curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=min(eia_trading_partner_credential_expiry_seconds{trading_partner_id=\"partner01\"}) - time() > 30 * 86400' | grep -q '\"value\"'"
+  check "Prometheus: 鍵の期限のアラートのルールを読み込み、平常時は firing / pending がない" \
+    bash -c "curl -fsS http://localhost:19090/api/v1/rules | python3 -c 'import json,sys; g=[g for g in json.load(sys.stdin)[\"data\"][\"groups\"] if g[\"name\"]==\"trading-partner\"]; sys.exit(0 if g and len(g[0][\"rules\"])==3 and all(r[\"state\"]==\"inactive\" for r in g[0][\"rules\"]) else 1)'"
   local dash result
   dash="$(curl -fsS -u "admin:$GRAFANA_ADMIN_PASSWORD" http://localhost:19300/api/dashboards/uid/eiaf-file || true)"
   if [[ "$(json 'd["meta"]["folderTitle"] + "/" + d["dashboard"]["title"]' <<<"$dash" 2>/dev/null)" == "EIAF/File — Sales daily" ]]; then

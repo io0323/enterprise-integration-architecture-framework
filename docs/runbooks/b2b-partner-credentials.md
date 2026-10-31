@@ -1,7 +1,10 @@
 # 取引先の台帳と、鍵・ホスト鍵の有効期限(B2B。ADR-0040)
 
 取引先の台帳(TPA。Framework 11.1)は 1 つのファイルで、b2b-gateway と、送信を b2b-gateway に移す(P12 ⑦)までの file-exchange が読む。
-ローカル基盤では `infra/local/b2b/partners.json`。形は `platform/trading-partner/src/main/resources/trading-partner/ledger.v1.schema.json`。
+ローカル基盤では `infra/local/b2b/partners.json`。このファイルはコミットせず、`make env` がテンプレート(`infra/local/b2b/partners.template.json`)から作る。
+テンプレートの鍵の期日は `@KEYS_VALID_UNTIL@` で、`make env` が鍵を作った日から 1 年後(`secrets/partner01-keys.valid-until`)を書き込む
+(固定の期日をコミットすると、日が経つだけで期限のアラートが出始め、verify と e2e が失敗するため。ADR-0040 §3)。
+開発用の鍵を作り直すと期日も作り直す。期日が近づいたら `secrets/partner01-keys.valid-until` を消して `make env` を実行する。形は `platform/trading-partner/src/main/resources/trading-partner/ledger.v1.schema.json`。
 
 - 台帳には秘密情報の**名前**だけを書く。値(ホスト鍵の known_hosts の行・クライアントの秘密鍵・PGP の公開鍵)は SecretProvider から読む
   (compose では `<名前>_FILE` で `secrets/` のファイルを渡す)。
@@ -27,6 +30,7 @@
    - ホスト鍵: 取引先が新しいホスト鍵を作る。フィンガープリントを、取引先と**別の経路**(電話など)で照合してから受け取る(初めての接続で覚えない。ADR-0032 §8)。
    - クライアントの鍵: 自社が新しい鍵を作り、公開鍵を取引先に渡す。取引先が登録したことを確かめてから、秘密情報を差し替える。
    - PGP の公開鍵: 取引先が鍵を更新するか、期限を延ばす。主鍵のフィンガープリントを別の経路で照合する(`gpg --show-keys <ファイル>`)。
+     取引先が署名の鍵を差し替えるときは、下の「取引先の PGP の鍵を差し替える」の手順で、移行の間は新旧の両方の署名を受け付ける。
 3. 秘密情報のファイルを差し替え、台帳の `validUntil` を新しい期日に直す。台帳を読むサービスを再起動する。
 4. メトリクスの期限が新しい期日になり、アラートが消えたことを確かめる。
 
@@ -37,13 +41,32 @@
 
 ## 取引先を足す
 1. TPA(フォーマット・コード体系・再送の規則・締め時刻・障害時の連絡)を文書で合意する(Framework 11.1)。
-2. 台帳(`partners.json`)に取引先を足す。
+2. 台帳に取引先を足す(ローカル基盤ではテンプレート `partners.template.json`。鍵の期日は本番では合意した日付を書く)。
    - `id`(英小文字・数字・ハイフン。32 文字まで)と `name`
    - `edifact`: 取引先が送る交換の UNB の送り手(識別子と識別の機関)。EDI の文書を受け取る取引先では必須
    - `documents`: 扱う文書(連携カタログの ID と向き。ファイルは `dataset` も)。カタログにあること・EDI かファイルの連携であることを、`platform/trading-partner` のテストがローカル基盤の台帳で確かめる
    - `sftp`: 接続先・ホスト鍵とクライアントの鍵(秘密情報の名前と期日)・ディレクトリ(`outbound` = 送るファイル、`inbound` = 取引先が置く文書、`acknowledgements` = 返す応答)・書き終わりの判断(`completion`。既定は改名 `rename`、取引先が改名できなければ `stable`)
-   - `pgp`: 取引先の PGP の公開鍵(ファイルを送る取引先では必須)
+   - `pgp`: 取引先の PGP の公開鍵(必須。B2B の文書は送るものも受け取るものも暗号化と署名をする。Framework 9.2・ADR-0040 §8)
    - `agreement`: 通貨・肯定の APERAK を返すか・業務の応答の期限・締め時刻・CONTRL の SLA・再送の規則
    - `contacts`: 連絡先(個人ではなく役割の窓口。`business`・`operations`・`incident`)
 3. 秘密情報(ホスト鍵・クライアントの鍵・PGP の公開鍵)を、フィンガープリントを照合してから置く。
 4. 台帳を読むサービスを再起動する。
+
+## 取引先の PGP の鍵を差し替える
+取引先は、新しい鍵で署名した文書をいつから送るかを、TPA の連絡で知らせる。こちらは、移行の間だけ新旧の両方の署名を受け付ける(ADR-0040 §8)。
+1. 新しい公開鍵を受け取り、主鍵のフィンガープリントを別の経路で照合して、秘密情報として置く(新しい名前で)。
+2. 台帳の `pgp.publicKeySecret` を新しい鍵の名前にし、`validUntil` を新しい期日にする。旧い鍵の名前は `pgp.previousPublicKeys` に、
+   受け付ける期日(`acceptUntil`。移行の期間の終わり)と一緒に移す。台帳を読むサービスを再起動する。
+   - これ以降、送る文書(売上ファイル・CONTRL・APERAK)は新しい鍵で暗号化する(取引先は新しい鍵の秘密鍵で読む)。
+   - 受け取る文書は、新旧どちらの鍵の署名でも受け付ける。受け取りの記録(`b2b.received_document.signer`)に、署名した鍵のフィンガープリントが残る。
+3. 取引先が新しい鍵だけで署名するようになったことを、受け取りの記録の `signer` で確かめる。
+4. `acceptUntil` を過ぎると、旧い鍵の署名は台帳を書き換えなくても受け付けない(「取引先の鍵でない署名」として、復号の段階で拒否する)。
+   落ち着いたら、`previousPublicKeys` から旧い鍵を消し、秘密情報も片付ける。
+
+## 読めない文書(復号の段階で拒否)
+- 復号できない・取引先の鍵でない署名・改竄の検知に失敗した文書は、原本(暗号文)を保管し、受け取りの記録(`outcome = UNREADABLE`、`refusal` に理由のコード)と
+  監査(段階 `decryption`、結果 `failure`)に記録する。交換の中身が読めないので CONTRL は返さない。
+- 取引先の連絡先(`contacts` の `operations`)に、受け取った時刻・ファイル名・理由のコードを伝え、鍵(取引先が使った自社の公開鍵・署名の鍵)を確かめてもらう。
+  - `pgp_unknown_signer`: 取引先が、台帳にない鍵で署名した(鍵の差し替えの連絡が漏れていないか)
+  - `pgp_not_for_us`: 自社の公開鍵あてに暗号化されていない(取引先が持っている自社の公開鍵が古くないか)
+  - `pgp_not_encrypted`・`pgp_malformed`・`pgp_no_integrity`・`pgp_unsigned`: 取引先の製品の設定(暗号化・署名・改竄の検知)

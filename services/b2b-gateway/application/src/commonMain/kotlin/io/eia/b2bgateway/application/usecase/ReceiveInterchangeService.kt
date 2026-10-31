@@ -64,7 +64,8 @@ public class ReceiveInterchangeService(
         val key = InterchangeKey(agreement.partnerId, header.sender, header.recipient, header.controlReference)
         val duplicate = Duplicates.decide(interchanges.find(key).getOrElse { return err(it) }, document.sha256)
         if (duplicate is DuplicateCheck.Resend) {
-            return ok(Receipt(agreement, syntax, duplicate, emptyList(), duplicate.previous.contrl, duplicate.previous.aperak))
+            // 前に返した応答は、受け取りの記録の側(adapters)が前の記録から送り直す(新しい応答は作らない)
+            return ok(Receipt(agreement, syntax, duplicate, emptyList(), null, null))
         }
         val result = envelopeResult(syntax, header, agreement, duplicate)
         val decisions =

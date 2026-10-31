@@ -20,8 +20,8 @@
         "host": "sftp-b2b",
         "port": 2222,
         "username": "partner01",
-        "hostKey": { "knownHostsSecret": "PARTNER01_SFTP_KNOWN_HOSTS", "validUntil": "2027-10-31" },
-        "clientKey": { "privateKeySecret": "PARTNER01_SFTP_KEY", "validUntil": "2027-10-31" },
+        "hostKey": { "knownHostsSecret": "PARTNER01_SFTP_KNOWN_HOSTS", "validUntil": "@KEYS_VALID_UNTIL@" },
+        "clientKey": { "privateKeySecret": "PARTNER01_SFTP_KEY", "validUntil": "@KEYS_VALID_UNTIL@" },
         "directories": {
           "outbound": "/config/outbox",
           "inbound": "/config/to-eiaf",
@@ -29,7 +29,7 @@
         },
         "completion": { "method": "rename", "temporarySuffix": ".part" }
       },
-      "pgp": { "publicKeySecret": "PARTNER01_PGP_PUBLIC_KEY", "validUntil": "2027-10-31" },
+      "pgp": { "publicKeySecret": "PARTNER01_PGP_PUBLIC_KEY", "validUntil": "@KEYS_VALID_UNTIL@" },
       "agreement": {
         "currencies": ["JPY"],
         "acknowledgements": { "positiveAperak": true, "aperakDeadline": "PT4H" },
