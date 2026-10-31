@@ -153,13 +153,26 @@
           }
         },
         "pgp": {
-          "description": "取引先の PGP の公開鍵(送るファイルの暗号化。ADR-0032 §8)。validUntil は TPA で合意した差し替えの期日(鍵の中の期限が早ければ、そちらで監視する)",
+          "description": "取引先の PGP の公開鍵(送る文書の暗号化と、受け取る文書の署名の検証。ADR-0032 §8・ADR-0040 §8)。validUntil は TPA で合意した差し替えの期日(鍵の中の期限が早ければ、そちらで監視する)",
           "type": "object",
           "additionalProperties": false,
           "required": ["publicKeySecret", "validUntil"],
           "properties": {
             "publicKeySecret": { "$ref": "#/$defs/secretName" },
-            "validUntil": { "$ref": "#/$defs/date" }
+            "validUntil": { "$ref": "#/$defs/date" },
+            "previousPublicKeys": {
+              "description": "取引先が署名の鍵を差し替える間だけ、署名を受け付ける旧い公開鍵(暗号化には使わない)。acceptUntil の日の終わり(UTC)を過ぎたら受け付けない",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["publicKeySecret", "acceptUntil"],
+                "properties": {
+                  "publicKeySecret": { "$ref": "#/$defs/secretName" },
+                  "acceptUntil": { "$ref": "#/$defs/date" }
+                }
+              }
+            }
           }
         },
         "agreement": {

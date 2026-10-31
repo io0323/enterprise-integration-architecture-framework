@@ -171,7 +171,7 @@ class BusinessSpec :
 
         context("交換の重複(EDI の層での冪等。ADR-0041 §11)") {
             test("初めて・同じ中身の送り直し・管理番号の使い回し") {
-                val previous = PreviousReceipt("abc", "C".encodeToByteArray(), null)
+                val previous = PreviousReceipt("abc", "doc-1")
 
                 Duplicates.decide(null, "abc") shouldBe DuplicateCheck.First
                 Duplicates.decide(previous, "abc").shouldBeInstanceOf<DuplicateCheck.Resend>().previous shouldBe previous

@@ -17,12 +17,13 @@ dependencies {
     testImplementation(libs.jackson3.dataformat.yaml)
 }
 
-// テストで、ローカル基盤の台帳(infra/local/b2b/partners.json)を読み、カタログ(contracts/catalog)と照らし合わせる
+// テストで、ローカル基盤の台帳のテンプレート(infra/local/b2b/partners.template.json。make env が鍵の期日を書き込む)を読み、
+// カタログ(contracts/catalog)と照らし合わせる
 tasks.named<Test>("test") {
     systemProperty(
         "eia.partnersFile",
         rootProject.layout.projectDirectory
-            .file("infra/local/b2b/partners.json")
+            .file("infra/local/b2b/partners.template.json")
             .asFile.absolutePath,
     )
     systemProperty(

@@ -190,7 +190,7 @@ public object PgpFiles {
             val onePass =
                 (first as? PGPOnePassSignatureList)?.takeIf { it.size() == 1 }?.get(0)
                     ?: return PgpVerification.Rejected(PgpRejection.UNSIGNED)
-            val signerKey = keys.partner.getPublicKey(onePass.keyID) ?: return PgpVerification.Rejected(PgpRejection.UNKNOWN_SIGNER)
+            val (signerKey, signerFingerprint) = keys.signer(onePass.keyID) ?: return PgpVerification.Rejected(PgpRejection.UNKNOWN_SIGNER)
             onePass.init(JcaPGPContentVerifierBuilderProvider().setProvider(PgpKeys.PROVIDER), signerKey)
             val literal = factory.nextObject() as? PGPLiteralData ?: return PgpVerification.Rejected(PgpRejection.MALFORMED)
             Files.newOutputStream(target).buffered().use { out ->
@@ -201,7 +201,7 @@ public object PgpFiles {
                 signature == null || signature.keyID != onePass.keyID -> PgpVerification.Rejected(PgpRejection.UNSIGNED)
                 !onePass.verify(signature) -> PgpVerification.Rejected(PgpRejection.BAD_SIGNATURE)
                 !encrypted.verify() -> PgpVerification.Rejected(PgpRejection.INTEGRITY_FAILED)
-                else -> PgpVerification.Verified(keys.partnerFingerprint, literal.fileName)
+                else -> PgpVerification.Verified(signerFingerprint, literal.fileName)
             }
         }
 
@@ -218,7 +218,7 @@ public object PgpFiles {
 /** 復号と署名の検証の結果。 */
 public sealed interface PgpVerification {
     /**
-     * 取引先の鍵の署名が正しく、改竄の検知も通った。
+     * 取引先の鍵の署名が正しく、改竄の検知も通った。[signerFingerprint] は署名した鍵(今の鍵か、差し替えの間の旧い鍵)の主鍵のフィンガープリント。
      *
      * @property literalName 暗号文の中のファイル名(送り手が付けた元の名前。信用せず、参考にだけ使う)
      */

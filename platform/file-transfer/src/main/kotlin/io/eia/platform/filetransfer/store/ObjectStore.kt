@@ -3,6 +3,7 @@ package io.eia.platform.filetransfer.store
 import io.eia.platform.filetransfer.FileTransferError
 import io.eia.shared.kernel.Result
 import java.nio.file.Path
+import java.time.Instant
 
 /** 置き場のオブジェクト。 */
 public data class StoredObject(
@@ -56,4 +57,17 @@ public interface ObjectStore : ObjectReader {
 
     /** [key] を消す。なくても成功。 */
     public fun delete(key: String): Result<Unit, FileTransferError>
+}
+
+/**
+ * 消せない置き場(原本の保管。ADR-0040 §5)。S3 の Object Lock(COMPLIANCE)で置き、保持期限までは誰も消せず、期限を縮められない。
+ * バケットはバージョニングと Object Lock を有効にしてあること。同じキーに置き直すと、上書きではなく新しい版になる。
+ */
+public interface LockedObjectWriter {
+    /** [bytes] を [key] に、保持期限 [retainUntil] の COMPLIANCE で置く。置いた版の ID を返す。 */
+    public fun putLocked(
+        key: String,
+        bytes: ByteArray,
+        retainUntil: Instant,
+    ): Result<String, FileTransferError>
 }

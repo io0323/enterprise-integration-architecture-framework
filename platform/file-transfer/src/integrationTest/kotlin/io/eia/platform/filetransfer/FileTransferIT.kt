@@ -25,6 +25,7 @@ import io.eia.platform.testsupport.SeaweedFsContainer
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.err
 import io.eia.shared.kernel.ok
+import io.kotest.assertions.throwables.shouldThrowAny
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContainExactly
@@ -305,6 +306,32 @@ class FileTransferIT :
                     keysUnder(exchange, "inbox/", base).shouldBeEmpty()
                     keysUnder(exchange, "archive/", base).shouldBeEmpty()
                 }
+            }
+        }
+
+        test("Object Lock(COMPLIANCE)で置く: 置き直すと新しい版になり、保持期限内の版は管理者でも消せない(原本の保管。ADR-0040 §5)") {
+            val locked = "eiaf-locked-it"
+            admin.createBucket { it.bucket(locked).objectLockEnabledForBucket(true) }
+            val credentials = seaweed.credentials.getValue("eiaf")
+            val retainUntil =
+                java.time.Instant
+                    .now()
+                    .plusSeconds(180)
+            S3ObjectStore(
+                S3StoreConfig(URI(seaweed.endpoint), locked, accessKey, secretKey),
+                EnvSecretProvider(mapOf(accessKey.value to credentials.accessKey, secretKey.value to credentials.secretKey)),
+            ).use { store ->
+                val first = store.putLocked("originals/p1/a.pgp", "original".encodeToByteArray(), retainUntil).ok()
+                val second = store.putLocked("originals/p1/a.pgp", "original".encodeToByteArray(), retainUntil).ok()
+
+                (first != second) shouldBe true
+                val retention = admin.getObjectRetention { it.bucket(locked).key("originals/p1/a.pgp").versionId(first) }.retention()
+                retention.modeAsString() shouldBe "COMPLIANCE"
+                (retention.retainUntilDate().epochSecond - retainUntil.epochSecond) shouldBe 0L
+                shouldThrowAny { admin.deleteObject { it.bucket(locked).key("originals/p1/a.pgp").versionId(first) } }
+                admin
+                    .getObjectAsBytes { it.bucket(locked).key("originals/p1/a.pgp").versionId(first) }
+                    .asUtf8String() shouldBe "original"
             }
         }
     })
