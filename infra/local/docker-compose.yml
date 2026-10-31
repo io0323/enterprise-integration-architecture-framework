@@ -403,7 +403,7 @@ services:
 
   # 受け口(バケット eiaf-file-exchange の inbox/sales-daily/)に届いたファイルを検査して archive / quarantine に移し、合格のファイルを
   # 取引先(sftp-b2b の partner01)に PGP で暗号化・署名して送る。アプリのロールのパスワードだけを渡す。
-  # - 取引先の台帳(file-exchange/partners.json)には秘密情報の名前だけを書き、値は secrets/ のファイルを _FILE で渡す
+  # - 取引先の台帳(b2b/partners.json。b2b-gateway と共有する 1 つの台帳。ADR-0040)には秘密情報の名前だけを書き、値は secrets/ のファイルを _FILE で渡す
   # - 鍵(secrets/*。0600)を読めるよう、ホストの利用者の uid で動かす(Makefile の EIAF_UID。root では make up が止まる)
   # - 取引先の SFTP には依存しない(止まっていても受け取りは動き、配送は取引先ごとの Circuit Breaker と再実行で続ける)
   file-exchange:
@@ -441,7 +441,7 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
     volumes:
       - *probe-volume
-      - ./file-exchange/partners.json:/config/partners.json:ro
+      - ./b2b/partners.json:/config/partners.json:ro
       - ./secrets/pgp-eiaf.sec.asc:/secrets/pgp-eiaf.sec.asc:ro
       - ./secrets/pgp-eiaf.passphrase:/secrets/pgp-eiaf.passphrase:ro
       - ./secrets/pgp-partner01.pub.asc:/secrets/pgp-partner01.pub.asc:ro

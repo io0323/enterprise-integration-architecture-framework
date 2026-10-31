@@ -22,6 +22,7 @@ import org.bouncycastle.openpgp.operator.jcajce.JcaPGPDigestCalculatorProviderBu
 import org.bouncycastle.openpgp.operator.jcajce.JcePBESecretKeyDecryptorBuilder
 import java.io.IOException
 import java.security.Provider
+import java.time.Instant
 import java.util.HexFormat
 
 /**
@@ -119,6 +120,22 @@ public class PgpKeys private constructor(
             } catch (_: PGPException) {
                 err(CredentialRejected("自社の秘密鍵のパスフレーズが違います"))
             }
+        }
+
+        /**
+         * 取引先の公開鍵の中に書かれた有効期限(主鍵と、暗号化に使う鍵のうち早いほう)。期限のない鍵・読めない鍵は null
+         * (読めない鍵は送信のときに [CredentialRejected] になる)。鍵の期限の監視に使う(ADR-0040 §3)。
+         */
+        public fun publicKeyExpiry(partnerPublicKey: Secret): Instant? {
+            val ring =
+                try {
+                    PGPPublicKeyRing(PGPUtil.getDecoderStream(partnerPublicKey.reveal().byteInputStream()), JcaKeyFingerprintCalculator())
+                } catch (_: IOException) {
+                    return null
+                }
+            return listOfNotNull(ring.publicKey, encryptionKey(ring.publicKeys.asSequence()))
+                .filter { it.validSeconds > 0 }
+                .minOfOrNull { it.creationTime.toInstant().plusSeconds(it.validSeconds) }
         }
 
         private fun encryptionKey(keys: Sequence<PGPPublicKey>): PGPPublicKey? =

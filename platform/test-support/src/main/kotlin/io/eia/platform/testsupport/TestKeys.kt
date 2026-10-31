@@ -61,19 +61,28 @@ public object TestKeys {
      *
      * @param encryptionSubkey false なら暗号化に使える鍵を持たない(主鍵は署名だけの RSA)
      * @param protect false ならパスフレーズで保護しない
+     * @param masterExpiry 主鍵の有効期間(秒。null なら期限なし)
+     * @param subkeyExpiry 暗号化の副鍵の有効期間(秒。null なら期限なし)
      */
+    @Suppress("LongParameterList") // 鍵の作り方の条件を、既定値つきの名前付きの引数で並べる
     public fun pgp(
         userId: String,
         passphrase: String = "test-passphrase",
         encryptionSubkey: Boolean = true,
         protect: Boolean = true,
+        masterExpiry: Long? = null,
+        subkeyExpiry: Long? = null,
     ): Pgp {
         val rsa = KeyPairGenerator.getInstance("RSA", provider).apply { initialize(RSA_BITS) }
         val now = Date()
         val masterAlgorithm = if (encryptionSubkey) PublicKeyAlgorithmTags.RSA_GENERAL else PublicKeyAlgorithmTags.RSA_SIGN
         val master = JcaPGPKeyPair(masterAlgorithm, rsa.generateKeyPair(), now)
         val sha1 = JcaPGPDigestCalculatorProviderBuilder().setProvider(provider).build().get(HashAlgorithmTags.SHA1)
-        val masterFlags = PGPSignatureSubpacketGenerator().apply { setKeyFlags(false, KeyFlags.SIGN_DATA or KeyFlags.CERTIFY_OTHER) }
+        val masterFlags =
+            PGPSignatureSubpacketGenerator().apply {
+                setKeyFlags(false, KeyFlags.SIGN_DATA or KeyFlags.CERTIFY_OTHER)
+                masterExpiry?.let { setKeyExpirationTime(false, it) }
+            }
         val encryptor =
             if (protect) {
                 JcePBESecretKeyEncryptorBuilder(
@@ -95,7 +104,11 @@ public object TestKeys {
                 encryptor,
             )
         if (encryptionSubkey) {
-            val flags = PGPSignatureSubpacketGenerator().apply { setKeyFlags(false, KeyFlags.ENCRYPT_COMMS or KeyFlags.ENCRYPT_STORAGE) }
+            val flags =
+                PGPSignatureSubpacketGenerator().apply {
+                    setKeyFlags(false, KeyFlags.ENCRYPT_COMMS or KeyFlags.ENCRYPT_STORAGE)
+                    subkeyExpiry?.let { setKeyExpirationTime(false, it) }
+                }
             ring.addSubKey(JcaPGPKeyPair(PublicKeyAlgorithmTags.RSA_GENERAL, rsa.generateKeyPair(), now), flags.generate(), null)
         }
         return Pgp(armor { ring.generatePublicKeyRing().encode(it) }, armor { ring.generateSecretKeyRing().encode(it) }, passphrase)

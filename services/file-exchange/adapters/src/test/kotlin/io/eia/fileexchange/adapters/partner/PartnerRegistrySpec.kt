@@ -2,12 +2,12 @@ package io.eia.fileexchange.adapters.partner
 
 import io.eia.fileexchange.domain.PartnerId
 import io.eia.platform.security.secret.SecretName
+import io.eia.platform.testsupport.TestLedgers
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.ValidationError
 import io.kotest.assertions.fail
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
-import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.shouldBe
 
 private fun Result<PartnerRegistry, ValidationError>.ok(): PartnerRegistry =
@@ -22,42 +22,33 @@ private fun Result<PartnerRegistry, ValidationError>.fields(): List<String> =
         is Result.Err -> error.violations.map { it.field }
     }
 
-private fun partner(
-    id: String = "partner01",
-    datasets: String = "\"sales_daily\"",
-    sftp: String =
-        """
-        "host": "sftp-b2b", "port": 2222, "username": "partner01", "directory": "/config/outbox",
-        "knownHostsSecret": "FILE_EXCHANGE_PARTNER01_KNOWN_HOSTS", "privateKeySecret": "FILE_EXCHANGE_PARTNER01_SSH_KEY"
-        """.trimIndent(),
-    pgp: String = "\"publicKeySecret\": \"FILE_EXCHANGE_PARTNER01_PGP_PUBLIC_KEY\"",
-) = """{ "id": "$id", "datasets": [$datasets], "sftp": { $sftp }, "pgp": { $pgp } }"""
-
-private fun registry(vararg partners: String) = """{ "partners": [${partners.joinToString(",")}] }"""
-
+/** 台帳(platform/trading-partner。ADR-0040)のうち、ファイルを送る取引先から送り先を作る。台帳の検証は platform/trading-partner のテストで行う。 */
 class PartnerRegistrySpec :
     FunSpec({
-        test("取引先の ID ごとに、送るデータセット・送り先・ホスト鍵・鍵の名前を持つ") {
+        test("ファイルを送る取引先ごとに、送るデータセット・送り先・ホスト鍵・鍵の名前を持つ。台帳も持つ") {
             val parsed =
                 PartnerRegistry
                     .parse(
-                        registry(
-                            partner(),
-                            partner(
+                        TestLedgers.json(
+                            TestLedgers.Partner(knownHostsSecret = "FILE_EXCHANGE_PARTNER01_KNOWN_HOSTS"),
+                            TestLedgers.Partner(
                                 id = "acme",
-                                datasets = "\"sales_daily\", \"erp_orders\"",
-                                sftp =
-                                    """
-                                    "host": "sftp.acme.example", "username": "eiaf", "directory": "/in",
-                                    "knownHostsSecret": "ACME_KNOWN_HOSTS", "privateKeySecret": "ACME_SSH_KEY",
-                                    "privateKeyPassphraseSecret": "ACME_SSH_PASSPHRASE"
-                                    """.trimIndent(),
-                                pgp = "\"publicKeySecret\": \"ACME_PGP_PUBLIC_KEY\"",
+                                host = "sftp.acme.example",
+                                port = 22,
+                                username = "eiaf",
+                                outbound = "/in",
+                                datasets = listOf("sales_daily", "erp_orders"),
+                                knownHostsSecret = "ACME_KNOWN_HOSTS",
+                                privateKeySecret = "ACME_SSH_KEY",
+                                passphraseSecret = "ACME_SSH_PASSPHRASE",
+                                pgpPublicKeySecret = "ACME_PGP_PUBLIC_KEY",
+                                edi = false,
                             ),
                         ),
                     ).ok()
 
             parsed.partners.map { it.id.value } shouldBe listOf("acme", "partner01")
+            parsed.ledger?.partners?.map { it.id } shouldBe listOf("acme", "partner01")
             parsed.recipients("sales_daily") shouldBe listOf(PartnerId("acme"), PartnerId("partner01"))
             parsed.recipients("erp_orders") shouldBe listOf(PartnerId("acme"))
             parsed.recipients("other_data") shouldBe emptyList()
@@ -75,50 +66,23 @@ class PartnerRegistrySpec :
             parsed[PartnerId("nobody")] shouldBe null
         }
 
-        test("誤りは項目のパスで返す") {
+        test("ファイルを送らない取引先(EDI の文書だけを扱う)は、送り先にしない") {
             PartnerRegistry
-                .parse(
-                    registry(
-                        partner(
-                            id = "Bad_ID",
-                            datasets = "\"Sales\"",
-                            sftp =
-                                """
-                                "host": " ", "port": 70000, "username": "", "directory": "relative",
-                                "knownHostsSecret": "lower", "privateKeySecret": "KEY_FILE", "privateKeyPassphraseSecret": "x"
-                                """.trimIndent(),
-                            pgp = "\"publicKeySecret\": \"\"",
-                        ),
-                        partner(datasets = ""),
-                    ),
-                ).fields() shouldContainExactlyInAnyOrder
-                listOf(
-                    "partners[0].id",
-                    "partners[0].datasets[0]",
-                    "partners[0].sftp.host",
-                    "partners[0].sftp.port",
-                    "partners[0].sftp.username",
-                    "partners[0].sftp.directory",
-                    "partners[0].sftp.knownHostsSecret",
-                    "partners[0].sftp.privateKeySecret",
-                    "partners[0].sftp.privateKeyPassphraseSecret",
-                    "partners[0].pgp.publicKeySecret",
-                    "partners[1].datasets",
-                )
+                .parse(TestLedgers.json(TestLedgers.Partner(datasets = emptyList())))
+                .ok()
+                .partners shouldBe emptyList()
         }
 
-        test("取引先の ID の重複・JSON として読めない・知らない項目は誤り") {
-            PartnerRegistry.parse(registry(partner(), partner())).fields() shouldBe listOf("partners")
+        test("台帳の誤りは、台帳の項目の場所で返す") {
             PartnerRegistry.parse("{").fields() shouldBe listOf("partners")
-            PartnerRegistry.parse("""{ "partners": [], "extra": 1 }""").fields() shouldBe listOf("partners")
-            PartnerRegistry.parse("""{ "partners": [{ "id": "a" }] }""").fields() shouldBe listOf("partners")
-            PartnerRegistry.parse(registry()).ok().partners shouldBe emptyList()
+            PartnerRegistry.parse(TestLedgers.json(TestLedgers.Partner(port = 70_000))).fields() shouldBe listOf("/partners/0/sftp/port")
+            PartnerRegistry.parse(TestLedgers.json(TestLedgers.Partner(), TestLedgers.Partner())).fields() shouldBe listOf("/partners")
         }
 
         test("直接作るときも、取引先の ID の重複を許さない") {
             val one =
                 PartnerRegistry
-                    .parse(registry(partner()))
+                    .parse(TestLedgers.json(TestLedgers.Partner()))
                     .ok()
                     .partners
                     .single()

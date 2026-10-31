@@ -33,7 +33,7 @@ import kotlin.time.Duration.Companion.seconds
  * | `FILE_EXCHANGE_HEALTH_PORT` | 8081 | serve(`/health/live` と `/health/ready` だけ。平文。コンテナの外に公開しない) |
  * | `FILE_EXCHANGE_POLL_INTERVAL` | 30s | serve(ファイルの到着を確かめる間隔) |
  * | `FILE_EXCHANGE_SWEEP_INTERVAL` | 5m | serve(受け口の見回りの間隔) |
- * | `FILE_EXCHANGE_PARTNERS_FILE` | なし(なければ配送しない) | 取引先の台帳(JSON。ADR-0032 §8)のパス |
+ * | `FILE_EXCHANGE_PARTNERS_FILE` | なし(なければ配送しない) | 取引先の台帳(JSON。b2b-gateway と共有する 1 つの台帳。platform/trading-partner。ADR-0040)のパス |
  * | `FILE_EXCHANGE_PGP_SECRET_KEY` / `FILE_EXCHANGE_PGP_PASSPHRASE`(`_FILE` も可) | なし | 自社の PGP の署名の鍵(配送のときに読む) |
  * | `FILE_EXCHANGE_SFTP_OPEN_DURATION` | 30s | serve・receive(取引先の SFTP の Circuit Breaker が Open のままでいる期間。ADR-0032 §8) |
  * | `FILE_EXCHANGE_DELIVER_RETRY_DELAY` | 5s | serve・receive(配送のステップのリトライの最初の待ち時間。2 倍ずつ延ばし、上限は 1 分) |

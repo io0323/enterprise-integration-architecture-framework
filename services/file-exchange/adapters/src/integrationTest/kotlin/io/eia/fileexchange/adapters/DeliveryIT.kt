@@ -39,6 +39,7 @@ import io.eia.platform.testsupport.InfraImages
 import io.eia.platform.testsupport.SeaweedFsContainer
 import io.eia.platform.testsupport.SftpServerContainer
 import io.eia.platform.testsupport.TestKeys
+import io.eia.platform.testsupport.TestLedgers
 import io.eia.shared.kernel.Jitter
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.RetryPolicy
@@ -290,12 +291,9 @@ class DeliveryIT :
             val registry =
                 PartnerRegistry
                     .parse(
-                        """
-                        {"partners": [{"id": "$PARTNER", "datasets": ["sales_daily"],
-                          "sftp": {"host": "${toxiproxy.host}", "port": $proxyPort, "username": "partner01", "directory": "$OUTBOX",
-                                   "knownHostsSecret": "P01_KNOWN_HOSTS", "privateKeySecret": "P01_SSH_KEY"},
-                          "pgp": {"publicKeySecret": "P01_PGP_PUBLIC_KEY"}}]}
-                        """.trimIndent(),
+                        TestLedgers.json(
+                            TestLedgers.Partner(id = PARTNER.value, host = toxiproxy.host, port = proxyPort, outbound = OUTBOX),
+                        ),
                     ).ok()
             val secrets =
                 EnvSecretProvider(

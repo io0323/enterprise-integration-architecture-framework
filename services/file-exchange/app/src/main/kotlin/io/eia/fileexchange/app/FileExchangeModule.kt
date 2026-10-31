@@ -5,6 +5,7 @@ import com.zaxxer.hikari.HikariDataSource
 import io.eia.fileexchange.adapters.file.S3Inbox
 import io.eia.fileexchange.adapters.file.SalesDailyLayout
 import io.eia.fileexchange.adapters.partner.OwnPgpKey
+import io.eia.fileexchange.adapters.partner.PgpKeyExpiry
 import io.eia.fileexchange.adapters.partner.SftpPartnerOutbox
 import io.eia.fileexchange.adapters.persistence.BatchFileLocks
 import io.eia.fileexchange.adapters.persistence.JdbcDeliveries
@@ -26,6 +27,8 @@ import io.eia.platform.filetransfer.verify.FileVerifier
 import io.eia.platform.observability.ObservabilityRuntime
 import io.eia.platform.reliability.ResilienceMetrics
 import io.eia.platform.security.secret.SecretProvider
+import io.eia.platform.tradingpartner.CredentialExpiries
+import io.eia.platform.tradingpartner.CredentialExpiryMetrics
 import io.eia.shared.resilience.CircuitBreakerConfig
 import io.eia.shared.resilience.ResilienceConfig
 import org.koin.core.module.Module
@@ -108,6 +111,15 @@ private fun Module.deliveryBeans(
         )
     }
     single<DeliverFileUseCase> { DeliverFileService(get<JdbcReceivedFiles>(), inputs.partners, get<JdbcDeliveries>(), get()) }
+    // 取引先の鍵とホスト鍵の有効期限(ADR-0040 §3)。台帳を読むサービスが出す(送信を b2b-gateway に移す P12 ⑦ までは file-exchange も)
+    single(createdAtStart = true) {
+        val expiry = PgpKeyExpiry(secrets)
+        CredentialExpiryMetrics(runtime.meter) {
+            inputs.partners.ledger
+                ?.let { CredentialExpiries.of(it, expiry) }
+                .orEmpty()
+        }
+    }
 }
 
 /**

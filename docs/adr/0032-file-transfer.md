@@ -216,3 +216,4 @@ S3 の部分は P09 ③a、SFTP と PGP(§8)は ③b で決めた。Parquet の�
 - 2026-10-16: P09 ⑤a で、file-exchange の受け取りの実装(§5: 受け取りの DAG・状態・見回り・見回りと受け取りの排他)を書いた。理由のコードに `duplicate`・`name_reused` を足した。
 - 2026-10-17: P09 ⑤b で、取引先への配送(§8「取引先への配送」: 配送のステップ・取引先の台帳・配送の記録・送る前の正式名の確認による冪等・取引先ごとの Resilience)を書いた。`SftpSender` に正式名の確認(`exists`)を足した。
 - 2026-10-18: P09 ⑥ で、ローカル基盤(§7: バケットと identity とバケットポリシー・置き場の停止と取り込みの独立・ホスト鍵の固定・GnuPG の鍵と相互運用・アラート・ダッシュボード・Runbook)を書いた。
+- 2026-10-31: P12 ③ で、取引先の台帳を b2b-gateway と共有する 1 つの台帳(`infra/local/b2b/partners.json`。読み込みは `platform/trading-partner`)に移した(ADR-0040 §2)。§8 の台帳の項目は、送るデータセットを `documents`(連携カタログの ID・向き・データセット)に移し、識別子・鍵の期日・合意・連絡先を足した形になった。file-exchange の `PartnerRegistry` は、台帳からファイルの送り先(`PartnerDestination`)を作る変換になった。取引先への送信は P12 ⑦ で b2b-gateway に移す。

@@ -15,6 +15,7 @@ import io.eia.platform.testsupport.InfraImages
 import io.eia.platform.testsupport.SeaweedFsContainer
 import io.eia.platform.testsupport.SftpServerContainer
 import io.eia.platform.testsupport.TestKeys
+import io.eia.platform.testsupport.TestLedgers
 import io.eia.shared.kernel.Result
 import io.kotest.assertions.fail
 import io.kotest.core.spec.style.FunSpec
@@ -152,12 +153,7 @@ class FileExchangeAppIT :
             val registry = workDir.resolve("partners.json")
             Files.writeString(
                 registry,
-                """
-                {"partners": [{"id": "partner01", "datasets": ["sales_daily"],
-                  "sftp": {"host": "${sftp.host}", "port": ${sftp.sshPort}, "username": "partner01", "directory": "/config/outbox",
-                           "knownHostsSecret": "P01_KNOWN_HOSTS", "privateKeySecret": "P01_SSH_KEY"},
-                  "pgp": {"publicKeySecret": "P01_PGP_PUBLIC_KEY"}}]}
-                """.trimIndent(),
+                TestLedgers.json(TestLedgers.Partner(host = sftp.host, port = sftp.sshPort)),
             )
             return mapOf(
                 FileExchangeConfig.PARTNERS_FILE to registry.toString(),

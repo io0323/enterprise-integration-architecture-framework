@@ -103,7 +103,7 @@ public class SftpPartnerOutbox(
     /** archive のデータファイルを読み出し、取引先の公開鍵で暗号化して自社の鍵で署名する。 */
     @Suppress("ReturnCount") // 読み出し・鍵・暗号化の失敗のそれぞれで返す
     private fun prepare(
-        target: TradingPartner,
+        target: PartnerDestination,
         dataFile: String,
         plain: Path,
         encrypted: Path,
