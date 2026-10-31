@@ -3,7 +3,7 @@ package io.eia.b2bgateway.domain.ack
 import kotlin.time.Instant
 
 /**
- * 応答の UNB の S004(0017 = YYMMDD、0019 = HHMM)。UTC で表す(取引先と時差を取り違えないため。ADR-0041 §5)。
+ * 応答の UNB の S004(0017 = YYMMDD、0019 = HHMM)と、APERAK の日付(CCYYMMDD。[calendarDate])。UTC で表す(取引先と時差を取り違えないため。ADR-0041 §5)。
  * commonMain では日付のライブラリを使わないので、1970-01-01 からの日数を暦の日付に直す(proleptic グレゴリオ暦)。
  */
 public data class UtcStamp(
@@ -15,6 +15,7 @@ public data class UtcStamp(
         private const val SECONDS_PER_HOUR = 3_600L
         private const val SECONDS_PER_MINUTE = 60L
         private const val CENTURY = 100
+        private const val YEAR_DIGITS = 4
 
         // 0000-03-01 から 1970-01-01 までの日数と、400 年(1 つの周期)の日数
         private const val DAYS_FROM_0000_03_01 = 719_468L
@@ -30,6 +31,12 @@ public data class UtcStamp(
                 date = "${two(year % CENTURY)}${two(month.toLong())}${two(day.toLong())}",
                 time = "${two(hour)}${two(minute)}",
             )
+        }
+
+        /** UTC の暦の日付(CCYYMMDD。APERAK の DTM+137 の 2380、2379 = 102)。 */
+        public fun calendarDate(instant: Instant): String {
+            val (year, month, day) = civil(instant.epochSeconds.floorDiv(SECONDS_PER_DAY))
+            return "${year.toString().padStart(YEAR_DIGITS, '0')}${two(month.toLong())}${two(day.toLong())}"
         }
 
         @Suppress("MagicNumber") // 暦の計算の定数(H. Hinnant の civil_from_days)

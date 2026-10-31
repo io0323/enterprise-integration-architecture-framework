@@ -9,4 +9,7 @@ public interface EdiSpecs {
 
     /** 構文とスキーマの段階の応答(edifact-contrl.v1) */
     public val contrl: EdiSpec
+
+    /** 業務の段階の応答(edifact-aperak.v1) */
+    public val aperak: EdiSpec
 }
