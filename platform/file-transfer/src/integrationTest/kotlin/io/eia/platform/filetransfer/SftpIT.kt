@@ -7,6 +7,7 @@ import io.eia.platform.filetransfer.pgp.PgpKeys
 import io.eia.platform.filetransfer.pgp.PgpRejection
 import io.eia.platform.filetransfer.pgp.PgpVerification
 import io.eia.platform.filetransfer.sftp.SftpConfig
+import io.eia.platform.filetransfer.sftp.SftpReceiver
 import io.eia.platform.filetransfer.sftp.SftpSender
 import io.eia.platform.security.secret.EnvSecretProvider
 import io.eia.platform.security.secret.Secret
@@ -63,6 +64,12 @@ class SftpIT :
         )
 
         fun file(bytes: ByteArray) = Files.createTempFile(workDir, "send", ".bin").also { Files.write(it, bytes) }
+
+        fun receiver(knownHosts: String = server.knownHostsLine()) =
+            SftpReceiver(
+                SftpConfig(server.host, server.sshPort, server.userName, SecretName("SFTP_KEY"), SecretName("SFTP_KNOWN_HOSTS")),
+                EnvSecretProvider(mapOf("SFTP_KEY" to client.privateKey, "SFTP_KNOWN_HOSTS" to knownHosts)),
+            )
 
         beforeSpec {
             server.start()
@@ -180,5 +187,31 @@ class SftpIT :
                 (it in setOf(PgpRejection.BAD_SIGNATURE, PgpRejection.INTEGRITY_FAILED, PgpRejection.MALFORMED)) shouldBe true
             }
             Files.exists(workDir.resolve("tampered.parquet")) shouldBe false
+        }
+
+        test("受け取り: 一覧は通常のファイルだけ(名前の順)。ないディレクトリは空。読み出しは最大の大きさまで") {
+            val inbox = "/config/inbox-it"
+            server.execInContainer("sh", "-c", "mkdir -p $inbox/sub && chown -R 1000:1000 $inbox")
+            server.writeFile("$inbox/b.edi.pgp", "bb".toByteArray())
+            server.writeFile("$inbox/a.edi.pgp", "a".toByteArray())
+
+            receiver().list(inbox).ok().map { it.name to it.size } shouldContainExactly listOf("a.edi.pgp" to 1L, "b.edi.pgp" to 2L)
+            receiver().list("/config/none").ok() shouldContainExactly emptyList()
+            receiver().read(inbox, "b.edi.pgp", maxBytes = 2).ok().decodeToString() shouldBe "bb"
+            receiver().read(inbox, "b.edi.pgp", maxBytes = 1).err() shouldBe RemoteRejected("TooLarge")
+            receiver().read(inbox, "../etc/passwd", maxBytes = 10).err().shouldBeInstanceOf<FileTransferMisuse>()
+        }
+
+        test("受け取り: 名前の変更で押さえる(先のディレクトリは作る)。元がなければ false(ほかの処理が先に押さえた)。登録と違う鍵のホストには行かない") {
+            val inbox = "/config/claim-it"
+            server.execInContainer("sh", "-c", "mkdir -p $inbox && chown -R 1000:1000 $inbox")
+            server.writeFile("$inbox/o.edi.pgp", "o".toByteArray())
+
+            receiver().rename(inbox, "o.edi.pgp", "$inbox/processing").ok() shouldBe true
+            receiver().rename(inbox, "o.edi.pgp", "$inbox/processing").ok() shouldBe false
+            receiver().rename("$inbox/processing", "o.edi.pgp", "$inbox/processed", "doc-1-o.edi.pgp").ok() shouldBe true
+            server.list("$inbox/processed") shouldContainExactly listOf("doc-1-o.edi.pgp")
+            val other = "[${server.host}]:${server.sshPort} ssh-ed25519 ${TestKeys.ssh().publicKey.split(" ")[1]}"
+            receiver(other).list(inbox).err() shouldBe RemoteRejected("HostKeyMismatch")
         }
     })

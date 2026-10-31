@@ -28,6 +28,8 @@ public object TestLedgers {
         val validUntil: String = "2099-12-31",
         // 署名の鍵の差し替えの間の旧い公開鍵(秘密情報の名前 → 受け付ける期日)
         val previousPgpPublicKeys: Map<String, String> = emptyMap(),
+        // 書き終わりの判断を stable にするときの、大きさが変わらない時間(ISO 8601。null なら rename と一時名 .part)
+        val stableQuietPeriod: String? = null,
     )
 
     public fun json(vararg partners: Partner): String =
@@ -54,6 +56,9 @@ public object TestLedgers {
                 """"acknowledgements": "/config/from-eiaf"""".takeIf { p.edi },
             )
         val passphrase = p.passphraseSecret?.let { """, "passphraseSecret": "$it"""" }.orEmpty()
+        val completion =
+            p.stableQuietPeriod?.let { """{"method": "stable", "quietPeriod": "$it"}""" }
+                ?: """{"method": "rename", "temporarySuffix": ".part"}"""
         val previous =
             if (p.previousPgpPublicKeys.isEmpty()) {
                 ""
@@ -70,7 +75,7 @@ public object TestLedgers {
                       "hostKey": {"knownHostsSecret": "${p.knownHostsSecret}", "validUntil": "${p.validUntil}"},
                       "clientKey": {"privateKeySecret": "${p.privateKeySecret}"$passphrase, "validUntil": "${p.validUntil}"},
                       "directories": {${directories.joinToString(",")}}
-                      ${if (p.edi) """, "completion": {"method": "rename", "temporarySuffix": ".part"}""" else ""}},
+                      ${if (p.edi) """, "completion": $completion""" else ""}},
              "pgp": {"publicKeySecret": "${p.pgpPublicKeySecret}", "validUntil": "${p.validUntil}"$previous},
              "agreement": {"currencies": ["JPY"],
                            "acknowledgements": {"positiveAperak": ${p.positiveAperak}, "aperakDeadline": "PT4H"},
