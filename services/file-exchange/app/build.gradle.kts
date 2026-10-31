@@ -24,6 +24,7 @@ dependencies {
     implementation(libs.logback.classic)
 
     testImplementation(libs.opentelemetry.sdk.testing)
+    testImplementation(project(":platform:test-support"))
 
     // 統合テスト: PostgreSQL・S3 互換ストレージで、コマンド(migrate・receive・sweep)と常駐(serve)の全体を確かめる
     integrationTestImplementation(project(":platform:test-support"))

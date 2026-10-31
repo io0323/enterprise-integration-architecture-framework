@@ -1,0 +1,61 @@
+# trading-partner.rules.yml の単体テスト(promtool test rules。make alerts-test)。
+# promtool の time() は評価の時刻(UNIX 秒。テストの開始が 0)なので、期限(UNIX 秒)は「開始からの秒数」で書く。
+rule_files:
+  - trading-partner.rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: 残り 30 日を切ったら警告、7 日を切ったら重大、過ぎたら期限切れ。60 日あれば出さない
+    interval: 1m
+    input_series:
+      # 60 日・20 日・3 日・30 秒(評価の時点で過ぎている)
+      - series: 'eia_trading_partner_credential_expiry_seconds{job="b2b-gateway",trading_partner_id="p1",trading_partner_credential="sftp_host_key"}'
+        values: "5184000x20"
+      - series: 'eia_trading_partner_credential_expiry_seconds{job="b2b-gateway",trading_partner_id="p1",trading_partner_credential="sftp_client_key"}'
+        values: "1728000x20"
+      - series: 'eia_trading_partner_credential_expiry_seconds{job="b2b-gateway",trading_partner_id="p1",trading_partner_credential="pgp_public_key"}'
+        values: "259200x20"
+      - series: 'eia_trading_partner_credential_expiry_seconds{job="b2b-gateway",trading_partner_id="p2",trading_partner_credential="pgp_public_key"}'
+        values: "30x20"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: TradingPartnerCredentialExpiringSoon
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: TradingPartnerCredentialExpiringSoon
+        exp_alerts:
+          - exp_labels: { severity: warning, trading_partner_id: p1, trading_partner_credential: sftp_client_key }
+            exp_annotations:
+              summary: "取引先 p1 の sftp_client_key の期限まで 30 日を切った"
+              runbook: docs/runbooks/b2b-partner-credentials.md#期限が近いとき
+      - eval_time: 15m
+        alertname: TradingPartnerCredentialExpiringCritical
+        exp_alerts:
+          - exp_labels: { severity: critical, trading_partner_id: p1, trading_partner_credential: pgp_public_key }
+            exp_annotations:
+              summary: "取引先 p1 の pgp_public_key の期限まで 7 日を切った"
+              runbook: docs/runbooks/b2b-partner-credentials.md#期限が近いとき
+      - eval_time: 15m
+        alertname: TradingPartnerCredentialExpired
+        exp_alerts:
+          - exp_labels: { severity: critical, trading_partner_id: p2, trading_partner_credential: pgp_public_key }
+            exp_annotations:
+              summary: "取引先 p2 の pgp_public_key の期限が切れた"
+              runbook: docs/runbooks/b2b-partner-credentials.md#期限が切れたとき
+
+  - name: 2 つのサービスが同じ鍵の系列を出しても、取引先と鍵の種類ごとに 1 つのアラート(早いほうの期限)
+    interval: 1m
+    input_series:
+      - series: 'eia_trading_partner_credential_expiry_seconds{job="b2b-gateway",trading_partner_id="p1",trading_partner_credential="pgp_public_key"}'
+        values: "1728000x20"
+      - series: 'eia_trading_partner_credential_expiry_seconds{job="file-exchange",trading_partner_id="p1",trading_partner_credential="pgp_public_key"}'
+        values: "1728000x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: TradingPartnerCredentialExpiringSoon
+        exp_alerts:
+          - exp_labels: { severity: warning, trading_partner_id: p1, trading_partner_credential: pgp_public_key }
+            exp_annotations:
+              summary: "取引先 p1 の pgp_public_key の期限まで 30 日を切った"
+              runbook: docs/runbooks/b2b-partner-credentials.md#期限が近いとき

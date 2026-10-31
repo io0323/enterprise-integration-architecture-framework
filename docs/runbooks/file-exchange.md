@@ -4,7 +4,7 @@
 - ファイル授受のサービス `file-exchange`(ADR-0032)。日次の売上ファイル(INT-SALES-004)を受け取り、取引先に送る。
   - 受け取り: バケット `eiaf-file-exchange` の受け口 `inbox/sales-daily/` に `.manifest.json` が届くと、DAG `file-exchange.receive`
     (パーティションはファイルの名前)が動き、検査して `archive/sales-daily/`(合格)か `quarantine/sales-daily/`(不合格)に移す。
-  - 配送: 同じ DAG のステップ `deliver` が、合格のファイルを取引先の台帳(`infra/local/file-exchange/partners.json`)の取引先ごとに、
+  - 配送: 同じ DAG のステップ `deliver` が、合格のファイルを取引先の台帳(`infra/local/b2b/partners.json`。b2b-gateway と共有する 1 つの台帳。ADR-0040)の取引先ごとに、
     PGP で暗号化・署名して SFTP で送る。ローカルの取引先は `sftp-b2b` の `partner01`(`/config/outbox`)。
   - 見回り: 5 分ごとに受け口を見て、受け取り済みの名前で届いたファイルを `quarantine/sales-daily/extra/{番号}/` に移す。
 - 送り手は batch-etl(`docs/runbooks/batch-rerun.md#売上ファイルを置き直すとき`)。
@@ -114,6 +114,6 @@
   `make verify PROFILE=file` が、取引先の側として届いたファイルを GnuPG で復号し、署名と改竄の検知を確かめる(Bouncy Castle と GnuPG の相互運用)。
 
 ## 取引先を足す
-1. 台帳(`partners.json`)に取引先の ID・送るデータセット・送り先・秘密情報の名前を足す。
+1. 台帳(`infra/local/b2b/partners.json`)に取引先を足す。項目(識別子・扱う文書・送り先・鍵とその期日・合意・連絡先)は `docs/runbooks/b2b-partner-credentials.md` の「取引先を足す」を参照。送るデータセットは `documents` に `{"integration": "INT-SALES-004", "direction": "outbound", "dataset": "sales_daily"}` で書く。
 2. 秘密情報(ホスト鍵・クライアントの鍵・PGP の公開鍵)を、上の照合をしてから置く。compose では `<名前>_FILE` で渡す。
 3. file-exchange を再起動する(台帳は起動時に読む。Resilience `sftp-{ID}` とメトリクスも取引先ごとに作られる)。

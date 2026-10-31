@@ -37,6 +37,7 @@ include(
     ":platform:schema-registry",
     ":platform:security",
     ":platform:test-support",
+    ":platform:trading-partner",
     ":platform:webhook",
     ":services:order:domain",
     ":services:order:application",

@@ -1,0 +1,42 @@
+# 取引先の鍵とホスト鍵の有効期限(platform/trading-partner。P12 ③。ADR-0040 §3)のアラート。対応は docs/runbooks/b2b-partner-credentials.md。
+# 単体テストは trading-partner.test.yml(make alerts-test)。
+#
+# - Framework 11.3 のアンチパターン「証明書の期限切れの放置」を防ぐ。期限は台帳の validUntil(TPA で合意した差し替えの期日。SSH の鍵には
+#   期限がないため)と、PGP の公開鍵の中の期限のうち早いほう(eia_trading_partner_credential_expiry_seconds。UNIX 秒)
+# - 台帳を読むサービス(b2b-gateway と、送信を移す P12 ⑦ までは file-exchange)が同じ系列を出すので、取引先と鍵の種類ごとの最小値で判定する
+# - 残り 30 日で警告(取引先と差し替えの日程を決める)、7 日で重大(差し替えを急ぐ)、過ぎたら重大(送受信が失敗する)
+groups:
+  - name: trading-partner
+    rules:
+      - alert: TradingPartnerCredentialExpiringSoon
+        expr: |
+          (min by (trading_partner_id, trading_partner_credential) (eia_trading_partner_credential_expiry_seconds) - time()) < 30 * 86400
+          and
+          (min by (trading_partner_id, trading_partner_credential) (eia_trading_partner_credential_expiry_seconds) - time()) >= 7 * 86400
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "取引先 {{ $labels.trading_partner_id }} の {{ $labels.trading_partner_credential }} の期限まで 30 日を切った"
+          runbook: docs/runbooks/b2b-partner-credentials.md#期限が近いとき
+
+      - alert: TradingPartnerCredentialExpiringCritical
+        expr: |
+          (min by (trading_partner_id, trading_partner_credential) (eia_trading_partner_credential_expiry_seconds) - time()) < 7 * 86400
+          and
+          (min by (trading_partner_id, trading_partner_credential) (eia_trading_partner_credential_expiry_seconds) - time()) > 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "取引先 {{ $labels.trading_partner_id }} の {{ $labels.trading_partner_credential }} の期限まで 7 日を切った"
+          runbook: docs/runbooks/b2b-partner-credentials.md#期限が近いとき
+
+      - alert: TradingPartnerCredentialExpired
+        expr: (min by (trading_partner_id, trading_partner_credential) (eia_trading_partner_credential_expiry_seconds) - time()) <= 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "取引先 {{ $labels.trading_partner_id }} の {{ $labels.trading_partner_credential }} の期限が切れた"
+          runbook: docs/runbooks/b2b-partner-credentials.md#期限が切れたとき

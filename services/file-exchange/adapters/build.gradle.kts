@@ -1,7 +1,5 @@
 plugins {
     id("eia.jvm-library")
-    // 取引先の台帳(JSON。ADR-0032 §8)
-    id("org.jetbrains.kotlin.plugin.serialization")
 }
 
 dependencies {
@@ -12,14 +10,16 @@ dependencies {
     api(project(":platform:batch"))
     // 取引先への送信(SFTP)の Timeout・Retry・Circuit Breaker(ADR-0021)。Resilience は app で ResilienceMetrics から作って渡す
     api(project(":shared:resilience"))
+    // 取引先の台帳(b2b-gateway と共有する 1 つの台帳。ADR-0040)と、鍵の期限のメトリクス
+    api(project(":platform:trading-partner"))
     implementation(libs.kotlinx.coroutines.core)
-    implementation(libs.kotlinx.serialization.json)
     implementation(libs.flyway.core)
     runtimeOnly(libs.flyway.database.postgresql)
     runtimeOnly(libs.postgresql)
 
     // 売上ファイルの形が契約(contracts/files/sales_daily.v1.yaml)と一致することを確かめる
     testImplementation(libs.jackson3.dataformat.yaml)
+    testImplementation(project(":platform:test-support"))
 
     integrationTestImplementation(project(":platform:test-support"))
     integrationTestImplementation(libs.testcontainers.postgresql)

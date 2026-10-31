@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "company": {
+    "name": "EIAF (local)",
+    "edifact": { "id": "4900000000001", "qualifier": "14" },
+    "gln": "4900000000001"
+  },
+  "partners": [
+    {
+      "id": "partner01",
+      "name": "Partner 01 (local)",
+      "edifact": { "id": "4912345000019", "qualifier": "14" },
+      "documents": [
+        { "integration": "INT-SALES-004", "direction": "outbound", "dataset": "sales_daily" },
+        { "integration": "INT-B2B-001", "direction": "inbound" },
+        { "integration": "INT-B2B-002", "direction": "outbound" },
+        { "integration": "INT-B2B-003", "direction": "outbound" }
+      ],
+      "sftp": {
+        "host": "sftp-b2b",
+        "port": 2222,
+        "username": "partner01",
+        "hostKey": { "knownHostsSecret": "PARTNER01_SFTP_KNOWN_HOSTS", "validUntil": "2027-10-31" },
+        "clientKey": { "privateKeySecret": "PARTNER01_SFTP_KEY", "validUntil": "2027-10-31" },
+        "directories": {
+          "outbound": "/config/outbox",
+          "inbound": "/config/to-eiaf",
+          "acknowledgements": "/config/from-eiaf"
+        },
+        "completion": { "method": "rename", "temporarySuffix": ".part" }
+      },
+      "pgp": { "publicKeySecret": "PARTNER01_PGP_PUBLIC_KEY", "validUntil": "2027-10-31" },
+      "agreement": {
+        "currencies": ["JPY"],
+        "acknowledgements": { "positiveAperak": true, "aperakDeadline": "PT4H" },
+        "cutoff": { "time": "15:00", "timeZone": "Asia/Tokyo" },
+        "sla": { "syntaxAcknowledgement": "PT15M" },
+        "resend": "交換の管理番号(UNB の 0020)を変えずに同じ内容を送り直す。内容を直したときは新しい管理番号で送る"
+      },
+      "contacts": [
+        { "role": "business", "name": "Partner 01 Purchasing", "email": "purchasing@partner01.example" },
+        { "role": "operations", "name": "Partner 01 EDI Operations", "email": "edi-ops@partner01.example" },
+        { "role": "incident", "name": "Partner 01 EDI On-call", "email": "edi-oncall@partner01.example", "phone": "+81-3-0000-0000" }
+      ]
+    }
+  ]
+}

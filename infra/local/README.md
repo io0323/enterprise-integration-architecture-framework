@@ -164,7 +164,7 @@ curl -s -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token
 - **イベント・コマンドの受信(ADR-0028)**: サービスの Consumer(`EventConsumer`)の DLQ・遅れは `prometheus/rules/consumer.rules.yml` のアラートで見る(処理が止まった Consumer は「lag があるのにオフセットが進まない」で判定する)。DLQ のメッセージを戻すのは `make dlq-replay ARGS="--topic <topic>.dlq --limit <n> [--execute]"`(既定は dry-run。ホストの `localhost:19092` に接続する)。手順は `docs/runbooks/event-dlq-replay.md`。
 - **ファイル授受(ADR-0032)**: `make up PROFILE=file` が installDist と開発用の PGP の鍵(`make pgp-keys`)の後に、`seaweedfs-init`
   (バケット `eiaf-file-exchange` とバケットポリシー)→ `file-exchange-migrate`(所有者)→ `file-exchange`(アプリのロール)の順に動かす。
-  - 受け口(`inbox/sales-daily/`)のマニフェストの到着で受け取り(archive / quarantine)、合格のファイルを取引先の台帳(`file-exchange/partners.json`。
+  - 受け口(`inbox/sales-daily/`)のマニフェストの到着で受け取り(archive / quarantine)、合格のファイルを取引先の台帳(`b2b/partners.json`。b2b-gateway と共有する 1 つの台帳。ADR-0040。
     秘密情報の名前だけ)の `partner01`(sftp-b2b)に PGP で暗号化・署名して送る。運用者のコマンドは `make file-exchange ARGS="receive <名前> [--restart]"`・`sweep`。
   - sftp-b2b のホスト鍵は `make env` が作り(`secrets/sftp-b2b-host-key`)、起動時に入れる(`sftp/20-host-key.sh`)。file-exchange はこの鍵に固定して接続する。
   - 監視は Grafana の **File — Sales daily**(uid `eiaf-file`)と `prometheus/rules/file-exchange.rules.yml`。手順は `docs/runbooks/file-exchange.md`。

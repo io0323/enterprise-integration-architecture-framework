@@ -18,6 +18,7 @@ import io.eia.fileexchange.domain.ReceivedFile
 import io.eia.platform.batch.StepName
 import io.eia.platform.batch.Trigger
 import io.eia.platform.filetransfer.store.ObjectReader
+import io.eia.platform.testsupport.TestLedgers
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.UnavailableError
 import io.eia.shared.kernel.ok
@@ -168,19 +169,19 @@ class FileExchangeConfigSpec :
             val dir = Files.createTempDirectory("partners")
             try {
                 val file = dir.resolve("partners.json")
-                Files.writeString(
-                    file,
-                    """
-                    {"partners": [{"id": "partner01", "datasets": ["sales_daily"],
-                      "sftp": {"host": "sftp-b2b", "port": 2222, "username": "partner01", "directory": "/config/outbox",
-                               "knownHostsSecret": "P_KNOWN_HOSTS", "privateKeySecret": "P_SSH_KEY"},
-                      "pgp": {"publicKeySecret": "P_PGP_PUBLIC_KEY"}}]}
-                    """.trimIndent(),
-                )
+                Files.writeString(file, TestLedgers.json(TestLedgers.Partner()))
                 val config = FileExchangeConfig.fromEnvironment(minimal + (FileExchangeConfig.PARTNERS_FILE to file.toString())).ok()
                 config.partners().ok().recipients("sales_daily") shouldBe listOf(PartnerId("partner01"))
 
+                // 台帳の形の誤り(必須の項目がない)は、項目ごとに台帳の場所で返す(platform/trading-partner)
                 Files.writeString(file, "{}")
+                config
+                    .partners()
+                    .failure()
+                    .violations
+                    .map { it.field }
+                    .toSet() shouldBe setOf("")
+                Files.writeString(file, "{")
                 config
                     .partners()
                     .failure()
