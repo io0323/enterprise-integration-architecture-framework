@@ -24,11 +24,13 @@ public class SftpServerContainer(
         withEnv("SUDO_ACCESS", "false")
         withEnv("PUID", "1000")
         withEnv("PGID", "1000")
-        // 送り先のディレクトリ(compose の infra/local/sftp/10-directories.sh と同じ)
+        // 送り先のディレクトリ(compose の infra/local/sftp/10-directories.sh と同じ)。B2B の受け取りと応答のディレクトリ(P12。台帳の
+        // sftp.directories の inbound・acknowledgements)も作る
         val script =
             buildString {
                 appendLine("#!/usr/bin/with-contenv bash")
-                appendLine("mkdir -p /config/outbox && chown 1000:1000 /config/outbox")
+                val directories = "/config/outbox /config/to-eiaf /config/from-eiaf"
+                appendLine("mkdir -p $directories && chown 1000:1000 $directories")
                 if (extraSshdConfig != null) appendLine("printf '%s\\n' ${shellQuote(extraSshdConfig)} >> /config/sshd/sshd_config")
             }
         withCopyToContainer(Transferable.of(script, EXECUTABLE), "/custom-cont-init.d/10-test.sh")

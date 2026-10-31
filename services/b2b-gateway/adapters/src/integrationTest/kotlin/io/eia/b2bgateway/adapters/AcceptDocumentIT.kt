@@ -5,6 +5,7 @@ package io.eia.b2bgateway.adapters
 import io.eia.b2bgateway.adapters.archive.ArchiveKeyNames
 import io.eia.b2bgateway.adapters.archive.S3OriginalArchive
 import io.eia.b2bgateway.adapters.crypto.PgpDocumentCrypto
+import io.eia.b2bgateway.adapters.inbox.SftpPartnerInbox
 import io.eia.b2bgateway.adapters.partner.LedgerPartnerAgreements
 import io.eia.b2bgateway.adapters.persistence.B2bGatewaySchema
 import io.eia.b2bgateway.adapters.persistence.JdbcControlReferences
@@ -13,9 +14,11 @@ import io.eia.b2bgateway.adapters.spec.YamlEdiSpecs
 import io.eia.b2bgateway.application.port.inbound.AcceptedDocument
 import io.eia.b2bgateway.application.port.inbound.DocumentOutcome
 import io.eia.b2bgateway.application.port.inbound.IncomingDocument
+import io.eia.b2bgateway.application.port.inbound.PollSummary
 import io.eia.b2bgateway.application.port.outbound.CodeLookup
 import io.eia.b2bgateway.application.port.outbound.CodeMappings
 import io.eia.b2bgateway.application.usecase.AcceptDocumentService
+import io.eia.b2bgateway.application.usecase.PollInboxService
 import io.eia.b2bgateway.application.usecase.ReceiveInterchangeService
 import io.eia.b2bgateway.application.usecase.ReceivingPorts
 import io.eia.b2bgateway.domain.order.CodeResolution
@@ -30,6 +33,8 @@ import io.eia.platform.audit.verify.AuditVerification
 import io.eia.platform.filetransfer.pgp.PgpFiles
 import io.eia.platform.filetransfer.pgp.PgpKeys
 import io.eia.platform.filetransfer.pgp.PgpVerification
+import io.eia.platform.filetransfer.sftp.SftpConfig
+import io.eia.platform.filetransfer.sftp.SftpSender
 import io.eia.platform.filetransfer.store.S3ObjectStore
 import io.eia.platform.filetransfer.store.S3StoreConfig
 import io.eia.platform.security.secret.EnvSecretProvider
@@ -37,6 +42,7 @@ import io.eia.platform.security.secret.Secret
 import io.eia.platform.security.secret.SecretName
 import io.eia.platform.testsupport.InfraImages
 import io.eia.platform.testsupport.SeaweedFsContainer
+import io.eia.platform.testsupport.SftpServerContainer
 import io.eia.platform.testsupport.TestKeys
 import io.eia.platform.testsupport.TestLedgers
 import io.eia.platform.tradingpartner.TradingPartnerLedger
@@ -44,6 +50,8 @@ import io.eia.shared.kernel.DomainError
 import io.eia.shared.kernel.FixedClock
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.ok
+import io.eia.shared.resilience.Resilience
+import io.eia.shared.resilience.ResilienceConfig
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContainExactly
@@ -70,9 +78,26 @@ import java.time.LocalDate
 import java.time.ZoneOffset
 import java.util.HexFormat
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.time.Duration.Companion.seconds
 
 private const val PARTNER = "partner01"
 private const val BUCKET = "eiaf-b2b-originals"
+private const val INBOUND = "/config/to-eiaf"
+
+/** 進め方を決められる時計(書き終わりの判断 stable の静かな時間)。 */
+private class MutableClock(
+    private var now: Instant,
+) : java.time.Clock() {
+    fun advance(duration: Duration) {
+        now = now.plus(duration)
+    }
+
+    override fun instant(): Instant = now
+
+    override fun getZone(): java.time.ZoneId = ZoneOffset.UTC
+
+    override fun withZone(zone: java.time.ZoneId): java.time.Clock = this
+}
 
 private fun sha256(bytes: ByteArray): String = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes))
 
@@ -147,6 +172,9 @@ class AcceptDocumentIT :
     FunSpec({
         val postgres = PostgreSQLContainer(InfraImages.get("POSTGRES_IMAGE").asCompatibleSubstituteFor("postgres"))
         val seaweed = SeaweedFsContainer(mapOf("eiaf" to listOf("Admin", "Read", "Write", "List")))
+        // 取引先の SFTP(受け取りのディレクトリ /config/to-eiaf。P12 ④b1)
+        val sshKey = TestKeys.ssh()
+        val sftp = SftpServerContainer(PARTNER, sshKey.publicKey)
         val workDir: Path = Files.createTempDirectory("b2b-accept-it")
         val ownerPassword = HexFormat.of().formatHex(ByteArray(16).also(SecureRandom()::nextBytes))
         val appPassword = HexFormat.of().formatHex(ByteArray(16).also(SecureRandom()::nextBytes))
@@ -184,6 +212,8 @@ class AcceptDocumentIT :
                     "B2B_PGP_SECRET_KEY" to ours.secretKey,
                     "B2B_PGP_PASSPHRASE" to ours.passphrase,
                     "B2B_ARCHIVE_PGP_PUBLIC_KEY" to archiveKey.publicKey,
+                    "P01_SSH_KEY" to sshKey.privateKey,
+                    "P01_KNOWN_HOSTS" to sftp.knownHostsLine(),
                 ),
             )
         }
@@ -236,6 +266,38 @@ class AcceptDocumentIT :
                 records = receipts,
                 clock = FixedClock(kotlin.time.Instant.parse(clock.instant().toString())),
             )
+        }
+
+        /** 取引先の SFTP の受け取りのディレクトリ(台帳の接続先はテストのコンテナ。[clock] は書き終わりの判断 stable の時刻)。 */
+        fun inbox(
+            stableQuietPeriod: String? = null,
+            clock: java.time.Clock = java.time.Clock.systemUTC(),
+        ): SftpPartnerInbox {
+            val ledger =
+                (
+                    TradingPartnerLedger.parse(
+                        TestLedgers.json(TestLedgers.Partner(host = sftp.host, port = sftp.sshPort, stableQuietPeriod = stableQuietPeriod)),
+                    ) as Result.Ok
+                ).value
+            val resilience = Resilience("sftp-$PARTNER", ResilienceConfig(attemptTimeout = 30.seconds, retry = null))
+            return SftpPartnerInbox(ledger, secrets(), mapOf(PARTNER to resilience), clock = clock)
+        }
+
+        suspend fun poll(inbox: SftpPartnerInbox = inbox()): PollSummary =
+            PollInboxService(inbox, accept())(PARTNER).shouldBeInstanceOf<Result.Ok<PollSummary>>().value
+
+        /** 取引先の側: 受け取りのディレクトリに置く(SFTP の利用者として。一時名 .part で書いてから正式名に変える)。 */
+        fun place(
+            name: String,
+            content: ByteArray,
+        ) {
+            val sender =
+                SftpSender(
+                    SftpConfig(sftp.host, sftp.sshPort, PARTNER, SecretName("P01_SSH_KEY"), SecretName("P01_KNOWN_HOSTS")),
+                    secrets(),
+                )
+            val file = Files.createTempFile(workDir, "place", ".pgp").also { Files.write(it, content) }
+            (sender.send(file, INBOUND, name) as Result.Ok).value
         }
 
         /** 取引先の側: [signer] の鍵で署名し、自社の公開鍵あてに暗号化する。 */
@@ -300,6 +362,7 @@ class AcceptDocumentIT :
         beforeSpec {
             postgres.start()
             seaweed.start()
+            sftp.start()
             dataSource(postgres.databaseName, postgres.username, postgres.password).connection.use { c ->
                 c.createStatement().use { s ->
                     s.execute("CREATE ROLE b2b_gateway LOGIN PASSWORD '$ownerPassword'")
@@ -445,6 +508,49 @@ class AcceptDocumentIT :
                 .outcome shouldBe DocumentOutcome.UNREADABLE
             receive(sealedByPartner(orders("ICR6003")), accept(acceptOldUntil = LocalDate.parse("2026-11-30"))).outcome shouldBe
                 DocumentOutcome.CHECKED
+        }
+
+        test("見回り(rename): 書き終わった正式名のファイルだけを押さえて受け付け、処理済みに移す。一時名(.part)のファイルは拾わない") {
+            place("orders-p1.edi.pgp", sealedByPartner(orders("ICR7001")))
+            sftp.writeFile("$INBOUND/orders-p2.edi.pgp.part", "partial".encodeToByteArray())
+
+            val summary = poll()
+
+            summary.failed.shouldBeEmpty()
+            val accepted = summary.accepted.single()
+            accepted.outcome shouldBe DocumentOutcome.CHECKED
+            sftp.list(INBOUND).filter { it.endsWith(".pgp") || it.endsWith(".part") } shouldContainExactly listOf("orders-p2.edi.pgp.part")
+            sftp.list("$INBOUND/processed") shouldContainExactly listOf("${accepted.documentId}-orders-p1.edi.pgp")
+            sftp.list("$INBOUND/processing").shouldBeEmpty()
+            query(
+                "SELECT file_name FROM b2b.received_document WHERE id = ?::uuid",
+                accepted.documentId,
+            ) { it.getString(1) } shouldContainExactly
+                listOf("orders-p1.edi.pgp")
+            sftp.execInContainer("rm", "$INBOUND/orders-p2.edi.pgp.part")
+        }
+
+        test("見回り: 前の処理が押さえたまま落ちたファイル(処理中のディレクトリ)を続きから処理する。読めない文書も記録して処理済みにする") {
+            sftp.execInContainer("sh", "-c", "mkdir -p $INBOUND/processing && chown 1000:1000 $INBOUND/processing")
+            sftp.writeFile("$INBOUND/processing/orders-left.edi.pgp", sealedByPartner(orders("ICR7101")))
+            place("garbage.edi.pgp", "NOT A PGP MESSAGE".encodeToByteArray())
+
+            val summary = poll()
+
+            summary.accepted.map { it.outcome }.toSet() shouldBe setOf(DocumentOutcome.CHECKED, DocumentOutcome.UNREADABLE)
+            sftp.list("$INBOUND/processing").shouldBeEmpty()
+            summary.accepted.forEach { audit(it.documentId).single() }
+        }
+
+        test("見回り(stable): 前の見回りから大きさと更新の時刻が変わらず、静かな時間が経ったファイルだけを拾う") {
+            val clock = MutableClock(Instant.now())
+            val stable = inbox(stableQuietPeriod = "PT60S", clock = clock)
+            place("orders-s1.edi.pgp", sealedByPartner(orders("ICR7201")))
+
+            poll(stable).accepted.shouldBeEmpty() // 初めて見たファイル
+            poll(stable).accepted.shouldBeEmpty() // 変わっていないが、静かな時間が経っていない
+            clock.advance(Duration.ofSeconds(61))
+            poll(stable).accepted.map { it.outcome } shouldContainExactly listOf(DocumentOutcome.CHECKED)
         }
 
         test("受け取ったすべての文書(読めない文書を含む)が監査に 1 件ずつ記録され、ハッシュチェーンの検証が通る(DoD)") {

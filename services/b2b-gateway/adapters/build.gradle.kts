@@ -13,6 +13,8 @@ dependencies {
     api(project(":platform:file-transfer"))
     // 受け取りの記録と同じトランザクションで監査を記録する(ADR-0017)
     api(project(":platform:audit"))
+    // 取引先の SFTP の Timeout・Retry・Circuit Breaker(取引先ごと。ADR-0021)。Resilience は app で ResilienceMetrics から作って渡す
+    api(project(":shared:resilience"))
     implementation(project(":platform:observability"))
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.flyway.core)
