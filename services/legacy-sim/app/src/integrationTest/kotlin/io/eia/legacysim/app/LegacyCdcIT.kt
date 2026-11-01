@@ -5,6 +5,7 @@ package io.eia.legacysim.app
 import io.apicurio.registry.serde.avro.AvroKafkaDeserializer
 import io.eia.platform.testsupport.ApicurioRegistryContainer
 import io.eia.platform.testsupport.InfraImages
+import io.eia.platform.testsupport.KafkaBrokerContainer
 import io.eia.platform.testsupport.KafkaConnectContainer
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeIn
@@ -27,7 +28,6 @@ import org.apache.kafka.clients.consumer.KafkaConsumer
 import org.apache.kafka.common.serialization.ByteArrayDeserializer
 import org.postgresql.ds.PGSimpleDataSource
 import org.testcontainers.containers.Network
-import org.testcontainers.kafka.KafkaContainer
 import org.testcontainers.postgresql.PostgreSQLContainer
 import java.net.URI
 import java.net.http.HttpRequest
@@ -81,7 +81,7 @@ class LegacyCdcIT :
                 .withNetworkAliases("postgres")
         val registry = ApicurioRegistryContainer().withNetwork(network).withNetworkAliases("apicurio")
         val kafka =
-            KafkaContainer(InfraImages.get("KAFKA_IMAGE"))
+            KafkaBrokerContainer()
                 .withNetwork(network)
                 .withListener("kafka:19092")
                 .withEnv("KAFKA_AUTO_CREATE_TOPICS_ENABLE", "false")

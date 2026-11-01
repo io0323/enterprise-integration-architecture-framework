@@ -15,6 +15,7 @@ import io.eia.platform.schemaregistry.SchemaSubject
 import io.eia.platform.schemaregistry.WriterSchemas
 import io.eia.platform.testsupport.ApicurioRegistryContainer
 import io.eia.platform.testsupport.InfraImages
+import io.eia.platform.testsupport.KafkaBrokerContainer
 import io.eia.shared.kernel.Result
 import io.kotest.assertions.fail
 import io.kotest.core.spec.style.FunSpec
@@ -41,7 +42,6 @@ import org.apache.kafka.clients.producer.ProducerRecord
 import org.apache.kafka.common.TopicPartition
 import org.apache.kafka.common.serialization.ByteArrayDeserializer
 import org.postgresql.ds.PGSimpleDataSource
-import org.testcontainers.kafka.KafkaContainer
 import org.testcontainers.postgresql.PostgreSQLContainer
 import java.security.SecureRandom
 import java.sql.SQLException
@@ -89,7 +89,7 @@ class EventConsumerIT :
     FunSpec({
         val registry = ApicurioRegistryContainer().also { it.start() }
         val kafka =
-            KafkaContainer(InfraImages.get("KAFKA_IMAGE"))
+            KafkaBrokerContainer()
                 .withEnv("KAFKA_HEAP_OPTS", "-Xms384m -Xmx384m")
                 .withStartupTimeout(Duration.ofMinutes(3))
                 .also { it.start() }

@@ -26,7 +26,7 @@ import io.eia.platform.schemaregistry.SchemaIdBook
 import io.eia.platform.schemaregistry.SchemaRegistryConfig
 import io.eia.platform.schemaregistry.SchemaSubject
 import io.eia.platform.schemaregistry.WriterSchemas
-import io.eia.platform.testsupport.InfraImages
+import io.eia.platform.testsupport.KafkaBrokerContainer
 import io.eia.platform.testsupport.KafkaConnectContainer
 import io.eia.shared.kernel.Result
 import io.kotest.assertions.fail
@@ -49,7 +49,6 @@ import org.apache.kafka.clients.producer.KafkaProducer
 import org.apache.kafka.common.serialization.ByteArrayDeserializer
 import org.apache.kafka.common.serialization.StringDeserializer
 import org.testcontainers.containers.Network
-import org.testcontainers.kafka.KafkaContainer
 import java.net.URI
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
@@ -88,7 +87,7 @@ class OrderSagaIT :
         val network = Network.newNetwork()
         val environment = AppEnvironment(network)
         val kafka =
-            KafkaContainer(InfraImages.get("KAFKA_IMAGE"))
+            KafkaBrokerContainer()
                 .withNetwork(network)
                 .withListener("kafka:19092")
                 .withEnv("KAFKA_AUTO_CREATE_TOPICS_ENABLE", "false")

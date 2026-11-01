@@ -462,6 +462,19 @@ internal object ArchitectureRules {
             .filter { RESILIENCE_CONSTRUCTOR.containsMatchIn(it.code.replace(IMPORT_OR_PACKAGE_LINE, "").replace(COMMENT, "")) }
             .map { Violation(RESILIENCE_RULE, it.path, "Resilience(...) を直接作っています(ResilienceMetrics.resilience(...) で作る)") }
 
+    private const val KAFKA_CONTAINER_RULE = "Kafka のテスト用コンテナの作り方"
+    private val KAFKA_CONTAINER_CONSTRUCTOR = Regex("""(?<![\w.])(org\.testcontainers\.kafka\.)?KafkaContainer\s*\(""")
+
+    /**
+     * 統合テストの Kafka は platform/test-support の `KafkaBrokerContainer` で立て、Testcontainers の `KafkaContainer(...)` を直接作らない
+     * (起動のスクリプトの実行が `Text file busy` で落ちる競合を避ける。#170)。テストのソースセットも含めて検査する。
+     */
+    fun kafkaContainerOnlyThroughTestSupport(codeBase: CodeBase): List<Violation> =
+        codeBase.files
+            .filter { !it.path.startsWith(TEST_SUPPORT_PATH) }
+            .filter { KAFKA_CONTAINER_CONSTRUCTOR.containsMatchIn(it.code.replace(IMPORT_OR_PACKAGE_LINE, "").replace(COMMENT, "")) }
+            .map { Violation(KAFKA_CONTAINER_RULE, it.path, "KafkaContainer(...) を直接作っています(KafkaBrokerContainer を使う。#170)") }
+
     /** [file] が [packageName] を import または完全修飾名で参照していれば、その違反。 */
     private fun packageUses(
         file: SourceFile,
