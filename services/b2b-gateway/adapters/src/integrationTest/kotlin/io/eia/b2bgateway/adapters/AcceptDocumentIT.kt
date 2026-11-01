@@ -4,10 +4,13 @@ package io.eia.b2bgateway.adapters
 
 import io.eia.b2bgateway.adapters.archive.ArchiveKeyNames
 import io.eia.b2bgateway.adapters.archive.S3OriginalArchive
+import io.eia.b2bgateway.adapters.archive.S3OriginalReader
 import io.eia.b2bgateway.adapters.crypto.PgpDocumentCrypto
 import io.eia.b2bgateway.adapters.inbox.SftpPartnerInbox
+import io.eia.b2bgateway.adapters.outbox.SftpPartnerOutbox
 import io.eia.b2bgateway.adapters.partner.LedgerPartnerAgreements
 import io.eia.b2bgateway.adapters.persistence.B2bGatewaySchema
+import io.eia.b2bgateway.adapters.persistence.JdbcAcknowledgements
 import io.eia.b2bgateway.adapters.persistence.JdbcControlReferences
 import io.eia.b2bgateway.adapters.persistence.JdbcReceipts
 import io.eia.b2bgateway.adapters.spec.YamlEdiSpecs
@@ -15,12 +18,14 @@ import io.eia.b2bgateway.application.port.inbound.AcceptedDocument
 import io.eia.b2bgateway.application.port.inbound.DocumentOutcome
 import io.eia.b2bgateway.application.port.inbound.IncomingDocument
 import io.eia.b2bgateway.application.port.inbound.PollSummary
+import io.eia.b2bgateway.application.port.inbound.SendSummary
 import io.eia.b2bgateway.application.port.outbound.CodeLookup
 import io.eia.b2bgateway.application.port.outbound.CodeMappings
 import io.eia.b2bgateway.application.usecase.AcceptDocumentService
 import io.eia.b2bgateway.application.usecase.PollInboxService
 import io.eia.b2bgateway.application.usecase.ReceiveInterchangeService
 import io.eia.b2bgateway.application.usecase.ReceivingPorts
+import io.eia.b2bgateway.application.usecase.SendAcknowledgementsService
 import io.eia.b2bgateway.domain.order.CodeResolution
 import io.eia.b2bgateway.domain.order.InternalItem
 import io.eia.b2bgateway.domain.order.ItemCode
@@ -55,7 +60,9 @@ import io.eia.shared.resilience.ResilienceConfig
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContainExactly
+import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.postgresql.ds.PGSimpleDataSource
@@ -83,6 +90,7 @@ import kotlin.time.Duration.Companion.seconds
 private const val PARTNER = "partner01"
 private const val BUCKET = "eiaf-b2b-originals"
 private const val INBOUND = "/config/to-eiaf"
+private const val ACKNOWLEDGEMENTS = "/config/from-eiaf"
 
 /** 進め方を決められる時計(書き終わりの判断 stable の静かな時間)。 */
 private class MutableClock(
@@ -359,6 +367,31 @@ class AcceptDocumentIT :
                 documentId,
             ) { "${it.getString(1)} ${it.getString(2)} ${it.getString(3)} ${it.getString(4)}" }
 
+        /** 応答の送信(送信の仕組みの送り先はテストのコンテナ)。 */
+        suspend fun sendAcknowledgements(): SendSummary {
+            val partnerAtContainer = TestLedgers.Partner(host = sftp.host, port = sftp.sshPort)
+            val ledger = (TradingPartnerLedger.parse(TestLedgers.json(partnerAtContainer)) as Result.Ok).value
+            val secrets = secrets()
+            val store =
+                S3ObjectStore(
+                    S3StoreConfig(URI(seaweed.endpoint), BUCKET, SecretName("IT_S3_ACCESS_KEY"), SecretName("IT_S3_SECRET_KEY")),
+                    secrets,
+                )
+            val crypto =
+                PgpDocumentCrypto(ledger, secrets, SecretName("B2B_PGP_SECRET_KEY"), SecretName("B2B_PGP_PASSPHRASE"), workDir)
+            val resilience = Resilience("sftp-$PARTNER", ResilienceConfig(attemptTimeout = 30.seconds, retry = null))
+            val outbox = SftpPartnerOutbox(ledger, secrets, mapOf(PARTNER to resilience), crypto, workDir)
+            val service = SendAcknowledgementsService(JdbcAcknowledgements(app, AuditLog()), S3OriginalReader(store), outbox, ::sha256)
+            return service(PARTNER).shouldBeInstanceOf<Result.Ok<SendSummary>>().value
+        }
+
+        /** 受け取りの記録の応答(ID・種類・原本の参照)。 */
+        fun acknowledgements(documentId: String): List<Triple<String, String, String>> =
+            query(
+                "SELECT id::text, kind, original_ref FROM b2b.acknowledgement WHERE document_id = ?::uuid ORDER BY kind",
+                documentId,
+            ) { Triple(it.getString(1), it.getString(2), it.getString(3)) }
+
         beforeSpec {
             postgres.start()
             seaweed.start()
@@ -553,7 +586,62 @@ class AcceptDocumentIT :
             poll(stable).accepted.map { it.outcome } shouldContainExactly listOf(DocumentOutcome.CHECKED)
         }
 
-        test("受け取ったすべての文書(読めない文書を含む)が監査に 1 件ずつ記録され、ハッシュチェーンの検証が通る(DoD)") {
+        test("応答の送信: 送信待ちの CONTRL・APERAK を、保管した原本の暗号文のまま応答のディレクトリに送る。取引先は復号して自社の署名を確かめられる") {
+            val rejected = receive(sealedByPartner(orders("ICR8001", item = "4999999999999")))
+            val acks = acknowledgements(rejected.documentId)
+
+            val summary = sendAcknowledgements()
+
+            summary.failed.shouldBeEmpty()
+            acks.map { it.second } shouldContainExactly listOf("APERAK", "CONTRL")
+            acks.forEach { (id, kind, ref) ->
+                val remote = sftp.readFile("$ACKNOWLEDGEMENTS/${kind.lowercase()}-$id.edi.pgp").shouldNotBeNull()
+                remote shouldBe stored(ref)
+                open(remote, keyOwner = partner, signer = ours).decodeToString() shouldContain "+$kind:D:"
+            }
+            query("SELECT count(*) FROM b2b.acknowledgement WHERE state = 'PENDING'") { it.getLong(1) }.single() shouldBe 0L
+            val audited =
+                query(
+                    "SELECT a.outcome, a.destination, a.payload_ref, a.details->>'remote_name', a.details->>'already_present' " +
+                        "FROM audit.audit_log a JOIN b2b.acknowledgement k ON a.target_id = k.id::text " +
+                        "WHERE a.action = 'b2b.ack.send' AND k.document_id = ?::uuid ORDER BY k.kind",
+                    rejected.documentId,
+                ) { (1..5).joinToString(" ") { i -> it.getString(i) } }
+            audited shouldContainExactly
+                acks.map { (id, kind, ref) -> "success partner:$PARTNER $ref ${kind.lowercase()}-$id.edi.pgp false" }
+        }
+
+        test("応答の送信: 取引先の側にすでに同じ正式名があれば(前の送信が記録の前に落ちた)、上書きせずに送った印を付ける") {
+            val accepted = receive(sealedByPartner(orders("ICR8101")))
+            val (id, kind, _) = acknowledgements(accepted.documentId).single()
+            val remote = "$ACKNOWLEDGEMENTS/${kind.lowercase()}-$id.edi.pgp"
+            sftp.writeFile(remote, "sent before the crash".encodeToByteArray())
+
+            sendAcknowledgements().sent shouldContainExactly listOf(id)
+
+            sftp.readFile(remote)?.decodeToString() shouldBe "sent before the crash"
+            query("SELECT state, already_present FROM b2b.acknowledgement WHERE id = ?::uuid", id) {
+                "${it.getString(1)} ${it.getBoolean(2)}"
+            }.single() shouldBe "SENT true"
+        }
+
+        test("応答の送信: 送り直しの交換には、前の応答と同じ原本を、新しい正式名でもう一度送る") {
+            val plain = orders("ICR8201")
+            val first = receive(sealedByPartner(plain))
+            sendAcknowledgements()
+            val resent = receive(sealedByPartner(plain))
+            resent.outcome shouldBe DocumentOutcome.RESENT
+
+            sendAcknowledgements().failed.shouldBeEmpty()
+
+            val before = acknowledgements(first.documentId).single()
+            val again = acknowledgements(resent.documentId).single()
+            again.first shouldNotBe before.first
+            again.third shouldBe before.third
+            sftp.readFile("$ACKNOWLEDGEMENTS/contrl-${again.first}.edi.pgp") shouldBe stored(before.third)
+        }
+
+        test("受け取ったすべての文書(読めない文書を含む)と送った応答が監査に 1 件ずつ記録され、ハッシュチェーンの検証が通る(DoD)") {
             val documents = query("SELECT count(*) FROM b2b.received_document") { it.getLong(1) }.single()
             val audited = query("SELECT count(*) FROM audit.audit_log WHERE action = 'b2b.document.receive'") { it.getLong(1) }.single()
             val unaudited =
@@ -563,9 +651,19 @@ class AcceptDocumentIT :
                         "WHERE a.target_id = d.id::text AND a.payload_sha256 = d.original_sha256)",
                 ) { it.getLong(1) }.single()
 
+            val sent = query("SELECT count(*) FROM b2b.acknowledgement WHERE state = 'SENT'") { it.getLong(1) }.single()
+            val sentAudited =
+                query(
+                    "SELECT count(*) FROM b2b.acknowledgement k JOIN audit.audit_log a ON a.target_id = k.id::text " +
+                        "WHERE a.action = 'b2b.ack.send' AND a.payload_sha256 = k.original_sha256",
+                ) { it.getLong(1) }.single()
+            val total = query("SELECT count(*) FROM audit.audit_log") { it.getLong(1) }.single()
+
             (documents > 0) shouldBe true
             audited shouldBe documents
             unaudited shouldBe 0L
+            (sent > 0) shouldBe true
+            sentAudited shouldBe sent
             val report =
                 app.connection.use { connection ->
                     connection.autoCommit = true
@@ -573,6 +671,6 @@ class AcceptDocumentIT :
                 }
             report.shouldBeInstanceOf<Result.Ok<*>>()
             (report as Result.Ok).value.findings.shouldBeEmpty()
-            report.value.recordCount shouldBe audited
+            report.value.recordCount shouldBe total
         }
     })

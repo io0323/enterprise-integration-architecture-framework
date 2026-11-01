@@ -21,7 +21,6 @@ import io.eia.platform.observability.context.CurrentTrace
 import io.eia.shared.kernel.DomainError
 import io.eia.shared.kernel.Result
 import java.sql.Connection
-import java.sql.SQLException
 import java.sql.Timestamp
 import java.sql.Types
 import java.util.UUID
@@ -254,12 +253,6 @@ public class JdbcReceipts(
             }
         }
     }
-
-    /** 監査を追記できなかった(トランザクションを巻き戻す。理由は監査のエラーのコードだけ。一時的な失敗は、やり直せる SQLSTATE にする)。 */
-    private class AuditFailed(
-        code: String,
-        retryable: Boolean,
-    ) : SQLException("監査の記録に失敗しました($code)", if (retryable) "40001" else "XX000")
 
     private companion object {
         const val ACTION = "b2b.document.receive"
