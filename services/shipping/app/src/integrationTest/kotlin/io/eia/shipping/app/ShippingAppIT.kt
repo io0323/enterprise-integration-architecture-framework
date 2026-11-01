@@ -20,6 +20,7 @@ import io.eia.platform.schemaregistry.SchemaSubject
 import io.eia.platform.schemaregistry.WriterSchemas
 import io.eia.platform.testsupport.ApicurioRegistryContainer
 import io.eia.platform.testsupport.InfraImages
+import io.eia.platform.testsupport.KafkaBrokerContainer
 import io.eia.platform.testsupport.KafkaConnectContainer
 import io.eia.shared.kernel.Result
 import io.eia.shipping.adapters.inbound.AddressV1
@@ -56,7 +57,6 @@ import org.apache.kafka.common.serialization.ByteArrayDeserializer
 import org.apache.kafka.common.serialization.StringDeserializer
 import org.postgresql.ds.PGSimpleDataSource
 import org.testcontainers.containers.Network
-import org.testcontainers.kafka.KafkaContainer
 import org.testcontainers.postgresql.PostgreSQLContainer
 import java.net.URI
 import java.net.http.HttpRequest
@@ -98,7 +98,7 @@ class ShippingAppIT :
                 .withNetworkAliases("postgres")
         val registry = ApicurioRegistryContainer()
         val kafka =
-            KafkaContainer(InfraImages.get("KAFKA_IMAGE"))
+            KafkaBrokerContainer()
                 .withNetwork(network)
                 .withListener("kafka:19092")
                 .withEnv("KAFKA_AUTO_CREATE_TOPICS_ENABLE", "false")

@@ -97,6 +97,10 @@ class ArchitectureSpec :
             ArchitectureRules.resilienceOnlyThroughMetrics(codeBase).assertNone()
         }
 
+        test("統合テストの Kafka は KafkaBrokerContainer で立てる(#170)") {
+            ArchitectureRules.kafkaContainerOnlyThroughTestSupport(codeBase).assertNone()
+        }
+
         test("services の domain と application は Canonical Model に依存しない(ADR-0010 Decision 7)") {
             ArchitectureRules.canonicalModelOutsideDomainAndApplication(codeBase).assertNone()
         }

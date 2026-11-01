@@ -7,7 +7,6 @@ import io.kotest.matchers.collections.shouldContainAll
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import org.testcontainers.containers.Network
-import org.testcontainers.kafka.KafkaContainer
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -50,7 +49,7 @@ class InfraContainersIT :
 
         test("Kafka Connect: compose と同じイメージに、Debezium の Postgres コネクタ・EventRouter・BinaryDataConverter・Filter がある") {
             Network.newNetwork().use { network ->
-                KafkaContainer(InfraImages.get("KAFKA_IMAGE"))
+                KafkaBrokerContainer()
                     .withNetwork(network)
                     .withListener("kafka:19092")
                     .withStartupTimeout(Duration.ofMinutes(3))

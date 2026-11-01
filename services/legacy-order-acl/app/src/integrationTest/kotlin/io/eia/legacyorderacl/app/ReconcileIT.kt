@@ -30,6 +30,7 @@ import io.eia.platform.schemaregistry.SchemaRegistryConfig
 import io.eia.platform.schemaregistry.WriterSchemas
 import io.eia.platform.testsupport.ApicurioRegistryContainer
 import io.eia.platform.testsupport.InfraImages
+import io.eia.platform.testsupport.KafkaBrokerContainer
 import io.eia.platform.testsupport.KafkaConnectContainer
 import io.eia.shared.kernel.DomainError
 import io.eia.shared.kernel.Result
@@ -66,7 +67,6 @@ import org.apache.kafka.common.TopicPartition
 import org.apache.kafka.common.serialization.ByteArraySerializer
 import org.postgresql.ds.PGSimpleDataSource
 import org.testcontainers.containers.Network
-import org.testcontainers.kafka.KafkaContainer
 import org.testcontainers.postgresql.PostgreSQLContainer
 import java.io.ByteArrayOutputStream
 import java.net.URI
@@ -112,7 +112,7 @@ class ReconcileIT :
                 .withNetworkAliases("postgres")
         val registry = ApicurioRegistryContainer().withNetwork(network).withNetworkAliases("apicurio")
         val kafka =
-            KafkaContainer(InfraImages.get("KAFKA_IMAGE"))
+            KafkaBrokerContainer()
                 .withNetwork(network)
                 .withListener("kafka:19092")
                 .withEnv("KAFKA_AUTO_CREATE_TOPICS_ENABLE", "false")

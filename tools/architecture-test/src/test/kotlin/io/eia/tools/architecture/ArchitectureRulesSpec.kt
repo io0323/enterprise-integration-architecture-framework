@@ -169,6 +169,11 @@ class ArchitectureRulesSpec :
                     listOf("CreatesResilience.kt", "CreatesResilienceQualified.kt")
             }
 
+            test("test-support の外で KafkaContainer(...) を直接作る(テストのソースセット・完全修飾名を含む)") {
+                ArchitectureRules.kafkaContainerOnlyThroughTestSupport(violations).fileNames() shouldContainExactlyInAnyOrder
+                    listOf("CreatesKafkaContainerIT.kt", "CreatesKafkaContainerQualifiedIT.kt")
+            }
+
             test("services の domain と application(テストを含む)で Canonical Model を import・完全修飾名で参照する") {
                 val found = ArchitectureRules.canonicalModelOutsideDomainAndApplication(violations)
                 found.fileNames() shouldContainExactlyInAnyOrder
@@ -215,6 +220,7 @@ class ArchitectureRulesSpec :
                 ArchitectureRules.hivemqOnlyInIotBridge(compliant).shouldBeEmpty()
                 ArchitectureRules.canonicalModelOutsideDomainAndApplication(compliant).shouldBeEmpty()
                 ArchitectureRules.resilienceOnlyThroughMetrics(compliant).shouldBeEmpty()
+                ArchitectureRules.kafkaContainerOnlyThroughTestSupport(compliant).shouldBeEmpty()
                 ArchitectureRules.messagingLibrariesOnlyInAllowedModules(compliant).shouldBeEmpty()
                 ArchitectureRules.awsSdkOnlyInAllowedModules(compliant).shouldBeEmpty()
                 ArchitectureRules.parquetOnlyInFileTransfer(compliant).shouldBeEmpty()

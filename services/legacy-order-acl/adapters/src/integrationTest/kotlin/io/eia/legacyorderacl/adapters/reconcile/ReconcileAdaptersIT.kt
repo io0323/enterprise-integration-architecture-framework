@@ -20,6 +20,7 @@ import io.eia.platform.schemaregistry.SchemaRegistryConfig
 import io.eia.platform.schemaregistry.WriterSchemas
 import io.eia.platform.testsupport.ApicurioRegistryContainer
 import io.eia.platform.testsupport.InfraImages
+import io.eia.platform.testsupport.KafkaBrokerContainer
 import io.eia.shared.kernel.DomainError
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.UnavailableError
@@ -43,7 +44,6 @@ import org.apache.kafka.clients.producer.ProducerRecord
 import org.apache.kafka.common.TopicPartition
 import org.apache.kafka.common.serialization.ByteArraySerializer
 import org.postgresql.ds.PGSimpleDataSource
-import org.testcontainers.kafka.KafkaContainer
 import org.testcontainers.postgresql.PostgreSQLContainer
 import java.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -75,7 +75,7 @@ class ReconcileAdaptersIT :
             PostgreSQLContainer(InfraImages.get("POSTGRES_IMAGE").asCompatibleSubstituteFor("postgres"))
                 .withCommand("postgres", "-c", "wal_level=logical")
         val kafka =
-            KafkaContainer(InfraImages.get("KAFKA_IMAGE"))
+            KafkaBrokerContainer()
                 .withEnv("KAFKA_AUTO_CREATE_TOPICS_ENABLE", "false")
                 .withEnv("KAFKA_HEAP_OPTS", "-Xms384m -Xmx384m")
                 .withStartupTimeout(Duration.ofMinutes(3))

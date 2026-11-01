@@ -26,6 +26,7 @@ import io.eia.platform.schemaregistry.SchemaIdBook
 import io.eia.platform.schemaregistry.SchemaRegistryConfig
 import io.eia.platform.testsupport.ApicurioRegistryContainer
 import io.eia.platform.testsupport.InfraImages
+import io.eia.platform.testsupport.KafkaBrokerContainer
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.getOrNull
 import io.eia.shared.resilience.Resilience
@@ -72,7 +73,6 @@ import org.testcontainers.containers.GenericContainer
 import org.testcontainers.containers.PostgreSQLContainer
 import org.testcontainers.containers.wait.strategy.Wait
 import org.testcontainers.images.builder.Transferable
-import org.testcontainers.kafka.KafkaContainer
 import java.time.Duration
 import kotlin.random.Random
 import kotlin.time.Duration.Companion.seconds
@@ -137,7 +137,7 @@ class IotBridgeIT :
                 .withExposedPorts(MQTT_PORT)
                 .waitingFor(Wait.forLogMessage(".*mosquitto version .* running.*", 1))
         val kafka =
-            KafkaContainer(InfraImages.get("KAFKA_IMAGE"))
+            KafkaBrokerContainer()
                 .withEnv("KAFKA_AUTO_CREATE_TOPICS_ENABLE", "false")
                 .withEnv("KAFKA_HEAP_OPTS", "-Xms384m -Xmx384m")
                 .withStartupTimeout(Duration.ofMinutes(3))

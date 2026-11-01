@@ -14,7 +14,7 @@ import io.eia.platform.schemaregistry.SchemaRegistryConfig
 import io.eia.platform.schemaregistry.SchemaSubject
 import io.eia.platform.schemaregistry.WriterSchemas
 import io.eia.platform.testsupport.ApicurioRegistryContainer
-import io.eia.platform.testsupport.InfraImages
+import io.eia.platform.testsupport.KafkaBrokerContainer
 import io.eia.shared.kernel.Result
 import io.kotest.assertions.fail
 import io.kotest.core.spec.style.FunSpec
@@ -36,7 +36,6 @@ import org.apache.kafka.clients.producer.ProducerConfig
 import org.apache.kafka.clients.producer.ProducerRecord
 import org.apache.kafka.common.serialization.ByteArrayDeserializer
 import org.apache.kafka.common.serialization.ByteArraySerializer
-import org.testcontainers.kafka.KafkaContainer
 import java.time.Duration
 import java.time.temporal.ChronoUnit
 import kotlin.time.Duration.Companion.seconds
@@ -89,7 +88,7 @@ class ApicurioInteropIT :
         val registry = ApicurioRegistryContainer().also { it.start() }
         // compose と同じヒープ(KAFKA_HEAP_OPTS)。ほかの統合テストと並列に動くと起動が遅くなるため、待ちは長めにする
         val kafka =
-            KafkaContainer(InfraImages.get("KAFKA_IMAGE"))
+            KafkaBrokerContainer()
                 .withEnv("KAFKA_HEAP_OPTS", "-Xms384m -Xmx384m")
                 .withStartupTimeout(Duration.ofMinutes(3))
                 .also { it.start() }

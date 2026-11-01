@@ -23,6 +23,7 @@ import io.eia.platform.schemaregistry.SchemaSubject
 import io.eia.platform.schemaregistry.WriterSchemas
 import io.eia.platform.testsupport.ApicurioRegistryContainer
 import io.eia.platform.testsupport.InfraImages
+import io.eia.platform.testsupport.KafkaBrokerContainer
 import io.eia.shared.kernel.Result
 import io.kotest.assertions.fail
 import io.kotest.core.spec.style.FunSpec
@@ -37,7 +38,6 @@ import org.apache.kafka.clients.consumer.KafkaConsumer
 import org.apache.kafka.clients.producer.KafkaProducer
 import org.apache.kafka.common.serialization.ByteArrayDeserializer
 import org.postgresql.ds.PGSimpleDataSource
-import org.testcontainers.kafka.KafkaContainer
 import org.testcontainers.postgresql.PostgreSQLContainer
 import java.net.InetSocketAddress
 import java.net.URI
@@ -88,7 +88,7 @@ class IntegrationFlowAppIT :
                 .withCommand("postgres", "-c", "wal_level=logical")
         val registry = ApicurioRegistryContainer()
         val kafka =
-            KafkaContainer(InfraImages.get("KAFKA_IMAGE"))
+            KafkaBrokerContainer()
                 .withEnv("KAFKA_AUTO_CREATE_TOPICS_ENABLE", "false")
                 .withEnv("KAFKA_HEAP_OPTS", "-Xms384m -Xmx384m")
                 .withStartupTimeout(Duration.ofMinutes(3))

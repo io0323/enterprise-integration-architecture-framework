@@ -21,6 +21,7 @@ import io.eia.platform.security.secret.EnvSecretProvider
 import io.eia.platform.security.secret.SecretName
 import io.eia.platform.testsupport.ApicurioRegistryContainer
 import io.eia.platform.testsupport.InfraImages
+import io.eia.platform.testsupport.KafkaBrokerContainer
 import io.eia.platform.testsupport.SeaweedFsContainer
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.getOrNull
@@ -51,7 +52,6 @@ import org.apache.kafka.clients.admin.Admin
 import org.apache.kafka.clients.admin.NewTopic
 import org.apache.kafka.clients.producer.KafkaProducer
 import org.postgresql.ds.PGSimpleDataSource
-import org.testcontainers.kafka.KafkaContainer
 import org.testcontainers.postgresql.PostgreSQLContainer
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider
@@ -80,7 +80,7 @@ class BatchEtlAppIT :
         val postgres = PostgreSQLContainer(InfraImages.get("POSTGRES_IMAGE").asCompatibleSubstituteFor("postgres"))
         val registry = ApicurioRegistryContainer()
         val kafka =
-            KafkaContainer(InfraImages.get("KAFKA_IMAGE"))
+            KafkaBrokerContainer()
                 .withEnv("KAFKA_AUTO_CREATE_TOPICS_ENABLE", "false")
                 .withEnv("KAFKA_HEAP_OPTS", "-Xms384m -Xmx384m")
                 .withStartupTimeout(Duration.ofMinutes(3))
