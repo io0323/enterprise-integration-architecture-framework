@@ -332,6 +332,8 @@ class FileTransferIT :
                 admin
                     .getObjectAsBytes { it.bucket(locked).key("originals/p1/a.pgp").versionId(first) }
                     .asUtf8String() shouldBe "original"
+                // 版を指定して読む(送る応答の原本を、置いたときの版のまま読む)
+                store.readVersion("originals/p1/a.pgp", first, maxBytes = 100).ok()?.decodeToString() shouldBe "original"
             }
         }
     })

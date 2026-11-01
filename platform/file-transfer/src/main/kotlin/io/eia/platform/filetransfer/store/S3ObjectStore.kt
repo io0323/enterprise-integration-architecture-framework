@@ -43,12 +43,13 @@ import java.util.Base64
  *
  * 資格情報は呼び出しのたびに [SecretProvider] から取る。用途ごとに権限を絞った identity の名前を渡す(監視は読み取りだけ、など)。
  */
-@Suppress("TooManyFunctions") // 置き場の操作(ObjectStore・LockedObjectWriter)ごとに 1 つの関数にする
+@Suppress("TooManyFunctions") // 置き場の操作(ObjectStore・LockedObjectWriter・VersionedObjectReader)ごとに 1 つの関数にする
 public class S3ObjectStore(
     private val config: S3StoreConfig,
     secrets: SecretProvider,
 ) : ObjectStore,
     LockedObjectWriter,
+    VersionedObjectReader,
     AutoCloseable {
     private val client: S3Client =
         S3Client
@@ -97,6 +98,26 @@ public class S3ObjectStore(
         s3Catching {
             try {
                 client.getObject(get(key)).use { ok(it.readNBytes(maxBytes + 1)) }
+            } catch (_: NoSuchKeyException) {
+                ok(null)
+            }
+        }
+
+    override fun readVersion(
+        key: String,
+        versionId: String,
+        maxBytes: Int,
+    ): Result<ByteArray?, FileTransferError> =
+        s3Catching {
+            val request =
+                GetObjectRequest
+                    .builder()
+                    .bucket(config.bucket)
+                    .key(key)
+                    .versionId(versionId)
+                    .build()
+            try {
+                client.getObject(request).use { ok(it.readNBytes(maxBytes + 1)) }
             } catch (_: NoSuchKeyException) {
                 ok(null)
             }

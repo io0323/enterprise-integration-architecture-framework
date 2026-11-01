@@ -71,3 +71,13 @@ public interface LockedObjectWriter {
         retainUntil: Instant,
     ): Result<String, FileTransferError>
 }
+
+/** 版を指定して読む置き場(Object Lock で置いた原本を、置いたときの版のまま読む。ADR-0040 §7)。 */
+public interface VersionedObjectReader {
+    /** [key] の版 [versionId] を最大 [maxBytes] + 1 バイトまで読む(超えたことが分かるように)。なければ null。 */
+    public fun readVersion(
+        key: String,
+        versionId: String,
+        maxBytes: Int,
+    ): Result<ByteArray?, FileTransferError>
+}

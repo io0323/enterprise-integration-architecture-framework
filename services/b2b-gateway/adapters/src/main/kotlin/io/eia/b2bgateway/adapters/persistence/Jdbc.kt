@@ -45,3 +45,9 @@ internal suspend fun <T> DataSource.inTransaction(
             }
         }
     }
+
+/** 監査を追記できなかった(トランザクションを巻き戻す。理由は監査のエラーのコードだけ。一時的な失敗は、やり直せる SQLSTATE にする)。 */
+internal class AuditFailed(
+    code: String,
+    retryable: Boolean,
+) : SQLException("監査の記録に失敗しました($code)", if (retryable) "40001" else "XX000")
