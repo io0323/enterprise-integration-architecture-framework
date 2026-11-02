@@ -2,7 +2,8 @@
 # B2B の原本のバケット(eiaf-b2b-originals)と、b2b-gateway の 2 つの資格情報の範囲を検査する(P12 ⑥b。ADR-0040 §5・ADR-0017 §7。Issue #6)。
 # verify.sh が AWS CLI のコンテナ内で実行する。結果を 1 行ずつ「OK <内容>」「NG <内容>」で出力する。
 # 環境変数: ADMIN_ACCESS_KEY / ADMIN_SECRET_KEY(管理者)、B2B_ACCESS_KEY / B2B_SECRET_KEY(原本を書く eiaf-b2b-gateway)、
-# ANCHOR_ACCESS_KEY / ANCHOR_SECRET_KEY(監査のアンカーを書く eiaf-audit-b2b-gateway)、RUN_ID、S3_ENDPOINT。
+# ANCHOR_ACCESS_KEY / ANCHOR_SECRET_KEY(監査のアンカーを書く eiaf-audit-b2b-gateway)、
+# HANDOFF_ACCESS_KEY / HANDOFF_SECRET_KEY(受け渡しの場所を読む・消す eiaf-b2b-handoff。P12 ⑦)、RUN_ID、S3_ENDPOINT。
 set -uo pipefail
 
 aws configure set default.s3.addressing_style path
@@ -19,6 +20,7 @@ as() { # as <admin|b2b|anchor> <s3api の引数...>
     admin) AWS_ACCESS_KEY_ID="$ADMIN_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$ADMIN_SECRET_KEY" aws --endpoint-url "$S3_ENDPOINT" s3api "$@" ;;
     b2b) AWS_ACCESS_KEY_ID="$B2B_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$B2B_SECRET_KEY" aws --endpoint-url "$S3_ENDPOINT" s3api "$@" ;;
     anchor) AWS_ACCESS_KEY_ID="$ANCHOR_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$ANCHOR_SECRET_KEY" aws --endpoint-url "$S3_ENDPOINT" s3api "$@" ;;
+    handoff) AWS_ACCESS_KEY_ID="$HANDOFF_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$HANDOFF_SECRET_KEY" aws --endpoint-url "$S3_ENDPOINT" s3api "$@" ;;
   esac
 }
 ok() { echo "OK $1"; }
@@ -82,6 +84,19 @@ denied "anchor: Legal Hold を変更できない" as anchor put-object-legal-hol
   --legal-hold Status=OFF
 denied "anchor: 原本のバケットに書けない" as anchor put-object --bucket "$bucket" --key "originals/verify/by-anchor-$RUN_ID.pgp" --body "$work/body.txt" \
   --object-lock-mode COMPLIANCE --object-lock-retain-until-date "$retain_until"
+
+# --- 受け渡しの資格情報(eiaf-b2b-handoff)は、受け渡しの場所(eiaf-file-exchange の outbound/)を読む・消すだけ ---
+handoff_key="outbound/sales-daily/verify-$RUN_ID.txt"
+as admin put-object --bucket eiaf-file-exchange --key "$handoff_key" --body "$work/body.txt" >/dev/null 2>&1
+as admin put-object --bucket eiaf-file-exchange --key "archive/sales-daily/verify-$RUN_ID.txt" --body "$work/body.txt" >/dev/null 2>&1
+allowed "handoff: 受け渡しの場所を一覧できる" as handoff list-objects-v2 --bucket eiaf-file-exchange --prefix outbound/sales-daily/
+allowed "handoff: 受け渡しの場所のファイルを読める" as handoff get-object --bucket eiaf-file-exchange --key "$handoff_key" "$work/handoff.txt"
+denied "handoff: archive のファイルを読めない" as handoff get-object --bucket eiaf-file-exchange --key "archive/sales-daily/verify-$RUN_ID.txt" "$work/archive.txt"
+denied "handoff: 受け口(inbox/)に置けない" as handoff put-object --bucket eiaf-file-exchange --key "inbox/sales-daily/verify-$RUN_ID.txt" --body "$work/body.txt"
+denied "handoff: バケットポリシーを変更できない" as handoff put-bucket-policy --bucket eiaf-file-exchange --policy '{"Version":"2012-10-17","Statement":[]}'
+denied "handoff: 原本のバケットを読めない" as handoff list-objects-v2 --bucket "$bucket"
+allowed "handoff: 受け渡しの場所のファイルを消せる(保存期間を過ぎたもの)" as handoff delete-object --bucket eiaf-file-exchange --key "$handoff_key"
+as admin delete-object --bucket eiaf-file-exchange --key "archive/sales-daily/verify-$RUN_ID.txt" >/dev/null 2>&1
 
 # --- 後片付け(保持期限が切れるまで待ってから、管理者の資格情報で削除する) ---
 now="$(date -u +%s)"

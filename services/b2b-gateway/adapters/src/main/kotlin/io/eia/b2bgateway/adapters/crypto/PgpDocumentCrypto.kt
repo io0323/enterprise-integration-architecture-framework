@@ -68,12 +68,13 @@ public class PgpDocumentCrypto(
     override suspend fun seal(
         partnerId: String,
         plain: ByteArray,
+        literalName: String,
     ): Result<ByteArray, DomainError> =
         keys(partnerId, withPrevious = false).flatMap { keys ->
             withContext(Dispatchers.IO) {
                 withTempFiles(workDir, plain) { source, target ->
                     PgpFiles
-                        .encryptAndSign(source, target, keys, LITERAL_NAME)
+                        .encryptAndSign(source, target, keys, literalName)
                         .map { Files.readAllBytes(target) }
                         .mapError(FileTransferError::asDomainError)
                 }
@@ -91,10 +92,5 @@ public class PgpDocumentCrypto(
                 secrets,
                 PgpKeyNames(pgp.publicKey, ownSecretKey, ownPassphrase, previous),
             ).mapError(FileTransferError::asDomainError)
-    }
-
-    private companion object {
-        // 暗号文の中のファイル名(受け手は信用しない。参考の名前)
-        const val LITERAL_NAME = "acknowledgement.edi"
     }
 }

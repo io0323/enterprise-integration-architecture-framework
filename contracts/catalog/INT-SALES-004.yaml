@@ -8,9 +8,14 @@ pattern: file-transfer
 provider: { owner: team-analytics, system: batch-etl }
 consumers:
   - { owner: team-integration, system: file-exchange }
+  # 取引先への送信(P12 ⑦。ADR-0040 §7)。file-exchange が合格のファイルを受け渡しの場所(eiaf-file-exchange の outbound/sales-daily/)に写し、
+  # b2b-gateway が台帳でデータセットを受け取る取引先に、応答と同じ送信の仕組みで送る(⑦b までは file-exchange が直接送る)
+  - { owner: team-integration, system: b2b-gateway }
 contract: contracts/files/sales_daily.v1.yaml
 tier: 2
 dataClassification: internal
 # 前日の分を翌朝(日次の SLA の 06:00 JST の後)に出す。latencyP99 は業務の日の終わりから受け手が受け取るまで
 slo: { availability: "99.9", latencyP99: "8h" }
+# 取引先へのファイルの送信の記録(誰が = b2b-gateway、どこへ = 取引先、本文の代わり = 送ったデータファイルの SHA-256)
+audit: { actions: [b2b.file.send], dataClassification: internal, retention: legal }
 lifecycle: active

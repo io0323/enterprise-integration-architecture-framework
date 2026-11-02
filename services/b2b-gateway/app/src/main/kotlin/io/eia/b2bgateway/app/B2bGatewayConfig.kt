@@ -13,6 +13,7 @@ import java.net.URISyntaxException
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
@@ -44,6 +45,11 @@ import kotlin.time.Duration.Companion.seconds
  * | `B2B_GATEWAY_SUBMIT_WINDOW` | 12h | serve(送り直しの上限。order の Idempotency-Key の保存期間 24 時間より短く。ADR-0040 §6) |
  * | `B2B_GATEWAY_SFTP_OPEN_DURATION` | 30s | serve(取引先の SFTP の Circuit Breaker が Open のままでいる期間) |
  * | `B2B_GATEWAY_WORK_DIR` | `java.io.tmpdir` | PGP の一時ファイルの置き場(処理が終わると消す) |
+ * | `B2B_GATEWAY_FILE_S3_ENDPOINT` | なし(なければファイルを送らない) | serve(取引先に送るファイルの受け渡しの場所。ADR-0040 §7) |
+ * | `B2B_GATEWAY_FILE_S3_BUCKET` / `B2B_GATEWAY_FILE_HANDOFF_PREFIX` | `eiaf-file-exchange` / `outbound/sales-daily/` | 受け渡しの場所 |
+ * | `B2B_GATEWAY_FILE_S3_ACCESS_KEY` / `_SECRET_KEY` | なし | 受け渡しの identity(`eiaf-b2b-handoff`。受け渡しの場所を読む・消すだけ) |
+ * | `B2B_GATEWAY_DELIVER_INTERVAL` | 1m | serve(受け渡しの場所を一覧して送る間隔) |
+ * | `B2B_GATEWAY_OUTBOUND_RETENTION` | 14d | serve(送り終えたファイルを受け渡しの場所に残す期間。マニフェストの作成の時刻から) |
  * | `B2B_GATEWAY_AUDIT_ANCHOR_ENABLED` | true | serve(監査のアンカーの定期的な保存。ADR-0017 §5) |
  * | `B2B_GATEWAY_AUDIT_ANCHOR_INTERVAL` | 1h | serve(アンカーを保存する間隔) |
  * | `B2B_GATEWAY_AUDIT_ANCHOR_RETENTION` | なし(有効なら serve で必須) | アンカーの保持期間 |
@@ -69,7 +75,17 @@ internal data class B2bGatewayConfig(
     val sftpOpenDuration: Duration,
     val workDir: Path,
     val anchor: AnchorSettings = AnchorSettings(),
+    val handoff: HandoffSettings = HandoffSettings(),
 ) {
+    /** 取引先に送るファイルの受け渡しの場所(ADR-0040 §7)。[endpoint] がなければ、ファイルを送らない。 */
+    data class HandoffSettings(
+        val endpoint: URI? = null,
+        val bucket: String = "eiaf-file-exchange",
+        val prefix: String = "outbound/sales-daily/",
+        val interval: Duration = DEFAULT_DELIVER_INTERVAL,
+        val retention: Duration = DEFAULT_OUTBOUND_RETENTION,
+    )
+
     /** 監査のアンカーの定期的な保存(ADR-0017 §5)。serve だけで使う。 */
     data class AnchorSettings(
         val enabled: Boolean = true,
@@ -128,6 +144,16 @@ internal data class B2bGatewayConfig(
         val AUDIT_S3_ACCESS_KEY = SecretName("B2B_GATEWAY_AUDIT_S3_ACCESS_KEY")
         val AUDIT_S3_SECRET_KEY = SecretName("B2B_GATEWAY_AUDIT_S3_SECRET_KEY")
         private val DEFAULT_ANCHOR_INTERVAL = 1.hours
+        const val FILE_S3_ENDPOINT = "B2B_GATEWAY_FILE_S3_ENDPOINT"
+        const val FILE_S3_BUCKET = "B2B_GATEWAY_FILE_S3_BUCKET"
+        const val FILE_HANDOFF_PREFIX = "B2B_GATEWAY_FILE_HANDOFF_PREFIX"
+        const val DELIVER_INTERVAL = "B2B_GATEWAY_DELIVER_INTERVAL"
+        const val OUTBOUND_RETENTION = "B2B_GATEWAY_OUTBOUND_RETENTION"
+        val FILE_S3_ACCESS_KEY = SecretName("B2B_GATEWAY_FILE_S3_ACCESS_KEY")
+        val FILE_S3_SECRET_KEY = SecretName("B2B_GATEWAY_FILE_S3_SECRET_KEY")
+        private val DEFAULT_DELIVER_INTERVAL = 1.minutes
+        private val DEFAULT_OUTBOUND_RETENTION = 14.days
+        private val PREFIX = Regex("^([a-z0-9][a-z0-9-]*/)+$")
         private const val MAX_PORT = 65_535
         private const val DEFAULT_HEALTH_PORT = 8081
         private val DEFAULT_INTERVAL = 30.seconds
@@ -203,6 +229,20 @@ internal data class B2bGatewayConfig(
                             retention = duration(ANCHOR_RETENTION),
                             endpoint = url(AUDIT_S3_ENDPOINT),
                             bucket = optional(AUDIT_S3_BUCKET) ?: "eiaf-audit",
+                        ),
+                    handoff =
+                        HandoffSettings(
+                            endpoint = url(FILE_S3_ENDPOINT),
+                            bucket = optional(FILE_S3_BUCKET) ?: "eiaf-file-exchange",
+                            prefix =
+                                (optional(FILE_HANDOFF_PREFIX) ?: "outbound/sales-daily/").also {
+                                    if (!PREFIX.matches(it)) {
+                                        violations +=
+                                            FieldViolation(FILE_HANDOFF_PREFIX, "英小文字・数字・- の段を / で区切り、/ で終えてください")
+                                    }
+                                },
+                            interval = duration(DELIVER_INTERVAL) ?: DEFAULT_DELIVER_INTERVAL,
+                            retention = duration(OUTBOUND_RETENTION) ?: DEFAULT_OUTBOUND_RETENTION,
                         ),
                 )
             return if (violations.isEmpty()) ok(config) else err(ValidationError(violations))

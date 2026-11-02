@@ -5,7 +5,7 @@
       "Sid": "FileIdentitiesCannotManageBucket",
       "Effect": "Deny",
       "Principal": {
-        "AWS": ["arn:aws:iam::*:user/eiaf-file-batch-etl", "arn:aws:iam::*:user/eiaf-file-exchange"]
+        "AWS": ["arn:aws:iam::*:user/eiaf-file-batch-etl", "arn:aws:iam::*:user/eiaf-file-exchange", "arn:aws:iam::*:user/eiaf-b2b-handoff"]
       },
       "Action": [
         "s3:PutBucketPolicy",

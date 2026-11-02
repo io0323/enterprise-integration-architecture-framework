@@ -715,6 +715,64 @@ verify_b2b() {
   verify_sftp_host_key
   verify_b2b_bucket
   verify_b2b_gateway
+  verify_b2b_files
+}
+
+# 取引先へのファイルの送信(P12 ⑦a。ADR-0040 §7)。file-exchange の代わりに、受け渡しの場所(eiaf-file-exchange の outbound/sales-daily/)に
+# 売上ファイルとマニフェスト(最後)を置き、b2b-gateway が取引先 partner01 の outbox に PGP で暗号化・署名して送ることを確かめる。
+# 取引先の側として GnuPG で復号し、中身が置いたファイルと同じことと、暗号の中のファイルの名前がデータファイルの名前であることを確かめる
+verify_b2b_files() {
+  local work stamp name b2b_sql
+  work="$(mktemp -d)"
+  stamp="$(date -u +%Y%m%d%H%M%S)"
+  name="sales_daily_${stamp}_901"
+  b2b_sql() { "${compose[@]}" exec -T postgres psql -U postgres -d b2b_gateway -tAc "$1"; }
+  python3 - "$work" "$name" <<'PY'
+import gzip, hashlib, json, sys
+from datetime import datetime, timezone
+work, name = sys.argv[1], sys.argv[2]
+data = gzip.compress(b"business_date,order_id\r\n2026-10-14,verify-b2b-0001\r\n", mtime=0)
+open(f"{work}/{name}.csv.gz", "wb").write(data)
+manifest = {
+    "file": f"{name}.csv.gz", "recordCount": 1, "sha256": hashlib.sha256(data).hexdigest(), "schemaVersion": "sales_daily.v1",
+    "createdAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "traceparent": "00-" + hashlib.sha256(name.encode()).hexdigest()[:32] + "-00f067aa0ba902b7-01",
+    "correlationId": "verify-" + name, "sizeBytes": len(data),
+}
+open(f"{work}/{name}.manifest.json", "w").write(json.dumps(manifest))
+PY
+  if docker run --rm --network eiaf -e AWS_ACCESS_KEY_ID="$S3_ACCESS_KEY" -e AWS_SECRET_ACCESS_KEY="$S3_SECRET_KEY" -e AWS_DEFAULT_REGION=us-east-1 \
+    -v "$work:/work:ro" "$AWS_CLI_IMAGE" --endpoint-url http://seaweedfs:8333 s3 cp "/work/$name.csv.gz" "s3://eiaf-file-exchange/outbound/sales-daily/$name.csv.gz" \
+    >/dev/null 2>&1 &&
+    docker run --rm --network eiaf -e AWS_ACCESS_KEY_ID="$S3_ACCESS_KEY" -e AWS_SECRET_ACCESS_KEY="$S3_SECRET_KEY" -e AWS_DEFAULT_REGION=us-east-1 \
+      -v "$work:/work:ro" "$AWS_CLI_IMAGE" --endpoint-url http://seaweedfs:8333 s3 cp "/work/$name.manifest.json" \
+      "s3://eiaf-file-exchange/outbound/sales-daily/$name.manifest.json" >/dev/null 2>&1; then
+    pass "受け渡しの場所(outbound/sales-daily/)に、売上ファイルとマニフェスト(最後)を置ける"
+  else
+    fail "受け渡しの場所に売上ファイルを置けない"
+  fi
+  check "b2b-gateway: 受け渡しの場所のファイルを取引先 partner01 に送った(file_delivery)" \
+    retry 24 5 equals 1 b2b_sql "select count(*) from b2b.file_delivery where name = '$name' and partner_id = 'partner01'"
+  check "b2b-gateway: 送ったファイルの監査(b2b.file.send)がある" \
+    equals 1 b2b_sql "select count(*) from audit.audit_log where action = 'b2b.file.send' and target_id = '$name/partner01'"
+  sftp -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$here/secrets/sftp-b2b.known_hosts" -o LogLevel=ERROR -o BatchMode=yes \
+    -i "$here/secrets/sftp-b2b" -P 19223 -b - partner01@127.0.0.1 >/dev/null 2>&1 <<SFTP || true
+get outbox/$name.csv.gz.pgp $work/$name.csv.gz.pgp
+rm outbox/$name.csv.gz.pgp
+SFTP
+  local status
+  status="$(b2b_partner_gpg "$work" 'gpg --batch --quiet --pinentry-mode loopback --passphrase-fd 3 --status-fd 1 --output /work/decrypted \
+    --decrypt "/work/'"$name"'.csv.gz.pgp" 3<<<"$passphrase"' 2>/dev/null || true)"
+  if grep -q '^\[GNUPG:\] VALIDSIG' <<<"$status" && grep -q '^\[GNUPG:\] GOODMDC' <<<"$status" && [[ -f "$work/decrypted" ]] &&
+    cmp -s "$work/decrypted" "$work/$name.csv.gz"; then
+    pass "GnuPG: 取引先の outbox の $name.csv.gz.pgp を復号でき、EIAF の署名を確かめられ、中身が置いたファイルと同じ"
+  else
+    fail "GnuPG: 送ったファイルを復号・検証できないか、中身が違う($(grep -o -E 'GNUPG:\] [A-Z_]+' <<<"$status" | sort -u | tr '\n' ' '))"
+  fi
+  check "GnuPG: 暗号の中のファイルの名前はデータファイルの名前($name.csv.gz)" grep -q "PLAINTEXT [0-9a-f]* [0-9]* $name.csv.gz" <<<"$status"
+  check "Prometheus: b2b-gateway がファイルの送信の数を出す(partner01・sent)" \
+    retry 18 10 bash -c "curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=sum(eia_b2b_file_deliveries_total{trading_partner_id=\"partner01\",b2b_outcome=\"sent\"}) > 0' | grep -q '\"value\"'"
+  rm -rf "$work"
 }
 
 # B2B の原本のバケットと、b2b-gateway の 2 つの資格情報(原本・監査のアンカー)の範囲(scripts/s3-b2b.sh。P12 ⑥b。Issue #6)
@@ -724,6 +782,7 @@ verify_b2b_bucket() {
     -e ADMIN_ACCESS_KEY="$S3_ACCESS_KEY" -e ADMIN_SECRET_KEY="$S3_SECRET_KEY" \
     -e B2B_ACCESS_KEY="$B2B_GATEWAY_S3_ACCESS_KEY" -e B2B_SECRET_KEY="$B2B_GATEWAY_S3_SECRET_KEY" \
     -e ANCHOR_ACCESS_KEY="$B2B_GATEWAY_AUDIT_S3_ACCESS_KEY" -e ANCHOR_SECRET_KEY="$B2B_GATEWAY_AUDIT_S3_SECRET_KEY" \
+    -e HANDOFF_ACCESS_KEY="$B2B_GATEWAY_FILE_S3_ACCESS_KEY" -e HANDOFF_SECRET_KEY="$B2B_GATEWAY_FILE_S3_SECRET_KEY" \
     -e RUN_ID="$(date +%s)-$$" -e S3_ENDPOINT=http://seaweedfs:8333 \
     -v "$here/scripts/s3-b2b.sh:/s3-b2b.sh:ro" --entrypoint bash "$AWS_CLI_IMAGE" /s3-b2b.sh 2>&1 || true)"
   while IFS= read -r line; do

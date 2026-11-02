@@ -512,6 +512,11 @@ services:
       B2B_GATEWAY_AUDIT_S3_SECRET_KEY: ${B2B_GATEWAY_AUDIT_S3_SECRET_KEY:?}
       B2B_GATEWAY_AUDIT_ANCHOR_RETENTION: P1D
       B2B_GATEWAY_AUDIT_ANCHOR_INTERVAL: 1m
+      # 取引先に送るファイルの受け渡しの場所(バケット eiaf-file-exchange の outbound/sales-daily/。identity eiaf-b2b-handoff。ADR-0040 §7)
+      B2B_GATEWAY_FILE_S3_ENDPOINT: http://seaweedfs:8333
+      B2B_GATEWAY_FILE_S3_ACCESS_KEY: ${B2B_GATEWAY_FILE_S3_ACCESS_KEY:?make env を実行してください}
+      B2B_GATEWAY_FILE_S3_SECRET_KEY: ${B2B_GATEWAY_FILE_S3_SECRET_KEY:?}
+      B2B_GATEWAY_DELIVER_INTERVAL: ${B2B_GATEWAY_DELIVER_INTERVAL:-1m}
       # 取引先 partner01 の鍵(台帳に書いた名前)
       PARTNER01_SFTP_KNOWN_HOSTS_FILE: /secrets/sftp-b2b.known_hosts
       PARTNER01_SFTP_KEY_FILE: /secrets/sftp-b2b
@@ -883,16 +888,19 @@ services:
     # - eiaf-b2b-gateway: B2B の原本(b2b-gateway)。バケット eiaf-b2b-originals の Read / List と、originals/・readable/ の下の Write。
     #   削除・保持の設定の変更・Legal Hold・バケットの管理操作は、seaweedfs-init が設定するバケットポリシーで拒否する(P12 ⑥b。ADR-0040 §5)
     # - eiaf-audit-b2b-gateway: b2b-gateway の監査のアンカーの書込み用(anchors/b2b-gateway/ の下だけ)
+    # - eiaf-b2b-handoff: 取引先に送るファイルの受け渡し(b2b-gateway。P12 ⑦)。バケット eiaf-file-exchange の outbound/ を読む・消すだけ
+    #   (archive・受け口は読めない)。バケットの管理操作は、ファイル授受のバケットポリシーで拒否する
     entrypoint:
       - sh
       - -c
       - >-
         mkdir -p /etc/seaweedfs &&
-        printf '{"identities":[{"name":"eiaf","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","Write","List","Tagging"]},{"name":"eiaf-audit-order","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Read:eiaf-audit","List:eiaf-audit","Write:eiaf-audit/anchors/order/*"]},{"name":"eiaf-audit-verify","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Read:eiaf-audit","List:eiaf-audit"]},{"name":"eiaf-file-batch-etl","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Write:eiaf-file-exchange/inbox/sales-daily/*"]},{"name":"eiaf-file-exchange","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Read:eiaf-file-exchange","List:eiaf-file-exchange","Write:eiaf-file-exchange"]},{"name":"eiaf-b2b-gateway","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Read:eiaf-b2b-originals","List:eiaf-b2b-originals","Write:eiaf-b2b-originals/originals/*","Write:eiaf-b2b-originals/readable/*"]},{"name":"eiaf-audit-b2b-gateway","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Read:eiaf-audit","List:eiaf-audit","Write:eiaf-audit/anchors/b2b-gateway/*"]}]}'
+        printf '{"identities":[{"name":"eiaf","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","Write","List","Tagging"]},{"name":"eiaf-audit-order","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Read:eiaf-audit","List:eiaf-audit","Write:eiaf-audit/anchors/order/*"]},{"name":"eiaf-audit-verify","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Read:eiaf-audit","List:eiaf-audit"]},{"name":"eiaf-file-batch-etl","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Write:eiaf-file-exchange/inbox/sales-daily/*"]},{"name":"eiaf-file-exchange","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Read:eiaf-file-exchange","List:eiaf-file-exchange","Write:eiaf-file-exchange"]},{"name":"eiaf-b2b-gateway","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Read:eiaf-b2b-originals","List:eiaf-b2b-originals","Write:eiaf-b2b-originals/originals/*","Write:eiaf-b2b-originals/readable/*"]},{"name":"eiaf-audit-b2b-gateway","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Read:eiaf-audit","List:eiaf-audit","Write:eiaf-audit/anchors/b2b-gateway/*"]},{"name":"eiaf-b2b-handoff","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Read:eiaf-file-exchange/outbound/*","List:eiaf-file-exchange","Write:eiaf-file-exchange/outbound/*"]}]}'
         "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY" "$$ORDER_AUDIT_S3_ACCESS_KEY" "$$ORDER_AUDIT_S3_SECRET_KEY"
         "$$AUDIT_VERIFY_S3_ACCESS_KEY" "$$AUDIT_VERIFY_S3_SECRET_KEY"
         "$$FILE_BATCH_ETL_S3_ACCESS_KEY" "$$FILE_BATCH_ETL_S3_SECRET_KEY" "$$FILE_EXCHANGE_S3_ACCESS_KEY" "$$FILE_EXCHANGE_S3_SECRET_KEY"
         "$$B2B_GATEWAY_S3_ACCESS_KEY" "$$B2B_GATEWAY_S3_SECRET_KEY" "$$B2B_GATEWAY_AUDIT_S3_ACCESS_KEY" "$$B2B_GATEWAY_AUDIT_S3_SECRET_KEY"
+        "$$B2B_GATEWAY_FILE_S3_ACCESS_KEY" "$$B2B_GATEWAY_FILE_S3_SECRET_KEY"
         > /etc/seaweedfs/s3.json &&
         exec weed server -dir=/data -ip=seaweedfs -ip.bind=0.0.0.0
         -master.volumeSizeLimitMB=256 -volume.max=32
@@ -912,6 +920,8 @@ services:
       B2B_GATEWAY_S3_SECRET_KEY: ${B2B_GATEWAY_S3_SECRET_KEY:?}
       B2B_GATEWAY_AUDIT_S3_ACCESS_KEY: ${B2B_GATEWAY_AUDIT_S3_ACCESS_KEY:?make env を実行してください}
       B2B_GATEWAY_AUDIT_S3_SECRET_KEY: ${B2B_GATEWAY_AUDIT_S3_SECRET_KEY:?}
+      B2B_GATEWAY_FILE_S3_ACCESS_KEY: ${B2B_GATEWAY_FILE_S3_ACCESS_KEY:?make env を実行してください}
+      B2B_GATEWAY_FILE_S3_SECRET_KEY: ${B2B_GATEWAY_FILE_S3_SECRET_KEY:?}
     ports:
       - 127.0.0.1:19333:8333
     volumes:

@@ -142,6 +142,7 @@ private class AcceptFakes(
     override suspend fun seal(
         partnerId: String,
         plain: ByteArray,
+        literalName: String,
     ): Result<ByteArray, DomainError> = ok("sealed(${plain.decodeToString()})".encodeToByteArray())
 
     override suspend fun record(document: DocumentRecord): Result<String, DomainError> {

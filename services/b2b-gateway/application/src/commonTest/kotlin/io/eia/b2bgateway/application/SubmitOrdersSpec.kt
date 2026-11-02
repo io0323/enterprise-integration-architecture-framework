@@ -124,6 +124,7 @@ private class SubmitFakes(
     override suspend fun seal(
         partnerId: String,
         plain: ByteArray,
+        literalName: String,
     ): Result<ByteArray, DomainError> = ok("sealed".encodeToByteArray() + plain)
 
     override suspend fun storeReceived(

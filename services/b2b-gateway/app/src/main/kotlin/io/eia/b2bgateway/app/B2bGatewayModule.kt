@@ -6,26 +6,32 @@ import io.eia.b2bgateway.adapters.archive.ArchiveKeyNames
 import io.eia.b2bgateway.adapters.archive.S3OriginalArchive
 import io.eia.b2bgateway.adapters.archive.S3OriginalReader
 import io.eia.b2bgateway.adapters.crypto.PgpDocumentCrypto
+import io.eia.b2bgateway.adapters.handoff.S3HandoffFiles
 import io.eia.b2bgateway.adapters.inbox.SftpPartnerInbox
 import io.eia.b2bgateway.adapters.order.HttpOrderApi
 import io.eia.b2bgateway.adapters.order.OrderSubmissionMetrics
 import io.eia.b2bgateway.adapters.order.SubmissionSnapshot
 import io.eia.b2bgateway.adapters.outbox.SftpPartnerOutbox
+import io.eia.b2bgateway.adapters.partner.LedgerFileRecipients
 import io.eia.b2bgateway.adapters.partner.LedgerPartnerAgreements
 import io.eia.b2bgateway.adapters.partner.PartnerPgpKeyExpiry
 import io.eia.b2bgateway.adapters.persistence.JdbcAcknowledgements
 import io.eia.b2bgateway.adapters.persistence.JdbcCodeTables
 import io.eia.b2bgateway.adapters.persistence.JdbcControlReferences
+import io.eia.b2bgateway.adapters.persistence.JdbcFileDeliveries
 import io.eia.b2bgateway.adapters.persistence.JdbcOrderSubmissions
 import io.eia.b2bgateway.adapters.persistence.JdbcReceipts
 import io.eia.b2bgateway.adapters.spec.YamlEdiSpecs
 import io.eia.b2bgateway.application.port.inbound.AcceptDocumentUseCase
+import io.eia.b2bgateway.application.port.inbound.DeliverFilesUseCase
 import io.eia.b2bgateway.application.port.inbound.ImportCodeTableUseCase
 import io.eia.b2bgateway.application.port.inbound.PollInboxUseCase
 import io.eia.b2bgateway.application.port.inbound.SendAcknowledgementsUseCase
 import io.eia.b2bgateway.application.port.inbound.SubmitOrdersUseCase
 import io.eia.b2bgateway.application.usecase.AcceptDocumentService
 import io.eia.b2bgateway.application.usecase.AcknowledgementPorts
+import io.eia.b2bgateway.application.usecase.DeliverFilesService
+import io.eia.b2bgateway.application.usecase.FileDeliveryPorts
 import io.eia.b2bgateway.application.usecase.ImportCodeTableService
 import io.eia.b2bgateway.application.usecase.PollInboxService
 import io.eia.b2bgateway.application.usecase.ReceiveInterchangeService
@@ -78,19 +84,26 @@ internal data class Inputs(
     val serve: B2bGatewayConfig.Serve?,
 )
 
-/** 受け取りと応答の送信の相手(台帳で EDI の文書を扱う取引先)。 */
+/** 受け取り・応答の送信・ファイルの送信の相手(台帳で EDI の文書・送るファイルを扱う取引先)。 */
 internal class EdiPartners(
     val inbound: List<String>,
     val acknowledgements: List<String>,
+    val files: List<String> = emptyList(),
 ) {
     companion object {
         fun of(ledger: TradingPartnerLedger): EdiPartners =
             EdiPartners(
                 inbound = ledger.partners.filter { it.sftp.directories.inbound != null }.map { it.id },
                 acknowledgements = ledger.partners.filter { it.sftp.directories.acknowledgements != null }.map { it.id },
+                files = ledger.partners.filter { it.sftp.directories.outbound != null }.map { it.id },
             )
     }
 }
+
+/** 受け渡しの場所の置き場(原本の置き場と別の identity。停止のときに閉じる)。 */
+internal class HandoffStore(
+    val store: S3ObjectStore,
+)
 
 /**
  * b2b-gateway の配線(Koin)。DB はアプリのロールで接続する(所有者の権限は持たない)。
@@ -188,6 +201,7 @@ private fun Module.serveBeans(
     }
     orderBeans(serve, config.clientId, secrets, runtime)
     if (config.anchor.enabled) anchorBeans(config.anchor, secrets, runtime)
+    config.handoff.endpoint?.let { handoffBeans(inputs, it, secrets) }
     single { B2bGatewayMetrics(runtime.meter, partners) }
     // 取引先の鍵とホスト鍵の有効期限(ADR-0040 §3)。file-exchange も同じ系列を出すので、アラートとダッシュボードは最小値で見る
     single(createdAtStart = true) {
@@ -242,6 +256,39 @@ private fun Module.orderBeans(
     single(createdAtStart = true) {
         val snapshot = get<AtomicReference<SubmissionSnapshot>>()
         OrderSubmissionMetrics(runtime.meter) { snapshot.get() }
+    }
+}
+
+/**
+ * 取引先へのファイルの送信(ADR-0040 §7)。受け渡しの場所は、受け渡しの identity(`eiaf-b2b-handoff`)で読む。送るのは、応答と同じ送信の仕組み
+ * ([SftpPartnerOutbox]。取引先ごとの設定・PGP・Resilience・送る前の正式名の確認。P12 の承認の条件 3)。
+ */
+private fun Module.handoffBeans(
+    inputs: Inputs,
+    endpoint: java.net.URI,
+    secrets: SecretProvider,
+) {
+    val handoff = inputs.config.handoff
+    single {
+        HandoffStore(
+            S3ObjectStore(
+                S3StoreConfig(endpoint, handoff.bucket, B2bGatewayConfig.FILE_S3_ACCESS_KEY, B2bGatewayConfig.FILE_S3_SECRET_KEY),
+                secrets,
+            ),
+        )
+    }
+    single<DeliverFilesUseCase> {
+        DeliverFilesService(
+            FileDeliveryPorts(
+                S3HandoffFiles(get<HandoffStore>().store, handoff.prefix),
+                LedgerFileRecipients(inputs.ledger),
+                JdbcFileDeliveries(get<HikariDataSource>(), get()),
+                get<SftpPartnerOutbox>(),
+            ),
+            ::sha256,
+            Clock.System,
+            handoff.retention,
+        )
     }
 }
 

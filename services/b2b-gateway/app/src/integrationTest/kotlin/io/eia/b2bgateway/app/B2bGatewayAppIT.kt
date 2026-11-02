@@ -42,12 +42,14 @@ import software.amazon.awssdk.auth.credentials.AwsBasicCredentials
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider
 import software.amazon.awssdk.core.checksums.RequestChecksumCalculation
 import software.amazon.awssdk.core.checksums.ResponseChecksumValidation
+import software.amazon.awssdk.core.sync.RequestBody
 import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.s3.S3Client
 import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
+import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.HexFormat
 import java.util.concurrent.ConcurrentHashMap
@@ -57,6 +59,11 @@ private const val PARTNER = "partner01"
 private const val BUCKET = "eiaf-b2b-originals"
 private const val PASSWORD_BYTES = 16
 private const val POLL_MILLIS = 500L
+private const val HANDOFF_BUCKET = "eiaf-file-exchange"
+private const val HANDOFF = "outbound/sales-daily/"
+private const val SALES_FILE = "sales_daily_20261101150000_001"
+private const val TRACE_ID_LENGTH = 32
+private const val SPAN_ID_LENGTH = 16
 
 private fun randomHex(): String = HexFormat.of().formatHex(ByteArray(PASSWORD_BYTES).also(SecureRandom()::nextBytes))
 
@@ -164,6 +171,10 @@ class B2bGatewayAppIT :
                 B2bGatewayConfig.AUDIT_S3_SECRET_KEY.value to credentials.secretKey,
                 B2bGatewayConfig.ANCHOR_RETENTION to "3m",
                 B2bGatewayConfig.ANCHOR_INTERVAL to "1s",
+                B2bGatewayConfig.FILE_S3_ENDPOINT to seaweed.endpoint,
+                B2bGatewayConfig.FILE_S3_ACCESS_KEY.value to credentials.accessKey,
+                B2bGatewayConfig.FILE_S3_SECRET_KEY.value to credentials.secretKey,
+                B2bGatewayConfig.DELIVER_INTERVAL to "1s",
                 "P01_PGP_PUBLIC_KEY" to partner.publicKey,
                 "P01_SSH_KEY" to sshKey.privateKey,
                 "P01_KNOWN_HOSTS" to sftp.knownHostsLine(),
@@ -248,6 +259,7 @@ class B2bGatewayAppIT :
                     .build()
             admin.createBucket { it.bucket(BUCKET).objectLockEnabledForBucket(true) }
             admin.createBucket { it.bucket("eiaf-audit").objectLockEnabledForBucket(true) }
+            admin.createBucket { it.bucket("eiaf-file-exchange") }
         }
 
         afterSpec {
@@ -295,10 +307,19 @@ class B2bGatewayAppIT :
             query("SELECT count(*) FROM audit.audit_log WHERE action = 'b2b.codes.import' AND actor_id = 'ops-1'") shouldBe "2"
         }
 
-        test("serve: 取引先が置いた注文を受け付けて CONTRL を返し、order の API に取り込んで、肯定の APERAK を返す。ready になる") {
+        test("serve: 取引先が置いた注文を受け付けて CONTRL を返し、order の API に取り込んで肯定の APERAK を返す。受け渡しの場所のファイルを送る。ready になる") {
             val server = (B2bGatewayServer.start(appEnv()) as? Result.Ok)?.value ?: fail("起動できません")
             try {
                 place("orders-1.edi.pgp", orders("APP1001"))
+                // file-exchange の代わりに、受け渡しの場所に売上ファイルとマニフェスト(最後)を置く(P12 ⑦。ADR-0040 §7)
+                val sales = "id,amount\napp-it,100\n".encodeToByteArray()
+                val digest = MessageDigest.getInstance("SHA-256").digest(sales).joinToString("") { "%02x".format(it) }
+                val traceparent = "00-${"a".repeat(TRACE_ID_LENGTH)}-${"b".repeat(SPAN_ID_LENGTH)}-01"
+                val manifest =
+                    """{"file":"$SALES_FILE.csv.gz","recordCount":1,"sha256":"$digest","schemaVersion":"sales_daily.v1",""" +
+                        """"createdAt":"2026-11-01T15:00:00Z","traceparent":"$traceparent","correlationId":"app-it"}"""
+                admin.putObject({ it.bucket(HANDOFF_BUCKET).key("$HANDOFF$SALES_FILE.csv.gz") }, RequestBody.fromBytes(sales))
+                admin.putObject({ it.bucket(HANDOFF_BUCKET).key("$HANDOFF$SALES_FILE.manifest.json") }, RequestBody.fromString(manifest))
 
                 withTimeout(90.seconds) {
                     while (query("SELECT count(*) FROM b2b.acknowledgement WHERE state = 'SENT'") != "2") delay(POLL_MILLIS)
@@ -313,6 +334,10 @@ class B2bGatewayAppIT :
                 open(sftp.readFile("/config/from-eiaf/$contrl") ?: fail("CONTRL がありません")) shouldContain "UCI+APP1001+"
                 open(sftp.readFile("/config/from-eiaf/$aperak") ?: fail("APERAK がありません")) shouldContain "+9+AP'"
                 sftp.list("/config/to-eiaf/processed").single() shouldContain "orders-1.edi.pgp"
+                withTimeout(30.seconds) {
+                    while (sftp.readFile("/config/outbox/$SALES_FILE.csv.gz.pgp") == null) delay(POLL_MILLIS)
+                }
+                query("SELECT partner_id FROM b2b.file_delivery WHERE name = '$SALES_FILE'") shouldBe PARTNER
                 // 監査のアンカー(ハッシュチェーンの末尾)を、b2b-gateway の接頭辞に保存する(ADR-0017 §5)
                 withTimeout(30.seconds) {
                     while (admin.listObjectsV2 { it.bucket("eiaf-audit").prefix("anchors/b2b-gateway/") }.keyCount() ==
