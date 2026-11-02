@@ -397,7 +397,6 @@ services:
     environment:
       FILE_EXCHANGE_DB_URL: jdbc:postgresql://postgres:5432/file_exchange
       FILE_EXCHANGE_DB_PASSWORD: ${FILE_EXCHANGE_DB_PASSWORD:?make env を実行してください}
-      B2B_GATEWAY_DB_PASSWORD: ${B2B_GATEWAY_DB_PASSWORD:?make env を実行してください}
       OTEL_SERVICE_NAME: file-exchange
     mem_limit: 256m
     restart: "no"
@@ -422,7 +421,6 @@ services:
     environment:
       FILE_EXCHANGE_DB_URL: jdbc:postgresql://postgres:5432/file_exchange
       FILE_EXCHANGE_APP_DB_PASSWORD: ${FILE_EXCHANGE_APP_DB_PASSWORD:?make env を実行してください}
-      B2B_GATEWAY_APP_DB_PASSWORD: ${B2B_GATEWAY_APP_DB_PASSWORD:?make env を実行してください}
       FILE_EXCHANGE_S3_ENDPOINT: http://seaweedfs:8333
       FILE_EXCHANGE_S3_ACCESS_KEY: ${FILE_EXCHANGE_S3_ACCESS_KEY:?make env を実行してください}
       FILE_EXCHANGE_S3_SECRET_KEY: ${FILE_EXCHANGE_S3_SECRET_KEY:?}
@@ -1167,6 +1165,7 @@ services:
       LEGACY_SIM_DB_PASSWORD: ${LEGACY_SIM_DB_PASSWORD:?}
       BATCH_ETL_DB_PASSWORD: ${BATCH_ETL_DB_PASSWORD:?}
       FILE_EXCHANGE_DB_PASSWORD: ${FILE_EXCHANGE_DB_PASSWORD:?make env を実行してください}
+      B2B_GATEWAY_DB_PASSWORD: ${B2B_GATEWAY_DB_PASSWORD:?make env を実行してください}
       # アプリ用のロール({name}_app。ADR-0017)。追加前のボリュームには作られないため make clean が必要(infra/local/README.md)
       ORDER_APP_DB_PASSWORD: ${ORDER_APP_DB_PASSWORD:?make env を実行してください}
       INVENTORY_APP_DB_PASSWORD: ${INVENTORY_APP_DB_PASSWORD:?}
@@ -1176,6 +1175,7 @@ services:
       BATCH_ETL_APP_DB_PASSWORD: ${BATCH_ETL_APP_DB_PASSWORD:?}
       # file-exchange の DB(P09 ⑥)。追加前のボリュームには作られないため make clean が必要(infra/local/README.md)
       FILE_EXCHANGE_APP_DB_PASSWORD: ${FILE_EXCHANGE_APP_DB_PASSWORD:?make env を実行してください}
+      B2B_GATEWAY_APP_DB_PASSWORD: ${B2B_GATEWAY_APP_DB_PASSWORD:?make env を実行してください}
       # SaaS 連携の DB(P10 ⑥)。追加前のボリュームには作られないため make clean が必要(infra/local/README.md)
       WEBHOOK_RECEIVER_DB_PASSWORD: ${WEBHOOK_RECEIVER_DB_PASSWORD:?make env を実行してください}
       WEBHOOK_RECEIVER_APP_DB_PASSWORD: ${WEBHOOK_RECEIVER_APP_DB_PASSWORD:?make env を実行してください}
