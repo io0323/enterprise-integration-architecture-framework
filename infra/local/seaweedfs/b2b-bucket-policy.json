@@ -1,0 +1,24 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "B2bGatewayCannotManageBucketOrDelete",
+      "Effect": "Deny",
+      "Principal": { "AWS": "arn:aws:iam::*:user/eiaf-b2b-gateway" },
+      "Action": [
+        "s3:PutBucketObjectLockConfiguration",
+        "s3:PutBucketVersioning",
+        "s3:PutBucketPolicy",
+        "s3:DeleteBucketPolicy",
+        "s3:DeleteBucket",
+        "s3:PutLifecycleConfiguration",
+        "s3:PutBucketAcl",
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion",
+        "s3:PutObjectLegalHold",
+        "s3:BypassGovernanceRetention"
+      ],
+      "Resource": ["arn:aws:s3:::eiaf-b2b-originals", "arn:aws:s3:::eiaf-b2b-originals/*"]
+    }
+  ]
+}

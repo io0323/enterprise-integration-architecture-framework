@@ -14,7 +14,8 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * | メトリクス | 種類 | 属性 |
  * |---|---|---|
- * | `eia.b2b.documents` | counter | `trading_partner_id`・`b2b.outcome`(`unreadable`・`no_envelope`・`rejected`・`checked`・`resent`) |
+ * | `eia.b2b.documents` | counter | `trading_partner_id`・`b2b.outcome`(`unreadable`・`no_envelope`・`rejected`・`checked`・`resent`)・
+ *   `b2b.stage`(拒否した段階 `decryption`・`syntax`・`schema`・`business`。拒否がなければ `none`) |
  * | `eia.b2b.inbox.failures` | counter | `trading_partner_id`・`b2b.reason`(`list`: 受け取りのディレクトリを見られない / `document`: 文書の受け付けの失敗) |
  * | `eia.b2b.inbox.stuck` | gauge | `trading_partner_id`。直近の見回りで、受け付けに失敗して処理中のディレクトリに残ったファイルの数 |
  * | `eia.b2b.acknowledgements` | counter | `trading_partner_id`・`b2b.outcome`(`sent`・`failed`)。応答(CONTRL・APERAK)の送信 |
@@ -66,7 +67,9 @@ internal class B2bGatewayMetrics(
         partnerId: String,
         summary: PollSummary,
     ) {
-        summary.accepted.forEach { documents.add(1, Attributes.of(PARTNER, partnerId, OUTCOME, it.outcome.name.lowercase())) }
+        summary.accepted.forEach {
+            documents.add(1, Attributes.of(PARTNER, partnerId, OUTCOME, it.outcome.name.lowercase(), STAGE, it.stage.name.lowercase()))
+        }
         if (summary.failed.isNotEmpty()) {
             inboxFailures.add(
                 summary.failed.size.toLong(),
@@ -107,5 +110,6 @@ internal class B2bGatewayMetrics(
         val PARTNER: AttributeKey<String> = AttributeKey.stringKey("trading_partner_id")
         val OUTCOME: AttributeKey<String> = AttributeKey.stringKey("b2b.outcome")
         val REASON: AttributeKey<String> = AttributeKey.stringKey("b2b.reason")
+        val STAGE: AttributeKey<String> = AttributeKey.stringKey("b2b.stage")
     }
 }

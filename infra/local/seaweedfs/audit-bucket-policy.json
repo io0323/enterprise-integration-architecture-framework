@@ -17,6 +17,23 @@
         "s3:BypassGovernanceRetention"
       ],
       "Resource": ["arn:aws:s3:::eiaf-audit", "arn:aws:s3:::eiaf-audit/*"]
+    },
+    {
+      "Sid": "B2bGatewayAuditIdentityCannotManageBucketOrDelete",
+      "Effect": "Deny",
+      "Principal": { "AWS": "arn:aws:iam::*:user/eiaf-audit-b2b-gateway" },
+      "Action": [
+        "s3:PutBucketObjectLockConfiguration",
+        "s3:PutBucketVersioning",
+        "s3:PutBucketPolicy",
+        "s3:DeleteBucketPolicy",
+        "s3:DeleteBucket",
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion",
+        "s3:PutObjectLegalHold",
+        "s3:BypassGovernanceRetention"
+      ],
+      "Resource": ["arn:aws:s3:::eiaf-audit", "arn:aws:s3:::eiaf-audit/*"]
     }
   ]
 }

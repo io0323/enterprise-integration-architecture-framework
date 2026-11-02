@@ -6,6 +6,8 @@ import io.eia.b2bgateway.adapters.persistence.JdbcOrderSubmissions
 import io.eia.b2bgateway.application.port.inbound.PollInboxUseCase
 import io.eia.b2bgateway.application.port.inbound.SendAcknowledgementsUseCase
 import io.eia.b2bgateway.application.port.inbound.SubmitOrdersUseCase
+import io.eia.platform.audit.anchor.AnchorCycle
+import io.eia.platform.audit.anchor.AnchorOutcome
 import io.eia.platform.filetransfer.store.S3ObjectStore
 import io.eia.platform.observability.Observability
 import io.eia.platform.observability.ObservabilityConfig
@@ -28,6 +30,7 @@ import io.ktor.server.netty.NettyApplicationEngine
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -38,6 +41,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import org.koin.core.Koin
 import org.koin.dsl.koinApplication
 import org.slf4j.LoggerFactory
@@ -141,6 +145,12 @@ internal class B2bGatewayServer private constructor(
                 scope.launch { repeatEvery(intervals.send) { sendOnce(koin) } }
                 scope.launch { repeatEvery(intervals.submit) { submitOnce(koin) } }
                 scope.launch { repeatEvery(intervals.metrics) { refreshSnapshot(koin) } }
+                val anchorCycle = koin.getOrNull<AnchorCycle>()
+                if (anchorCycle != null) {
+                    scope.launch { repeatEvery(config.anchor.interval) { anchorOnce(anchorCycle, dataSource) } }
+                } else {
+                    logger.warn("監査のアンカーの保存は無効です({}=false)。末尾の記録の改竄と削除は検出できません", B2bGatewayConfig.ANCHOR_ENABLED)
+                }
                 val server =
                     embeddedServer(Netty, configure = { connector { port = config.healthPort } }) {
                         routing {
@@ -229,6 +239,48 @@ internal class B2bGatewayServer private constructor(
             when (val snapshot = koin.get<JdbcOrderSubmissions>().snapshot()) {
                 is Result.Ok -> koin.get<AtomicReference<SubmissionSnapshot>>().set(snapshot.value)
                 is Result.Err -> logger.warn("送信待ちの期限を読めません({})", snapshot.error.code)
+            }
+        }
+
+        /**
+         * 監査のアンカーの検査と保存(ADR-0017 §5)。改竄の疑いがあれば保存せず ERROR を残す(対応は docs/runbooks/audit-verify.md)。
+         * ストレージや DB に届かなければ次の回でやり直す。成否はメトリクス(AnchorMetrics)で監視する。
+         */
+        @Suppress("TooGenericExceptionCaught") // DB の接続の失敗はどの種類でも次の回にやり直す
+        internal suspend fun anchorOnce(
+            cycle: AnchorCycle,
+            dataSource: HikariDataSource,
+        ) {
+            val result =
+                try {
+                    withContext(Dispatchers.IO) { dataSource.connection.use { cycle.run(it) } }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    logger.warn("監査のアンカーの検査を終えられませんでした(error.type={})", e::class.qualifiedName)
+                    return
+                }
+            when (result) {
+                is Result.Err -> {
+                    logger.warn("監査のアンカーの検査を終えられませんでした。次の回でやり直します(error.code={})", result.error.code)
+                }
+
+                is Result.Ok -> {
+                    when (val outcome = result.value) {
+                        is AnchorOutcome.Published -> {
+                            logger.info("監査のアンカーを保存しました(key={}, seq={})", outcome.anchor.key, outcome.anchor.anchor.seq)
+                        }
+
+                        is AnchorOutcome.Rejected -> {
+                            outcome.findings.forEach { logger.error("監査記録に改竄の疑いがあります({}): {}", it.code, it.describe()) }
+                            logger.error("改竄の疑いがあるため、監査のアンカーを保存しません(対応: docs/runbooks/audit-verify.md)")
+                        }
+
+                        else -> {
+                            logger.info("監査のアンカーの検査を終えました({})", outcome::class.simpleName)
+                        }
+                    }
+                }
             }
         }
 

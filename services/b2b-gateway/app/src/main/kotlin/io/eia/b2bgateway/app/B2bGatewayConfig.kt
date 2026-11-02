@@ -44,6 +44,11 @@ import kotlin.time.Duration.Companion.seconds
  * | `B2B_GATEWAY_SUBMIT_WINDOW` | 12h | serve(送り直しの上限。order の Idempotency-Key の保存期間 24 時間より短く。ADR-0040 §6) |
  * | `B2B_GATEWAY_SFTP_OPEN_DURATION` | 30s | serve(取引先の SFTP の Circuit Breaker が Open のままでいる期間) |
  * | `B2B_GATEWAY_WORK_DIR` | `java.io.tmpdir` | PGP の一時ファイルの置き場(処理が終わると消す) |
+ * | `B2B_GATEWAY_AUDIT_ANCHOR_ENABLED` | true | serve(監査のアンカーの定期的な保存。ADR-0017 §5) |
+ * | `B2B_GATEWAY_AUDIT_ANCHOR_INTERVAL` | 1h | serve(アンカーを保存する間隔) |
+ * | `B2B_GATEWAY_AUDIT_ANCHOR_RETENTION` | なし(有効なら serve で必須) | アンカーの保持期間 |
+ * | `B2B_GATEWAY_AUDIT_S3_ENDPOINT` / `B2B_GATEWAY_AUDIT_S3_BUCKET` | なし(有効なら serve で必須) / `eiaf-audit` | アンカーの置き場 |
+ * | `B2B_GATEWAY_AUDIT_S3_ACCESS_KEY` / `_SECRET_KEY` | なし | アンカーの書込み用の identity(`eiaf-audit-b2b-gateway`。ADR-0017 §7) |
  *
  * 取引先ごとの SFTP の鍵・ホスト鍵・PGP の公開鍵は、台帳に書いた名前の秘密情報から読む。
  */
@@ -63,7 +68,17 @@ internal data class B2bGatewayConfig(
     val submitWindow: Duration,
     val sftpOpenDuration: Duration,
     val workDir: Path,
+    val anchor: AnchorSettings = AnchorSettings(),
 ) {
+    /** 監査のアンカーの定期的な保存(ADR-0017 §5)。serve だけで使う。 */
+    data class AnchorSettings(
+        val enabled: Boolean = true,
+        val interval: Duration = DEFAULT_ANCHOR_INTERVAL,
+        val retention: Duration? = null,
+        val endpoint: URI? = null,
+        val bucket: String = "eiaf-audit",
+    )
+
     /** 常駐の処理の間隔。 */
     data class Intervals(
         val poll: Duration,
@@ -105,6 +120,14 @@ internal data class B2bGatewayConfig(
         const val SUBMIT_WINDOW = "B2B_GATEWAY_SUBMIT_WINDOW"
         const val SFTP_OPEN_DURATION = "B2B_GATEWAY_SFTP_OPEN_DURATION"
         const val WORK_DIR = "B2B_GATEWAY_WORK_DIR"
+        const val ANCHOR_ENABLED = "B2B_GATEWAY_AUDIT_ANCHOR_ENABLED"
+        const val ANCHOR_INTERVAL = "B2B_GATEWAY_AUDIT_ANCHOR_INTERVAL"
+        const val ANCHOR_RETENTION = "B2B_GATEWAY_AUDIT_ANCHOR_RETENTION"
+        const val AUDIT_S3_ENDPOINT = "B2B_GATEWAY_AUDIT_S3_ENDPOINT"
+        const val AUDIT_S3_BUCKET = "B2B_GATEWAY_AUDIT_S3_BUCKET"
+        val AUDIT_S3_ACCESS_KEY = SecretName("B2B_GATEWAY_AUDIT_S3_ACCESS_KEY")
+        val AUDIT_S3_SECRET_KEY = SecretName("B2B_GATEWAY_AUDIT_S3_SECRET_KEY")
+        private val DEFAULT_ANCHOR_INTERVAL = 1.hours
         private const val MAX_PORT = 65_535
         private const val DEFAULT_HEALTH_PORT = 8081
         private val DEFAULT_INTERVAL = 30.seconds
@@ -168,6 +191,19 @@ internal data class B2bGatewayConfig(
                     submitWindow = submitWindow,
                     sftpOpenDuration = duration(SFTP_OPEN_DURATION) ?: DEFAULT_INTERVAL,
                     workDir = Path.of(optional(WORK_DIR) ?: System.getProperty("java.io.tmpdir")),
+                    anchor =
+                        AnchorSettings(
+                            enabled =
+                                when (optional(ANCHOR_ENABLED)) {
+                                    null, "true" -> true
+                                    "false" -> false
+                                    else -> true.also { violations += FieldViolation(ANCHOR_ENABLED, "true か false にしてください") }
+                                },
+                            interval = duration(ANCHOR_INTERVAL) ?: DEFAULT_ANCHOR_INTERVAL,
+                            retention = duration(ANCHOR_RETENTION),
+                            endpoint = url(AUDIT_S3_ENDPOINT),
+                            bucket = optional(AUDIT_S3_BUCKET) ?: "eiaf-audit",
+                        ),
                 )
             return if (violations.isEmpty()) ok(config) else err(ValidationError(violations))
         }
@@ -186,7 +222,7 @@ internal data class B2bGatewayConfig(
         return TradingPartnerLedger.parse(text)
     }
 
-    /** serve に要る値。足りなければ、足りない項目をすべて返す。 */
+    /** serve に要る値。足りなければ、足りない項目をすべて返す(監査のアンカーを有効にしていれば、その置き場と保持期間も)。 */
     fun forServe(): Result<Serve, ValidationError> {
         val missing =
             listOfNotNull(
@@ -194,6 +230,8 @@ internal data class B2bGatewayConfig(
                 ORIGINAL_RETENTION.takeIf { retention == null },
                 GATEWAY_URL.takeIf { gatewayUrl == null },
                 TOKEN_URL.takeIf { tokenUrl == null },
+                AUDIT_S3_ENDPOINT.takeIf { anchor.enabled && anchor.endpoint == null },
+                ANCHOR_RETENTION.takeIf { anchor.enabled && anchor.retention == null },
             )
         if (missing.isNotEmpty()) return err(ValidationError(missing.map { FieldViolation(it, "serve では必須です") }))
         return ok(Serve(checkNotNull(s3Endpoint), checkNotNull(retention), checkNotNull(gatewayUrl), checkNotNull(tokenUrl)))

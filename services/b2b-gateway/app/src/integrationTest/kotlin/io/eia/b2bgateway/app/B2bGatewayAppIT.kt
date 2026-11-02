@@ -159,6 +159,11 @@ class B2bGatewayAppIT :
                 B2bGatewayConfig.SUBMIT_INTERVAL to "1s",
                 B2bGatewayConfig.METRICS_INTERVAL to "1s",
                 B2bGatewayConfig.WORK_DIR to workDir.toString(),
+                B2bGatewayConfig.AUDIT_S3_ENDPOINT to seaweed.endpoint,
+                B2bGatewayConfig.AUDIT_S3_ACCESS_KEY.value to credentials.accessKey,
+                B2bGatewayConfig.AUDIT_S3_SECRET_KEY.value to credentials.secretKey,
+                B2bGatewayConfig.ANCHOR_RETENTION to "3m",
+                B2bGatewayConfig.ANCHOR_INTERVAL to "1s",
                 "P01_PGP_PUBLIC_KEY" to partner.publicKey,
                 "P01_SSH_KEY" to sshKey.privateKey,
                 "P01_KNOWN_HOSTS" to sftp.knownHostsLine(),
@@ -242,6 +247,7 @@ class B2bGatewayAppIT :
                     .responseChecksumValidation(ResponseChecksumValidation.WHEN_REQUIRED)
                     .build()
             admin.createBucket { it.bucket(BUCKET).objectLockEnabledForBucket(true) }
+            admin.createBucket { it.bucket("eiaf-audit").objectLockEnabledForBucket(true) }
         }
 
         afterSpec {
@@ -307,6 +313,14 @@ class B2bGatewayAppIT :
                 open(sftp.readFile("/config/from-eiaf/$contrl") ?: fail("CONTRL がありません")) shouldContain "UCI+APP1001+"
                 open(sftp.readFile("/config/from-eiaf/$aperak") ?: fail("APERAK がありません")) shouldContain "+9+AP'"
                 sftp.list("/config/to-eiaf/processed").single() shouldContain "orders-1.edi.pgp"
+                // 監査のアンカー(ハッシュチェーンの末尾)を、b2b-gateway の接頭辞に保存する(ADR-0017 §5)
+                withTimeout(30.seconds) {
+                    while (admin.listObjectsV2 { it.bucket("eiaf-audit").prefix("anchors/b2b-gateway/") }.keyCount() ==
+                        0
+                    ) {
+                        delay(POLL_MILLIS)
+                    }
+                }
                 ktor.get("http://localhost:${server.healthPort}/health/ready").status shouldBe HttpStatusCode.OK
                 ktor.get("http://localhost:${server.healthPort}/health/live").status shouldBe HttpStatusCode.OK
             } finally {

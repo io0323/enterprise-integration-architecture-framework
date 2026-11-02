@@ -14,8 +14,9 @@ case "$service" in
   order | inventory | payment | shipping) database="${service}_service" ;;
   batch-etl) database=batch_etl ;;
   legacy-sim) database=legacy_sim ;;
+  b2b-gateway) database=b2b_gateway ;;
   *)
-    echo "SERVICE を指定してください(order / inventory / payment / shipping / batch-etl / legacy-sim)。例: make audit-verify SERVICE=order" >&2
+    echo "SERVICE を指定してください(order / inventory / payment / shipping / batch-etl / legacy-sim / b2b-gateway)。例: make audit-verify SERVICE=order" >&2
     exit 2
     ;;
 esac
