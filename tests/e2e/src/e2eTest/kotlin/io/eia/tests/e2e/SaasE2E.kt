@@ -132,6 +132,9 @@ class SaasE2E :
             val webhookId = created.header("X-Webhook-Id") ?: fail("X-Webhook-Id がありません")
             val (event, _) = customerEvents(id).single()
             event.customerName() shouldBe "Redeliver"
+            // 最初の Webhook が届くのを待つ(イベントは定期の同期が先に届けることがあり、そのときは Webhook がまだ送信中。#175)
+            eventually { webhooks().firstOrNull { it["id"] == webhookId && it["state"] == "DELIVERED" } }
+                ?: fail("最初の Webhook が届きません")
             val duplicatesBefore = metricSum("""sum(eia_webhook_requests_total{outcome="duplicate"})""")
 
             admin("POST", "/admin/webhooks/$webhookId/redeliver").statusCode() shouldBe 202
