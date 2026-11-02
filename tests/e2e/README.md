@@ -5,7 +5,7 @@
 サービスのコードには依存しない(ブラックボックス)。
 
 ```bash
-make up PROFILE="order cdc saga batch file saas iot" E2E=1   # E2E 用の設定(e2e.env。待ち時間を短くする)を足して起動する
+make up PROFILE="order cdc saga batch file b2b saas iot" E2E=1   # E2E 用の設定(e2e.env。待ち時間を短くする)を足して起動する
 make e2e                                            # ./gradlew :tests:e2e:e2eTest(秘密情報は infra/local/.env から渡す)
 ```
 

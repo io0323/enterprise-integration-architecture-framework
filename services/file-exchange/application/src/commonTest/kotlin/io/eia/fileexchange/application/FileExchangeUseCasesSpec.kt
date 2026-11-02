@@ -1,10 +1,14 @@
 package io.eia.fileexchange.application
 
 import io.eia.fileexchange.application.port.outbound.FileLocks
+import io.eia.fileexchange.application.port.outbound.Handoff
 import io.eia.fileexchange.application.port.outbound.Inbox
 import io.eia.fileexchange.application.port.outbound.Inspection
+import io.eia.fileexchange.application.port.outbound.PastDeliveries
 import io.eia.fileexchange.application.port.outbound.ReceivedFiles
 import io.eia.fileexchange.application.port.outbound.WaitingFile
+import io.eia.fileexchange.application.usecase.HandOffFileService
+import io.eia.fileexchange.application.usecase.HandOffUnsentService
 import io.eia.fileexchange.application.usecase.ReceiveFileService
 import io.eia.fileexchange.application.usecase.SweepInboxService
 import io.eia.fileexchange.domain.ExtraArrival
@@ -113,6 +117,36 @@ private class FakeLocks : FileLocks {
 
 private fun stored(sha256: String? = SHA) =
     ReceivedFile(NAME, sha256, ReceiptDestination.ARCHIVE, "$NAME.parquet", null, null, ReceiptState.STORED)
+
+/** 受け渡しの場所の代わり。写した名前を記録する。[failing] の名前は写せない。 */
+private class FakeHandoff : Handoff {
+    val copied = mutableListOf<Pair<String, String>>()
+    val failing = mutableSetOf<String>()
+
+    override suspend fun handOff(
+        name: String,
+        dataFile: String,
+    ): Result<Unit, DomainError> {
+        if (name in failing) return err(FAILURE)
+        copied += name to dataFile
+        return ok(Unit)
+    }
+}
+
+/** 過去の配送の記録の代わり。 */
+private class FakePast(
+    private val names: List<String>,
+    private val failing: Boolean = false,
+) : PastDeliveries {
+    var since: Instant? = null
+
+    override suspend fun unsent(since: Instant): Result<List<String>, DomainError> {
+        this.since = since
+        return if (failing) err(FAILURE) else ok(names)
+    }
+}
+
+private fun storedAs(name: String) = stored().copy(name = name, dataFile = "$name.parquet")
 
 class FileExchangeUseCasesSpec :
     FunSpec({
@@ -253,6 +287,62 @@ class FileExchangeUseCasesSpec :
                         failing = "extra"
                     }
                 (SweepInboxService(inbox, FakeFiles().apply { records[NAME] = stored() }, FakeLocks())() is Result.Err) shouldBe true
+            }
+        }
+        context("受け渡し(P12 ⑦b)") {
+            test("合格のファイルのデータファイルを受け渡しの場所に写す") {
+                val handoff = FakeHandoff()
+                val report = HandOffFileService(FakeFiles().apply { records[NAME] = stored() }, handoff)(NAME).ok()
+                report.quarantined shouldBe false
+                handoff.copied shouldBe listOf(NAME to "$NAME.parquet")
+            }
+
+            test("quarantine のファイルは写さない") {
+                val handoff = FakeHandoff()
+                val quarantined = ReceivedFile(NAME, SHA, ReceiptDestination.QUARANTINE, null, "size_mismatch", "違う", ReceiptState.STORED)
+                HandOffFileService(FakeFiles().apply { records[NAME] = quarantined }, handoff)(NAME).ok().quarantined shouldBe true
+                handoff.copied.shouldBeEmpty()
+            }
+
+            test("受け取りが終わっていない・記録がない・記録を読めないなら写さずに失敗") {
+                val handoff = FakeHandoff()
+                val moving = stored().copy(state = ReceiptState.MOVING)
+                (HandOffFileService(FakeFiles().apply { records[NAME] = moving }, handoff)(NAME) is Result.Err) shouldBe true
+                (HandOffFileService(FakeFiles(), handoff)(NAME) is Result.Err) shouldBe true
+                (HandOffFileService(FakeFiles().apply { failing = true }, handoff)(NAME) is Result.Err) shouldBe true
+                handoff.copied.shouldBeEmpty()
+            }
+
+            test("切り替えの移行: dry-run は対象を返すだけで写さない") {
+                val handoff = FakeHandoff()
+                val files = FakeFiles().apply { records["a"] = storedAs("a") }
+                val past = FakePast(listOf("a"))
+                val since = Instant.fromEpochSeconds(1_000)
+                val report = HandOffUnsentService(past, HandOffFileService(files, handoff), FakeLocks())(since, execute = false).ok()
+                past.since shouldBe since
+                report.candidates shouldBe listOf("a")
+                report.handedOff.shouldBeEmpty()
+                handoff.copied.shouldBeEmpty()
+            }
+
+            test("切り替えの移行: --execute で写し、ロック中・写せないファイルは失敗に数えて続ける") {
+                val handoff = FakeHandoff().apply { failing += "c" }
+                val files = FakeFiles().apply { listOf("a", "b", "c").forEach { records[it] = storedAs(it) } }
+                val locks = FakeLocks().apply { busy += "b" }
+                val report =
+                    HandOffUnsentService(FakePast(listOf("a", "b", "c")), HandOffFileService(files, handoff), locks)(
+                        Instant.fromEpochSeconds(0),
+                        execute = true,
+                    ).ok()
+                report.handedOff shouldBe listOf("a")
+                report.failed.map { it.first } shouldBe listOf("b", "c")
+                handoff.copied shouldBe listOf("a" to "a.parquet")
+            }
+
+            test("切り替えの移行: 過去の配送の記録を読めなければ失敗") {
+                val service =
+                    HandOffUnsentService(FakePast(emptyList(), failing = true), HandOffFileService(FakeFiles(), FakeHandoff()), FakeLocks())
+                (service(Instant.fromEpochSeconds(0), execute = true) is Result.Err) shouldBe true
             }
         }
     })

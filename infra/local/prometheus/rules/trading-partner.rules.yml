@@ -3,7 +3,7 @@
 #
 # - Framework 11.3 のアンチパターン「証明書の期限切れの放置」を防ぐ。期限は台帳の validUntil(TPA で合意した差し替えの期日。SSH の鍵には
 #   期限がないため)と、PGP の公開鍵の中の期限のうち早いほう(eia_trading_partner_credential_expiry_seconds。UNIX 秒)
-# - 台帳を読むサービス(b2b-gateway と、送信を移す P12 ⑦ までは file-exchange)が同じ系列を出すので、取引先と鍵の種類ごとの最小値で判定する
+# - 台帳を読むのは P12 ⑦b から b2b-gateway だけ。読むサービスが増えても同じ系列を重ねて数えないよう、取引先と鍵の種類ごとの最小値で判定する
 # - 残り 30 日で警告(取引先と差し替えの日程を決める)、7 日で重大(差し替えを急ぐ)、過ぎたら重大(送受信が失敗する)
 groups:
   - name: trading-partner

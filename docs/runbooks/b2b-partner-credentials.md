@@ -1,6 +1,6 @@
 # 取引先の台帳と、鍵・ホスト鍵の有効期限(B2B。ADR-0040)
 
-取引先の台帳(TPA。Framework 11.1)は 1 つのファイルで、b2b-gateway と、送信を b2b-gateway に移す(P12 ⑦)までの file-exchange が読む。
+取引先の台帳(TPA。Framework 11.1)は 1 つのファイルで、b2b-gateway が読む(P12 ⑦b で、file-exchange は台帳を読まなくなった)。
 ローカル基盤では `infra/local/b2b/partners.json`。このファイルはコミットせず、`make env` がテンプレート(`infra/local/b2b/partners.template.json`)から作る。
 テンプレートの鍵の期日は `@KEYS_VALID_UNTIL@` で、`make env` が鍵を作った日から 1 年後(`secrets/partner01-keys.valid-until`)を書き込む
 (固定の期日をコミットすると、日が経つだけで期限のアラートが出始め、verify と e2e が失敗するため。ADR-0040 §3)。
@@ -43,7 +43,7 @@
 4. メトリクスの期限が新しい期日になり、アラートが消えたことを確かめる。
 
 ## 期限が切れたとき
-- 送受信が失敗している(ホスト鍵の不一致・認証の失敗・暗号化の拒否)。b2b-gateway と file-exchange のログで、どの取引先の、どの呼び出しが失敗しているかを確かめる。
+- 送受信が失敗している(ホスト鍵の不一致・認証の失敗・暗号化の拒否)。b2b-gateway のログで、どの取引先の、どの呼び出しが失敗しているかを確かめる。
 - 「期限が近いとき」の手順で、すぐに差し替える。取引先の障害時の連絡先(`contacts` の `incident`)にも、送受信が止まっていることを伝える。
 - 差し替えの後、送れなかったファイルは file-exchange の運用者のコマンド(`receive <名前>`。docs/runbooks/file-exchange.md)で送り直す。
 
@@ -78,6 +78,21 @@
   - `pgp_unknown_signer`: 取引先が、台帳にない鍵で署名した(鍵の差し替えの連絡が漏れていないか)
   - `pgp_not_for_us`: 自社の公開鍵あてに暗号化されていない(取引先が持っている自社の公開鍵が古くないか)
   - `pgp_not_encrypted`・`pgp_malformed`・`pgp_no_integrity`・`pgp_unsigned`: 取引先の製品の設定(暗号化・署名・改竄の検知)
+
+## ホスト鍵と自社の PGP の鍵
+P12 ⑦b で file-exchange の Runbook から移した(取引先と SFTP・PGP で話すのは b2b-gateway だけ)。
+
+- **ホスト鍵**: 取引先の SFTP のホスト鍵は、台帳の秘密情報の名前(known_hosts の形)に登録したものだけを受け付ける。初めての接続で鍵を覚える方式(TOFU)と、検証を外す設定はない(ADR-0032 §8)。
+  1. 取引先から接続先(ホスト・ポート)を受け取り、`ssh-keyscan -p <ポート> -t ed25519,ecdsa,rsa <ホスト>` で鍵を取る。
+  2. `ssh-keygen -lf <取った行のファイル>` のフィンガープリントを、**取引先と別の経路**(電話・署名つきの書面など)で照合する。照合できるまで登録しない。
+  3. 照合した行を秘密情報のファイルに置く。b2b-gateway は送受信のたびに読み直すので、再起動は要らない。
+  - 鍵が登録と違う(`HostKeyMismatch`)ときは、取引先にホスト鍵を変えたかを別の経路で確かめる。変えていなければ、経路の乗っ取りを疑って止めたまま調べる。
+- **開発用のホスト鍵(sftp-b2b)**: `make env` が `infra/local/secrets/sftp-b2b-host-key` を作り、sftp-b2b は起動時にこの鍵をホスト鍵にする(`infra/local/sftp/20-host-key.sh`)。
+  known_hosts(`secrets/sftp-b2b.known_hosts`)は同じ鍵から作るので、照合は要らない。作り直すときは `secrets/sftp-b2b-host-key*` と `secrets/sftp-b2b.known_hosts` を消して `make env` と `make up PROFILE=b2b`。
+  `make verify PROFILE=b2b` が、登録した鍵で接続できること・別の鍵を登録した known_hosts では接続しないことを確かめる。
+- **自社の PGP の鍵**: 送るファイルと応答は取引先の公開鍵で暗号化し、自社の秘密鍵(`B2B_GATEWAY_PGP_SECRET_KEY`・`_PASSPHRASE`)で署名する。鍵は使うたびに読み直す。
+  開発用は `make pgp-keys`(`make up PROFILE=b2b` も実行する)が GnuPG で `secrets/pgp-eiaf.*`(自社)・`secrets/pgp-partner01.*`(取引先の代わり)・`secrets/pgp-archive.*`(保管用)を作る。
+  作り直すときは `secrets/pgp-*` を消して `make pgp-keys`。`make verify PROFILE=b2b` が、取引先の側として届いたファイルを GnuPG で復号し、署名と改竄の検知を確かめる。
 
 ## 受け取りのディレクトリ
 b2b-gateway は、取引先の SFTP の受け取りのディレクトリ(台帳の `sftp.directories.inbound`)を見回り、次のように動かす(ADR-0040 §4)。
@@ -163,7 +178,7 @@ b2b-gateway は、取引先が注文に書いたコード(GLN・取引先の商�
 - 受け取った文書の原本は `eiaf-b2b-originals` に Object Lock(COMPLIANCE)で置いてある。監査の `payload_sha256` と原本の SHA-256 を照らし合わせれば、原本が受け取ったものと同じことを確かめられる。
 
 ## 送るファイル
-日次の売上ファイル(INT-SALES-004)は、受け渡しの場所(バケット `eiaf-file-exchange` の `outbound/sales-daily/`)から、b2b-gateway が台帳でデータセットを受け取る取引先に送る(ADR-0040 §7。P12 ⑦。⑦b の切り替えまでは file-exchange が直接送る)。
+日次の売上ファイル(INT-SALES-004)は、受け渡しの場所(バケット `eiaf-file-exchange` の `outbound/sales-daily/`)から、b2b-gateway が台帳でデータセットを受け取る取引先に送る(ADR-0040 §7。P12 ⑦。file-exchange は合格のファイルを受け渡しの場所に写すだけ)。
 - b2b-gateway は受け渡しの場所を毎回すべて一覧し、ファイルと取引先の組ごとに送信の記録(`b2b.file_delivery`)がないものだけを送る。過去の日付で作り直したファイル(`docs/runbooks/batch-rerun.md`)を後から置いても送る。
 - 取引先の側の名前は `{データファイル}.pgp`(取引先あてに暗号化し、自社の鍵で署名)。送る前に取引先の側に同じ名前があれば、送らずに記録する(`already_present`)。監査は `b2b.file.send`。
 - **送れないとき**(`B2bFileDeliveryFailing`):

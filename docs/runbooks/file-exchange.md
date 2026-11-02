@@ -1,32 +1,36 @@
 # Runbook: ファイル授受(file-exchange)
 
 ## 対象
-- ファイル授受のサービス `file-exchange`(ADR-0032)。日次の売上ファイル(INT-SALES-004)を受け取り、取引先に送る。
+- ファイル授受のサービス `file-exchange`(ADR-0032)。日次の売上ファイル(INT-SALES-004)を受け取り、取引先に送るための受け渡しの場所に写す。
   - 受け取り: バケット `eiaf-file-exchange` の受け口 `inbox/sales-daily/` に `.manifest.json` が届くと、DAG `file-exchange.receive`
     (パーティションはファイルの名前)が動き、検査して `archive/sales-daily/`(合格)か `quarantine/sales-daily/`(不合格)に移す。
-  - 配送: 同じ DAG のステップ `deliver` が、合格のファイルを取引先の台帳(`infra/local/b2b/partners.json`。b2b-gateway と共有する 1 つの台帳。ADR-0040)の取引先ごとに、
-    PGP で暗号化・署名して SFTP で送る。ローカルの取引先は `sftp-b2b` の `partner01`(`/config/outbox`)。
+  - 受け渡し: 同じ DAG のステップ `handoff` が、合格のファイルのデータファイルとマニフェスト(最後)を、同じバケットの `outbound/sales-daily/` に写す。
   - 見回り: 5 分ごとに受け口を見て、受け取り済みの名前で届いたファイルを `quarantine/sales-daily/extra/{番号}/` に移す。
+- **取引先への送信は b2b-gateway**(P12 ⑦b。ADR-0040 §7)。受け渡しの場所から、台帳でデータセットを受け取る取引先に PGP で送る。
+  送れないとき・ホスト鍵・PGP の鍵・取引先を足す手順は `docs/runbooks/b2b-partner-credentials.md`(「送るファイル」ほか)。
+  file-exchange は取引先の台帳・鍵を読まない。過去の配送の記録 `exchange.delivery` は読み取り専用で残している(ADR-0032 §8)。
 - 送り手は batch-etl(`docs/runbooks/batch-rerun.md#売上ファイルを置き直すとき`)。
-- ローカルの起動: `make up PROFILE=file`(受け取りと配送だけ)。batch-etl から一通り動かすときは `make up PROFILE="order batch file"`。
+- ローカルの起動: `make up PROFILE=file`(受け取りと受け渡しだけ)。取引先に送るところまでは `make up PROFILE="file b2b"`、
+  batch-etl から一通り動かすときは `make up PROFILE="order batch file b2b"`。
 
 | アラート | 重大度 | 見る節 |
 |---|---|---|
 | `FileExchangeQuarantined` | warning | [quarantine に移したとき](#quarantine-に移したとき) |
 | `FileExchangeNameReused` | warning | [名前の使い回し](#名前の使い回し) |
 | `FileExchangeInboxStale` | warning | [受け口に滞留しているとき](#受け口に滞留しているとき) |
-| `FileExchangeDeliveryFailed` / `FileExchangePartnerCircuitOpen` | warning | [取引先に送れないとき](#取引先に送れないとき) |
-| `BatchRunFailed`(`batch_dag="file-exchange.receive"`) | warning | [取引先に送れないとき](#取引先に送れないとき)(受け取りの失敗も同じ手順) |
+| `BatchRunFailed`(`batch_dag="file-exchange.receive"`) | warning | [受け取り・受け渡しが失敗したとき](#受け取り受け渡しが失敗したとき) |
+| `B2bFileDeliveryFailing` | warning | `docs/runbooks/b2b-partner-credentials.md` の「送るファイル」 |
 
 ## まず見るもの
-- ダッシュボード **File — Sales daily**(Grafana のフォルダ EIAF): 受け取った数・quarantine の理由・受け口の滞留・配送の結果・取引先の Circuit Breaker。
-- ログ(`make logs SERVICE=file-exchange`)。配送の失敗は `<名前> を取引先 <ID> に送れません(<code>)` が WARN で出る。ファイルの中身は出ない。
-- 受け取りと配送の記録(`file_exchange` の DB。スキーマ `exchange`):
+- ダッシュボード **File — Sales daily**(Grafana のフォルダ EIAF): 受け取った数・quarantine の理由・受け口の滞留・受け渡しの数。
+  取引先への送信は **B2B — EDI gateway** のファイルの送信のパネル。
+- ログ(`make logs SERVICE=file-exchange`)。ファイルの中身は出ない。
+- 受け取りの記録(`file_exchange` の DB。スキーマ `exchange`):
   ```sql
   SELECT file_name, destination, reason, state, received_at, stored_at FROM exchange.received_file ORDER BY received_at DESC LIMIT 20;
-  SELECT file_name, partner_id, remote_name, state, already_present, started_at, sent_at FROM exchange.delivery ORDER BY started_at DESC LIMIT 20;
   SELECT id, file_name, reason, state, detected_at FROM exchange.extra_arrival ORDER BY id DESC LIMIT 20;
   ```
+- 取引先に送った記録は b2b-gateway の DB(`b2b_gateway` のスキーマ `b2b`): `SELECT name, partner_id, remote_name, state, sent_at FROM b2b.file_delivery ORDER BY name DESC LIMIT 20;`
 - 実行の記録(同じ DB のスキーマ `batch`): `SELECT partition_key, status, finished_at FROM batch.batch_run WHERE dag_id = 'file-exchange.receive' ORDER BY started_at DESC LIMIT 20;`
 - トレース(Tempo)は `file-exchange.receive run` の span から探す。親は送り手(batch-etl)の書き出しの span(マニフェストの traceparent)。
 
@@ -35,9 +39,10 @@
 
 | コマンド | 内容 |
 |---|---|
-| `make file-exchange ARGS="receive <名前>"` | そのファイルの受け取りと配送を実行する。失敗・中断した実行は、失敗したステップから再開する(受け取り済みなら配送だけ)。成功した実行は何もしない |
-| `make file-exchange ARGS="receive <名前> --restart"` | 最初から実行し直す。受け取りの記録が `STORED` なら移動はせず、送信済みの取引先にも送らない(どちらも記録で冪等) |
+| `make file-exchange ARGS="receive <名前>"` | そのファイルの受け取りと受け渡しを実行する。失敗・中断した実行は、失敗したステップから再開する(受け取り済みなら受け渡しだけ)。成功した実行は何もしない |
+| `make file-exchange ARGS="receive <名前> --restart"` | 最初から実行し直す。受け取りの記録が `STORED` なら移動はせず、受け渡しの場所に同じ中身を写し直すだけ(b2b-gateway は送信の記録のある取引先には送らない) |
 | `make file-exchange ARGS="sweep"` | 受け口を 1 回だけ見回る |
+| `make file-exchange ARGS="handoff-unsent [--days N] [--execute]"` | 切り替えの 1 回きりの移行。[取引先への送信の切り替え](#取引先への送信の切り替え) |
 
 `<名前>` はファイルの名前の拡張子を除いた部分(例 `sales_daily_20261013150000_001`)。
 
@@ -70,50 +75,38 @@
 2. データファイルだけがありマニフェストがない(送り手が書いている途中で止まった)なら、受け取りは起動しない。送り手に置き直してもらう。
 3. マニフェストがあるのに受け取りが動いていなければ、`batch.batch_run` でその名前の実行の状態を見て、`make file-exchange ARGS="receive <名前>"`。
 
-## 取引先に送れないとき
-`FileExchangeDeliveryFailed`・`FileExchangePartnerCircuitOpen`。取引先の SFTP に送れず、配送の記録が `SENDING` のまま残っている。
-ほかの取引先への配送は止まらない(取引先ごとに Circuit Breaker を持つ。Resilience の名前 `sftp-{取引先の ID}`)。
+## 受け取り・受け渡しが失敗したとき
+`BatchRunFailed`(`batch_dag="file-exchange.receive"`)。受け取り(`receive`)か受け渡し(`handoff`)のステップが失敗した。
 
-1. ログの失敗のコードで原因を分ける。
+1. ログと `batch.batch_run` で、どのファイルのどのステップかを確かめる。多くは S3 互換ストレージ(SeaweedFS)の不調(`file_store_unavailable`)。
+2. 原因を除いてから `make file-exchange ARGS="receive <名前>"`。失敗したステップから再開する(受け取り済みなら受け渡しだけ)。
+3. 受け渡しは写し直しなので冪等。b2b-gateway は、受け渡しの場所のファイルと取引先の組ごとに送信の記録がないものだけを送る。
 
-   | コード・理由 | 原因 | 対応 |
-   |---|---|---|
-   | `file_remote_unavailable` / `circuit_open` | 取引先の SFTP に接続できない・止まっている | 取引先の復旧を待つ。戻れば再実行で送る |
-   | `file_remote_rejected`(`HostKeyMismatch`) | 取引先のホスト鍵が登録と違う | **なりすましの可能性**。送らずに止め、[ホスト鍵](#ホスト鍵) の手順で取引先と確かめる |
-   | `file_remote_rejected`(`AuthenticationFailed` / `PermissionDenied` / `NoSuchPath`) | 鍵・利用者・送り先のディレクトリの誤り | 取引先と設定を確かめ、台帳か鍵を直す |
-   | `file_remote_rejected`(`NoCommonAlgorithm`) | 取引先が古い暗号の方式しか持たない | 方式を足さずに、取引先に更新を頼む(ADR-0032 §8) |
-   | `file_credential_rejected` / `file_credential_unavailable` | 鍵・known_hosts・PGP の鍵を読めない・形式の誤り | 秘密情報のファイルを確かめる([PGP の鍵](#pgp-の鍵)) |
-2. 原因を除いてから `make file-exchange ARGS="receive <名前>"`。送れなかった取引先だけに送る。
-3. 送り直しは冪等: 送る前に取引先の側に同じ正式名(`{データファイル}.pgp`)があるかを確かめ、あれば送らずに送信済みにする
-   (`exchange.delivery` の `already_present = true`)。前の実行が正式名に変えた後、記録する前に落ちた場合。
-   取引先が受け取ってすぐに消していると送り直すことがあるので、取引先の側でファイル名による重複の検知が要る(取り決めに書く)。
+## 取引先への送信の切り替え
+P12 ⑦b(ADR-0032 §8・ADR-0040 §7)で、取引先への送信を file-exchange から b2b-gateway に移した。切り替えの時点で、archive に移したが
+過去の配送の記録(`exchange.delivery`)で `SENT` になっていないファイル(送信中で止まった・まだ送っていない)は、そのままでは誰も送らない。
+切り替えのときに **1 回だけ**、そうしたファイルを受け渡しの場所に写す。
 
-## ホスト鍵
-取引先の SFTP のホスト鍵は、台帳の `knownHostsSecret` の名前の秘密情報(known_hosts の形)に登録したものだけを受け付ける。
-初めての接続で鍵を覚える方式(TOFU)と、検証を外す設定はない(ADR-0032 §8)。
+1. 切り替えの前のバージョンの file-exchange を止める(`make down` ではなく、file-exchange のコンテナだけ。受け取りの途中なら終わるのを待つ)。
+2. 新しいバージョンで起動する: `make up PROFILE="file b2b"`(`file-exchange-migrate` が V3 で `delivery` を読み取り専用にする。b2b-gateway と受け渡しの identity `eiaf-b2b-handoff` も起動する)。
+3. 対象を一覧する(既定は一覧だけで、何も写さない):
+   ```bash
+   make file-exchange ARGS="handoff-unsent"
+   ```
+   - 対象は、受け取りの記録が `STORED`(合格)で、直近 14 日(`--days N` で 1〜366 日)に受け取ったファイルのうち、配送の記録がない・`SENT` でない記録があるもの。
+   - 14 日は受け渡しの場所の保存期間(`B2B_GATEWAY_OUTBOUND_RETENTION`)と同じ。それより古いファイルを送るかは取引先と決め、送るなら `--days` を広げる。
+4. 一覧を確かめてから写す:
+   ```bash
+   make file-exchange ARGS="handoff-unsent --execute"
+   ```
+   - 受け取りの実行と同じロックで写すので、受け取りと並んで動いても壊れない。写せなかったファイルがあると終了コードが失敗になる。原因を除いてもう一度実行する(写し直しは冪等)。
+5. b2b-gateway が送ったことを確かめる(`B2B_GATEWAY_DELIVER_INTERVAL`。既定 1 分):
+   ```sql
+   -- b2b_gateway の DB
+   SELECT name, partner_id, state, already_present, sent_at FROM b2b.file_delivery ORDER BY name DESC LIMIT 20;
+   ```
+   - 前のバージョンが取引先の側に送り終えていた(記録する前に止まった)ファイルは、送る前の正式名の確認で送り直さず `already_present` になる。
+6. 送れないときは `docs/runbooks/b2b-partner-credentials.md` の「送るファイル」。
 
-- **本番の登録**: 取引先から接続先(ホスト・ポート)を受け取り、
-  1. `ssh-keyscan -p <ポート> -t ed25519,ecdsa,rsa <ホスト>` で鍵を取る。
-  2. `ssh-keygen -lf <取った行のファイル>` のフィンガープリントを、**取引先と別の経路**(電話・署名つきの書面など)で照合する。
-     照合できるまで登録しない(取った経路が乗っ取られていると、偽の鍵を登録してしまう)。
-  3. 照合した行を秘密情報のファイルに置く。file-exchange は送受信のたびに読み直すので、再起動は要らない。
-- **開発用(sftp-b2b)**: `make env` が `infra/local/secrets/sftp-b2b-host-key` を作り、sftp-b2b は起動時にこの鍵をホスト鍵にする
-  (`infra/local/sftp/20-host-key.sh`)。known_hosts(`secrets/sftp-b2b.known_hosts`)は同じ鍵から作るので、照合は要らない。
-  作り直すときは `secrets/sftp-b2b-host-key*` と `secrets/sftp-b2b.known_hosts` を消して `make env` と `make up PROFILE=file`。
-  `make verify PROFILE=file` が、登録した鍵で接続できること・別の鍵を登録した known_hosts では接続しないことを確かめる。
-- **鍵が登録と違う**(`HostKeyMismatch`): 取引先に、ホスト鍵を変えたかを別の経路で確かめる。変えていれば上の手順で登録し直す。
-  変えていなければ、経路の乗っ取りを疑って送信を止めたまま調べる。
-
-## PGP の鍵
-- 送るファイルは、取引先の公開鍵(台帳の `pgp.publicKeySecret`)で暗号化し、自社の秘密鍵(`FILE_EXCHANGE_PGP_SECRET_KEY`・`_PASSPHRASE`)で署名する。
-  鍵は送るたびに読み直すので、秘密情報のファイルを差し替えれば次の送信から使う(再起動は要らない)。
-- 取引先の公開鍵を受け取ったら、主鍵のフィンガープリントを取引先と別の経路で照合してから置く(`gpg --show-keys <ファイル>`)。
-- **開発用**: `make pgp-keys`(`make up PROFILE=file` も実行する)が、GnuPG(`infra/local/images/gnupg`)で
-  `secrets/pgp-eiaf.*`(自社)と `secrets/pgp-partner01.*`(取引先の代わり)を作る。RSA 3072、主鍵は署名、副鍵は暗号化、パスフレーズで保護。
-  作り直すときは `secrets/pgp-*` を消して `make pgp-keys`。
-  `make verify PROFILE=file` が、取引先の側として届いたファイルを GnuPG で復号し、署名と改竄の検知を確かめる(Bouncy Castle と GnuPG の相互運用)。
-
-## 取引先を足す
-1. 台帳(ローカル基盤ではテンプレート `infra/local/b2b/partners.template.json`。`make env` が `partners.json` を作る)に取引先を足す。項目(識別子・扱う文書・送り先・鍵とその期日・合意・連絡先)は `docs/runbooks/b2b-partner-credentials.md` の「取引先を足す」を参照。送るデータセットは `documents` に `{"integration": "INT-SALES-004", "direction": "outbound", "dataset": "sales_daily"}` で書く。
-2. 秘密情報(ホスト鍵・クライアントの鍵・PGP の公開鍵)を、上の照合をしてから置く。compose では `<名前>_FILE` で渡す。
-3. file-exchange を再起動する(台帳は起動時に読む。Resilience `sftp-{ID}` とメトリクスも取引先ごとに作られる)。
+## ホスト鍵・PGP の鍵・取引先を足す
+取引先への送信は b2b-gateway に移したので、手順は `docs/runbooks/b2b-partner-credentials.md`(「取引先を足す」「取引先の PGP の鍵を差し替える」「ホスト鍵と自社の PGP の鍵」)。

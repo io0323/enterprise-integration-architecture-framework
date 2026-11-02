@@ -510,7 +510,7 @@
       "id": 10,
       "type": "timeseries",
       "title": "鍵とホスト鍵の期限までの残り",
-      "description": "取引先と鍵の種類ごとの最小値(P12 ⑦ までは file-exchange と b2b-gateway が同じ系列を出すので、min で 1 本にする)。30 日で警告、7 日で重大。",
+      "description": "取引先と鍵の種類ごとの最小値(P12 ⑦b からは b2b-gateway だけが出す。出すサービスが増えても 1 本になるよう min にする)。30 日で警告、7 日で重大。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"

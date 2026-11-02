@@ -1,24 +1,19 @@
 package io.eia.fileexchange.app
 
 import io.eia.fileexchange.adapters.file.InboxPrefixes
-import io.eia.fileexchange.application.port.inbound.DeliverFileUseCase
-import io.eia.fileexchange.application.port.inbound.DeliveryReport
-import io.eia.fileexchange.application.port.inbound.PartnerDelivery
-import io.eia.fileexchange.application.port.inbound.PartnerFailure
+import io.eia.fileexchange.application.port.inbound.HandOffFileUseCase
+import io.eia.fileexchange.application.port.inbound.HandoffReport
 import io.eia.fileexchange.application.port.inbound.ReceiveFileUseCase
 import io.eia.fileexchange.application.port.inbound.ReceiveOutcome
 import io.eia.fileexchange.application.port.inbound.SweepReport
-import io.eia.fileexchange.domain.DeliveryOutcome
 import io.eia.fileexchange.domain.ExtraArrival
 import io.eia.fileexchange.domain.ExtraArrivalReason
-import io.eia.fileexchange.domain.PartnerId
 import io.eia.fileexchange.domain.ReceiptDestination
 import io.eia.fileexchange.domain.ReceiptState
 import io.eia.fileexchange.domain.ReceivedFile
 import io.eia.platform.batch.StepName
 import io.eia.platform.batch.Trigger
 import io.eia.platform.filetransfer.store.ObjectReader
-import io.eia.platform.testsupport.TestLedgers
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.UnavailableError
 import io.eia.shared.kernel.ok
@@ -27,7 +22,6 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
-import io.opentelemetry.api.common.AttributeKey
 import io.opentelemetry.sdk.metrics.SdkMeterProvider
 import io.opentelemetry.sdk.testing.exporter.InMemoryMetricReader
 import java.nio.file.Files
@@ -60,8 +54,7 @@ class FileExchangeConfigSpec :
             config.sweepInterval shouldBe 5.minutes
             config.healthPort shouldBe 8081
             config.appUser shouldBe "file_exchange_app"
-            config.sftpOpenDuration shouldBe 30.seconds
-            config.deliverRetryDelay shouldBe 5.seconds
+            config.outboundPrefix shouldBe "outbound/sales-daily/"
             config
                 .forRun()
                 .failure()
@@ -79,12 +72,10 @@ class FileExchangeConfigSpec :
                                 FileExchangeConfig.S3_ENDPOINT to "http://seaweedfs:8333",
                                 FileExchangeConfig.INBOX_PREFIX to "inbox/a/",
                                 FileExchangeConfig.SWEEP_INTERVAL to "1m",
-                                FileExchangeConfig.SFTP_OPEN_DURATION to "5s",
-                                FileExchangeConfig.DELIVER_RETRY_DELAY to "1s",
+                                FileExchangeConfig.OUTBOUND_PREFIX to "outbound/a/",
                             ),
                     ).ok()
-            config.sftpOpenDuration shouldBe 5.seconds
-            config.deliverRetryDelay shouldBe 1.seconds
+            config.outboundPrefix shouldBe "outbound/a/"
             config.forRun().ok().toString() shouldBe "http://seaweedfs:8333"
             config.prefixes.inbox shouldBe "inbox/a/"
             config.sweepInterval shouldBe 1.minutes
@@ -96,7 +87,7 @@ class FileExchangeConfigSpec :
                         FileExchangeConfig.ARCHIVE_PREFIX to "/archive",
                         FileExchangeConfig.HEALTH_PORT to "99999",
                         FileExchangeConfig.POLL_INTERVAL to "-1s",
-                        FileExchangeConfig.SFTP_OPEN_DURATION to "soon",
+                        FileExchangeConfig.OUTBOUND_PREFIX to "Outbound",
                     ),
                 ).failure()
                 .violations
@@ -107,7 +98,7 @@ class FileExchangeConfigSpec :
                     FileExchangeConfig.ARCHIVE_PREFIX,
                     FileExchangeConfig.HEALTH_PORT,
                     FileExchangeConfig.POLL_INTERVAL,
-                    FileExchangeConfig.SFTP_OPEN_DURATION,
+                    FileExchangeConfig.OUTBOUND_PREFIX,
                 )
             FileExchangeConfig
                 .fromEnvironment(minimal + (FileExchangeConfig.QUARANTINE_PREFIX to "inbox/sales-daily/"))
@@ -138,70 +129,22 @@ class FileExchangeConfigSpec :
                             ),
                         )
                 }
-            val deliver =
-                object : DeliverFileUseCase {
-                    override suspend fun invoke(name: String) = ok(DeliveryReport(name, true, emptyList(), emptyList()))
+            val handOff =
+                object : HandOffFileUseCase {
+                    override suspend fun invoke(name: String) = ok(HandoffReport(name, quarantined = true))
                 }
-            val dag = ReceiveJob.dag(receive, deliver, metrics)
+            val dag = ReceiveJob.dag(receive, handOff, metrics)
             dag.id shouldBe ReceiveJob.DAG_ID
             dag.integrationId shouldBe "INT-SALES-004"
-            dag.steps.map { it.name } shouldBe listOf(StepName("receive"), StepName("deliver"))
-            dag.step(StepName("deliver")).dependsOn shouldBe listOf(StepName("receive"))
-            dag.step(StepName("deliver")).retry.initialDelay shouldBe 5.seconds
-            ReceiveJob
-                .dag(receive, deliver, metrics, deliverRetryDelay = 1.seconds)
-                .step(StepName("deliver"))
-                .retry.initialDelay shouldBe 1.seconds
+            dag.steps.map { it.name } shouldBe listOf(StepName("receive"), StepName("handoff"))
+            dag.step(StepName("handoff")).dependsOn shouldBe listOf(StepName("receive"))
             val source = object : ObjectReader by FakeReader {}
             val trigger = ReceiveJob.job(dag, source, "inbox/sales-daily/").trigger.shouldBeInstanceOf<Trigger.FileArrival>()
             trigger.prefix shouldBe "inbox/sales-daily/"
             trigger.requireDataFile shouldBe false
         }
 
-        test("取引先の台帳: 設定がなければ取引先なし(配送しない)。ファイルを読めない・形が誤っていれば設定の誤り") {
-            FileExchangeConfig
-                .fromEnvironment(minimal)
-                .ok()
-                .partners()
-                .ok()
-                .partners shouldBe emptyList()
-
-            val dir = Files.createTempDirectory("partners")
-            try {
-                val file = dir.resolve("partners.json")
-                Files.writeString(file, TestLedgers.json(TestLedgers.Partner()))
-                val config = FileExchangeConfig.fromEnvironment(minimal + (FileExchangeConfig.PARTNERS_FILE to file.toString())).ok()
-                config.partners().ok().recipients("sales_daily") shouldBe listOf(PartnerId("partner01"))
-
-                // 台帳の形の誤り(必須の項目がない)は、項目ごとに台帳の場所で返す(platform/trading-partner)
-                Files.writeString(file, "{}")
-                config
-                    .partners()
-                    .failure()
-                    .violations
-                    .map { it.field }
-                    .toSet() shouldBe setOf("")
-                Files.writeString(file, "{")
-                config
-                    .partners()
-                    .failure()
-                    .violations
-                    .single()
-                    .field shouldBe "partners"
-                FileExchangeConfig
-                    .fromEnvironment(minimal + (FileExchangeConfig.PARTNERS_FILE to dir.resolve("none.json").toString()))
-                    .ok()
-                    .partners()
-                    .failure()
-                    .violations
-                    .single()
-                    .field shouldBe FileExchangeConfig.PARTNERS_FILE
-            } finally {
-                dir.toFile().deleteRecursively()
-            }
-        }
-
-        test("メトリクス: 取引先への配送の数(取引先と結果ごと。送れなかったものは failed)") {
+        test("メトリクス: 受け渡しの場所に写した数(quarantine のファイルは数えない)") {
             val reader = InMemoryMetricReader.create()
             val metrics =
                 FileExchangeMetrics(
@@ -211,22 +154,14 @@ class FileExchangeConfigSpec :
                         .build()
                         .get("test"),
                 )
-            val a = PartnerId("partner-a")
-            val b = PartnerId("partner-b")
-            metrics.delivered(
-                DeliveryReport(
-                    "a_b_20261014150000_001",
-                    false,
-                    listOf(PartnerDelivery(a, DeliveryOutcome.SENT), PartnerDelivery(b, DeliveryOutcome.ALREADY_PRESENT)),
-                    listOf(PartnerFailure(b, UnavailableError("x"))),
-                ),
-            )
+            metrics.handedOff(HandoffReport("a_b_20261014150000_001", quarantined = false))
+            metrics.handedOff(HandoffReport("a_b_20261014150000_002", quarantined = true))
             reader
                 .collectAllMetrics()
-                .single { it.name == "eia.file_exchange.deliveries" }
+                .single { it.name == "eia.file_exchange.handoffs" }
                 .longSumData.points
-                .map { it.attributes.get(PARTNER)!! to it.attributes.get(OUTCOME)!! } shouldContainExactlyInAnyOrder
-                listOf("partner-a" to "sent", "partner-b" to "already_present", "partner-b" to "failed")
+                .single()
+                .value shouldBe 1
         }
 
         test("メトリクス: 受け取った数(移動先と理由)・受け取り済みの名前で届いた数・受け口の滞留") {
@@ -287,9 +222,6 @@ class FileExchangeConfigSpec :
                 .value shouldBe 600.0
         }
     })
-
-private val PARTNER: AttributeKey<String> = AttributeKey.stringKey("file_exchange.partner")
-private val OUTCOME: AttributeKey<String> = AttributeKey.stringKey("file_exchange.outcome")
 
 private object FakeReader : ObjectReader {
     override fun list(prefix: String) = ok(emptyList<io.eia.platform.filetransfer.store.StoredObject>())

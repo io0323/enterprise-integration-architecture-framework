@@ -23,7 +23,7 @@ make up PROFILE="file chaos"  # 複数の profile を同時に起動する
 make verify PROFILE=cdc       # healthy と各機能の疎通を検査する(PASS / FAIL を 1 行ずつ出力)
 make up PROFILE=order         # core + order-service(先に installDist でイメージの中身を作り、migrate → serve の順に起動する)
 make certs                    # 開発用の CA と mTLS の証明書を作る(make up も毎回確かめる。残りが 7 日を切ると作り直す)
-make e2e                      # E2E のシナリオ(tests/e2e)。make up PROFILE="order cdc saga batch file saas iot" E2E=1 で起動した基盤に対して実行する
+make e2e                      # E2E のシナリオ(tests/e2e)。make up PROFILE="order cdc saga batch file b2b saas iot" E2E=1 で起動した基盤に対して実行する
 make batch-etl ARGS="run 2026-10-13"  # 分析のバッチを 1 日分だけ実行する(make up PROFILE="order batch" の後。docs/runbooks/batch-rerun.md)
 make file-exchange ARGS="receive <名前>"  # ファイル授受の受け取りと配送を 1 回だけ実行する(make up PROFILE=file の後。docs/runbooks/file-exchange.md)
 make pgp-keys                 # 開発用の PGP の鍵を GnuPG で作る(make up PROFILE=file も実行する)
@@ -47,7 +47,7 @@ docker compose -f infra/local/docker-compose.yml --env-file infra/local/images.e
 | `core` | kafka, apicurio, postgres, keycloak, apisix, otel-collector, prometheus, tempo, loki, grafana | 常に起動する |
 | `cdc` | kafka-connect(Debezium), postgres-exporter, kafka-exporter, legacy-migrate・kafka-topics・schema-publish(1 回だけ動いて終わる), legacy-order-acl | Outbox + CDC(P06)、レガシーの CDC と Anti-Corruption Layer(P06 ⑤。ADR-0026)と、その監視(P06 ④) |
 | `iot` | mosquitto, mosquitto-exporter(Telegraf), kafka-topics・schema-publish(1 回だけ動いて終わる), iot-bridge, kafka-exporter | IoT のテレメトリ(P11。ADR-0039)。デバイスは自分のトピック `devices/{tenant}/{deviceId}/...` にだけ書け(デバイスの一覧 `mosquitto/devices.txt` から起動のたびにパスワードと ACL を作る)、iot-bridge が `iot.telemetry.reported.v1` に出す。溜め込みの数と捨てた数は Telegraf が `$SYS` から Prometheus に出す。対応は `docs/runbooks/iot-bridge.md` |
-| `file` | seaweedfs(S3), seaweedfs-init, sftp, sftp-b2b, file-exchange-migrate(1 回だけ動いて終わる), file-exchange | ファイル連携(P09。ADR-0032)。file-exchange が受け口の売上ファイルを検査し、取引先の代わりの sftp-b2b(partner01)に PGP で送る。送り手の batch-etl と一緒に動かすときは `make up PROFILE="order batch file"` |
+| `file` | seaweedfs(S3), seaweedfs-init, sftp, file-exchange-migrate(1 回だけ動いて終わる), file-exchange | ファイル連携(P09。ADR-0032)。file-exchange が受け口の売上ファイルを検査し、合格のファイルを取引先に送るための受け渡しの場所(`outbound/sales-daily/`)に写す(取引先への送信は b2b profile の b2b-gateway。P12 ⑦b)。送り手の batch-etl と一緒に動かすときは `make up PROFILE="order batch file"` |
 | `b2b` | seaweedfs(S3), seaweedfs-init, sftp-b2b, b2b-gateway-migrate(1 回だけ動いて終わる), b2b-gateway | B2B / EDI(P12。ADR-0040・ADR-0041)。b2b-gateway が取引先の代わりの sftp-b2b(partner01)の `to-eiaf` を見回って受注の文書を受け付け、原本を Object Lock のバケットに置き、応答を `from-eiaf` に返す。受け付けた注文を order の API に取り込むときは `make up PROFILE="order b2b"` |
 | `chaos` | toxiproxy | 障害注入(P04b, P14) |
 | `order` | order-migrate・kafka-topics・schema-publish(1 回だけ動いて終わる), order-service, kafka-connect, postgres-exporter, kafka-exporter, seaweedfs, seaweedfs-init | API 連携のサンプル業務サービス(P05。ADR-0024)。SeaweedFS は監査のアンカーの保存先(ADR-0017 §5) |
@@ -71,7 +71,7 @@ Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)�
 | 19094 | `toxiproxy:19094` → `kafka:9094` | Kafka(Toxiproxy 経由) | chaos | proxy `kafka-host`。ホスト用の `TOXI_HOST` リスナー(advertised `localhost:19094`)。コンテナからは proxy `kafka-internal` の `toxiproxy:19095` → `kafka:9095`(`TOXI_INTERNAL`) |
 | 19180 | `keycloak:8080` | Keycloak | core | OIDC(realm `eiaf`)。管理コンソール `/admin` |
 | 19222 | `sftp:2222` | SFTP(社内向け) | file | 利用者 `eiaf-file`、公開鍵認証のみ |
-| 19223 | `sftp-b2b:2222` | SFTP(取引先向け) | b2b, file | 利用者 `partner01`、公開鍵認証のみ。ホスト鍵は `secrets/sftp-b2b-host-key`(known_hosts は `secrets/sftp-b2b.known_hosts`) |
+| 19223 | `sftp-b2b:2222` | SFTP(取引先向け) | b2b | 利用者 `partner01`、公開鍵認証のみ。ホスト鍵は `secrets/sftp-b2b-host-key`(known_hosts は `secrets/sftp-b2b.known_hosts`) |
 | 19280 | `saas-mock:8080` | saas-mock(CRM の模擬) | saas | CRM の API(`/v1/customers`。Bearer `SAAS_MOCK_API_TOKEN`)と管理の API(`/admin/*`。Bearer `SAAS_MOCK_ADMIN_TOKEN`)。ヘルス `/health/ready` |
 | 19300 | `grafana:3000` | Grafana | core | UI(利用者 `admin`) |
 | 19310 | `loki:3100` | Loki | core | API |
@@ -163,18 +163,18 @@ curl -s -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token
   - 監視は Grafana の **Batch — Order analytics**(uid `eiaf-batch`)と `prometheus/rules/batch.rules.yml`。
   - `make verify PROFILE=batch` は、前日の分の自動の実行・`run`・権限・保持期間・メトリクス・ダッシュボードを確かめる(order profile と一緒なら照合も)。
 - **イベント・コマンドの受信(ADR-0028)**: サービスの Consumer(`EventConsumer`)の DLQ・遅れは `prometheus/rules/consumer.rules.yml` のアラートで見る(処理が止まった Consumer は「lag があるのにオフセットが進まない」で判定する)。DLQ のメッセージを戻すのは `make dlq-replay ARGS="--topic <topic>.dlq --limit <n> [--execute]"`(既定は dry-run。ホストの `localhost:19092` に接続する)。手順は `docs/runbooks/event-dlq-replay.md`。
-- **ファイル授受(ADR-0032)**: `make up PROFILE=file` が installDist と開発用の PGP の鍵(`make pgp-keys`)の後に、`seaweedfs-init`
+- **ファイル授受(ADR-0032)**: `make up PROFILE=file` が installDist の後に、`seaweedfs-init`
   (バケット `eiaf-file-exchange` とバケットポリシー)→ `file-exchange-migrate`(所有者)→ `file-exchange`(アプリのロール)の順に動かす。
-  - 受け口(`inbox/sales-daily/`)のマニフェストの到着で受け取り(archive / quarantine)、合格のファイルを取引先の台帳(`b2b/partners.json`。b2b-gateway と共有する 1 つの台帳。ADR-0040。
-    秘密情報の名前だけ)の `partner01`(sftp-b2b)に PGP で暗号化・署名して送る。運用者のコマンドは `make file-exchange ARGS="receive <名前> [--restart]"`・`sweep`。
-  - sftp-b2b のホスト鍵は `make env` が作り(`secrets/sftp-b2b-host-key`)、起動時に入れる(`sftp/20-host-key.sh`)。file-exchange はこの鍵に固定して接続する。
+  - 受け口(`inbox/sales-daily/`)のマニフェストの到着で受け取り(archive / quarantine)、合格のファイルを取引先に送るための受け渡しの場所(`outbound/sales-daily/`)に写す。取引先への送信は b2b-gateway(P12 ⑦b。下の B2B)。
+    運用者のコマンドは `make file-exchange ARGS="receive <名前> [--restart]"`・`sweep`・`handoff-unsent [--days N] [--execute]`(切り替えの 1 回きりの移行)。
+  - 過去の配送の記録(`exchange.delivery`)は読み取り専用(アプリのロールは SELECT だけ)。
   - 監視は Grafana の **File — Sales daily**(uid `eiaf-file`)と `prometheus/rules/file-exchange.rules.yml`。手順は `docs/runbooks/file-exchange.md`。
-  - `make verify PROFILE=file` は、バケットの権限(両方の identity の管理操作の拒否)・ホスト鍵の固定・売上ファイルの受け取りから配送まで・
-    GnuPG での復号と署名の検証・メトリクス・アラート・ダッシュボードを確かめる。
+  - `make verify PROFILE=file` は、バケットの権限(両方の identity の管理操作の拒否)・売上ファイルの受け取りから受け渡しの場所まで・
+    過去の配送の記録の権限・メトリクス・アラート・ダッシュボードを確かめる(取引先への送信と GnuPG での復号は `make verify PROFILE=b2b`)。
 - **B2B / EDI Gateway(ADR-0040・ADR-0041)**: `make up PROFILE=b2b` が installDist と開発用の PGP の鍵(`make pgp-keys`。自社 eiaf・取引先 partner01・保管用 archive)の後に、
   `seaweedfs-init`(バケット `eiaf-b2b-originals`(Object Lock)とバケットポリシー)→ `b2b-gateway-migrate`(所有者)→ `b2b-gateway`(アプリのロール)の順に動かす。
   - **P12 ⑥b より前に作ったボリュームには DB `b2b_gateway` とそのロールが無いので、`make clean` が必要**(DB は postgres の初回起動のときだけ作る)。
-  - 取引先に送るファイル(INT-SALES-004)は、受け渡しの場所(`eiaf-file-exchange` の `outbound/sales-daily/`)から b2b-gateway が送る(P12 ⑦。受け渡しの identity `eiaf-b2b-handoff`。⑦b の切り替えまでは file-exchange が直接送る)。
+  - 取引先に送るファイル(INT-SALES-004)は、受け渡しの場所(`eiaf-file-exchange` の `outbound/sales-daily/`)から b2b-gateway が送る(P12 ⑦。受け渡しの identity `eiaf-b2b-handoff`。file-exchange は受け渡しの場所に写すだけ)。
   - S3 の identity は 2 つ: 原本を書く `eiaf-b2b-gateway`(`originals/`・`readable/` の下だけ。削除・Legal Hold・バケットの管理操作はバケットポリシーで拒否)と、
     監査のアンカーを書く `eiaf-audit-b2b-gateway`(`eiaf-audit` の `anchors/b2b-gateway/` の下だけ)。原本の保持期間はローカルだけ `P1D`(`B2B_GATEWAY_ORIGINAL_RETENTION`)。
   - 取引先のコードの対応表は空で始まる。取り込みは `make b2b-codes PARTNER=partner01 KIND=<buyers|delivery-parties|items> FILE=<CSV> OPERATOR=<運用者>`。

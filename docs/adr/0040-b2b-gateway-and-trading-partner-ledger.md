@@ -25,9 +25,9 @@ P12 の計画(承認 2026-10-30)で次を決めた。
 - サービスの中の部品の分け方は MODULE_DESIGN の b2b-gateway の行に書く。
 
 ### 2. 取引先の台帳: 1 つのファイルと、1 つの読み込みの部品(P12 ③)
-- **台帳は 1 つのファイル**(ローカル基盤は `infra/local/b2b/partners.json`。`make env` がテンプレートから作る。§3)で、**読み込みと検証は `platform/trading-partner` の `TradingPartnerLedger` だけ**が行う。b2b-gateway と、送信を移すまでの file-exchange が、同じファイルを同じ部品で読む。同じ取引先の情報を 2 か所に持たない。
-  - P09 の `infra/local/file-exchange/partners.json` はこのファイルに移した。file-exchange の `PartnerRegistry` は、台帳からファイルの送り先(`PartnerDestination`)を作るだけの変換になった。
-  - 部品を platform に置いたのは、送信を移すまでの間に 2 つのサービスが同じ台帳を読むため。⑦ の後は b2b-gateway だけが読むが、台帳は B2B の基盤の部品として platform に残す。
+- **台帳は 1 つのファイル**(ローカル基盤は `infra/local/b2b/partners.json`。`make env` がテンプレートから作る。§3)で、**読み込みと検証は `platform/trading-partner` の `TradingPartnerLedger` だけ**が行う。b2b-gateway が読む(送信を移す P12 ⑦b までは file-exchange も同じファイルを同じ部品で読んでいた)。同じ取引先の情報を 2 か所に持たない。
+  - P09 の `infra/local/file-exchange/partners.json` はこのファイルに移した。file-exchange の `PartnerRegistry` は、台帳からファイルの送り先(`PartnerDestination`)を作るだけの変換になった(⑦b で消した)。
+  - 部品を platform に置いたのは、送信を移すまでの間に 2 つのサービスが同じ台帳を読むため。⑦b からは b2b-gateway だけが読むが、台帳は B2B の基盤の部品として platform に残す。
 - **形は JSON Schema**(`platform/trading-partner/src/main/resources/trading-partner/ledger.v1.schema.json`)。読み込みの順は、形 → 値の解釈(日付・期間・タイムゾーン)→ 取引先の重複と、扱う文書ごとに要る設定。誤りは項目の場所(JSON Pointer)と理由で返し、値は入れない。台帳の誤りは起動時に設定の誤りにする。
 - **台帳の項目**(Framework 11.1 の台帳と TPA)
 
@@ -147,7 +147,7 @@ P12 の計画(承認 2026-10-30)で次を決めた。
   - 送り直しの交換(§4・ADR-0041 §11)には、前の応答と同じ原本を指す新しい記録ができるので、新しい正式名でもう一度届く。
   - 送る間隔は `B2B_GATEWAY_SEND_INTERVAL`(既定 30 秒。P12 ⑥a)。送れない応答のアラートは ⑥b(業務の応答の期限のアラートは §6)。
 - **取引先へのファイルの送信**(P12 ⑦a。承認 2026-11-02 の案 A):
-  - 受け渡しの場所は、S3 互換ストレージのバケット `eiaf-file-exchange` の `outbound/sales-daily/`。file-exchange が合格のファイルのデータファイルを写し、マニフェストを最後に置く(⑦b。⑦a の間は file-exchange が今までどおり直接送り、受け渡しの場所には書かないので、二重には送らない)。
+  - 受け渡しの場所は、S3 互換ストレージのバケット `eiaf-file-exchange` の `outbound/sales-daily/`。file-exchange が合格のファイルのデータファイルを写し、マニフェストを最後に置く(⑦b。ADR-0032 §8。⑦a の間は file-exchange が今までどおり直接送り、受け渡しの場所には書かなかったので、二重には送らない)。切り替えの時点で送り終えていなかったファイルは、file-exchange の 1 回きりの移行のコマンド `handoff-unsent` で受け渡しの場所に写す(docs/runbooks/file-exchange.md「取引先への送信の切り替え」)。
   - b2b-gateway は受け渡しの identity `eiaf-b2b-handoff`(受け渡しの場所を読む・消すだけ。archive・受け口は読めない)で、`B2B_GATEWAY_DELIVER_INTERVAL`(既定 1 分)ごとに、**受け渡しの場所を毎回すべて一覧し、ファイルと取引先の組ごとに送信の記録(`b2b.file_delivery`)がないものだけを送る**。名前の順の位置(どこまで見たか)で進める方式は採らない。過去の日付で作り直した売上ファイル(docs/runbooks/batch-rerun.md)は名前の順で前に来るため、位置の方式では送られずに残る(承認の条件 1)。
   - 受け取る取引先は、台帳の `documents` に向き outbound・連携 INT-SALES-004・そのデータセット(ファイルの名前の `{system}_{dataset}`)を持つ取引先。
   - 送る前に、データファイルの SHA-256 をマニフェストと照らし合わせる(違えば、どの取引先にも送らない)。送るのは応答と同じ送信の仕組み(`PartnerOutbox`。取引先ごとの設定・PGP・Resilience・送る前の正式名の確認。承認の条件 3)。暗号化と署名はここで行い、暗号の中のファイルの名前はデータファイルの名前、取引先の側の正式名は `{データファイル}.pgp`(P09 と同じ。取引先から見て変わらない)。
@@ -197,3 +197,4 @@ P12 の計画(承認 2026-10-30)で次を決めた。
 - 2026-11-02: P12 ⑥a で、b2b-gateway の app(serve の 4 つの繰り返し・codes import のコマンド・設定)を作り、§4・§6・§7 の結線の記述を更新した。
 - 2026-11-02: P12 ⑥b で、ローカル基盤(compose の b2b profile・2 つの S3 の identity とバケットポリシー・監査のアンカー・アラート・ダッシュボード・verify)を作った(§5)。
 - 2026-11-02: P12 ⑦a で、取引先へのファイルの送信(§7。受け渡しの場所を毎回すべて一覧し、記録のない組だけを送る。保存期間で消す。監査 `b2b.file.send`)を b2b-gateway に作った。file-exchange の切り替えは ⑦b。
+- 2026-11-02: P12 ⑦b で、file-exchange を切り替えた(§7。file-exchange は合格のファイルを受け渡しの場所に写すだけになり、台帳を読まない。過去の配送の記録 `exchange.delivery` は読み取り専用で残す。切り替えの移行のコマンド `handoff-unsent`。ADR-0032 §8)。鍵の期限のメトリクスは b2b-gateway だけが出す。

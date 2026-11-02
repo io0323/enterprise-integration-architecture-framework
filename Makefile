@@ -7,7 +7,7 @@ GRADLE := ./gradlew
 # PROFILE: core / cdc / iot / file / b2b / chaos / order / saga / batch / saas。core は常に含まれる(積み上げ方式)。空白区切りで複数指定できる。
 PROFILE ?= core
 INFRA := infra/local
-# E2E=1: E2E 用の設定(tests/e2e/e2e.env。待ち時間を短くする)を足して起動する(例: make up PROFILE="order cdc saga batch file saas iot" E2E=1)
+# E2E=1: E2E 用の設定(tests/e2e/e2e.env。待ち時間を短くする)を足して起動する(例: make up PROFILE="order cdc saga batch file b2b saas iot" E2E=1)
 E2E ?=
 COMPOSE := docker compose -f $(INFRA)/docker-compose.yml --env-file $(INFRA)/images.env --env-file $(INFRA)/.env $(if $(E2E),--env-file tests/e2e/e2e.env)
 COMPOSE_PROFILES_ARGS := --profile core $(foreach p,$(filter-out core,$(PROFILE)),--profile $(p))
@@ -67,7 +67,7 @@ not-root:
 certs: not-root ## 開発用の CA と mTLS の証明書を作る。残りが 7 日を切っていれば作り直す(docs/runbooks/dev-certificates.md)
 	@$(INFRA)/scripts/gen-dev-certs.sh
 
-pgp-keys: not-root ## 開発用の PGP の鍵(自社 eiaf と取引先 partner01)を GnuPG で作る。既にあれば何もしない(docs/runbooks/file-exchange.md)
+pgp-keys: not-root ## 開発用の PGP の鍵(自社 eiaf・取引先 partner01・保管用 archive)を GnuPG で作る。既にあれば何もしない(docs/runbooks/b2b-partner-credentials.md)
 	@$(INFRA)/scripts/gen-dev-pgp-keys.sh
 
 order-dist: ## order-service と schema-publish(契約のスキーマの登録)のイメージの中身(installDist)を作る
@@ -96,7 +96,7 @@ b2b-dist: ## B2B / EDI Gateway(b2b-gateway)のイメージの中身(installDist)
 iot-dist: ## IoT の橋渡し(iot-bridge)と schema-publish のイメージの中身(installDist)を作る(ADR-0039)
 	$(GRADLE) :services:iot-bridge:app:installDist :tools:schema-publish:installDist
 
-up: not-root env certs $(if $(filter order,$(PROFILE)),order-dist) $(if $(filter cdc,$(PROFILE)),legacy-dist) $(if $(filter saga,$(PROFILE)),saga-dist) $(if $(filter batch,$(PROFILE)),batch-dist) $(if $(filter file,$(PROFILE)),file-dist pgp-keys) $(if $(filter b2b,$(PROFILE)),b2b-dist pgp-keys) $(if $(filter saas,$(PROFILE)),saas-dist) $(if $(filter iot,$(PROFILE)),iot-dist) ## ローカル基盤を起動し、全コンテナが healthy になるまで待つ(例: make up PROFILE=cdc)
+up: not-root env certs $(if $(filter order,$(PROFILE)),order-dist) $(if $(filter cdc,$(PROFILE)),legacy-dist) $(if $(filter saga,$(PROFILE)),saga-dist) $(if $(filter batch,$(PROFILE)),batch-dist) $(if $(filter file,$(PROFILE)),file-dist) $(if $(filter b2b,$(PROFILE)),b2b-dist pgp-keys) $(if $(filter saas,$(PROFILE)),saas-dist) $(if $(filter iot,$(PROFILE)),iot-dist) ## ローカル基盤を起動し、全コンテナが healthy になるまで待つ(例: make up PROFILE=cdc)
 	@if [ -f $(INFRA)/certs/.renewed ]; then \
 		$(COMPOSE) --profile '*' rm --stop --force $(CERT_CONSUMERS) >/dev/null 2>&1 || true; \
 		rm -f $(INFRA)/certs/.renewed; \
@@ -154,8 +154,8 @@ dlq-replay: ## DLQ のメッセージを元のトピックに戻す。既定は 
 stats: ## 起動中コンテナのメモリ使用量(docker stats)
 	@$(INFRA)/scripts/stats.sh
 
-# 秘密情報は infra/local/.env から環境変数で渡す(verify.sh と同じ)。基盤は make up PROFILE="order cdc saga batch file saas iot" E2E=1 で起動しておく
+# 秘密情報は infra/local/.env から環境変数で渡す(verify.sh と同じ)。基盤は make up PROFILE="order cdc saga batch file b2b saas iot" E2E=1 で起動しておく
 # シナリオの後に、監査記録の全体の検査が OK で、アンカーがあることを確かめる(AuditAnchorE2E がアンカーの保存を待つ。ADR-0017)
-e2e: env ## E2E シナリオ(tests/e2e。make up PROFILE="order cdc saga batch file saas iot" E2E=1 で起動した基盤に、公開されたエンドポイント・運用者のコマンド・コンテナの停止だけで接続する。tests/e2e/README.md)
+e2e: env ## E2E シナリオ(tests/e2e。make up PROFILE="order cdc saga batch file b2b saas iot" E2E=1 で起動した基盤に、公開されたエンドポイント・運用者のコマンド・コンテナの停止だけで接続する。tests/e2e/README.md)
 	@set -a && . $(INFRA)/.env && set +a && $(GRADLE) :tests:e2e:e2eTest
 	@$(INFRA)/scripts/audit-anchored.sh order
