@@ -84,7 +84,12 @@ P12 の計画(承認 2026-10-30)で次を決めた。
   - 置き方は `platform/file-transfer` の `LockedObjectWriter.putLocked`(保持のモードと期限を put のたびに明示し、バケットの既定の保持設定に頼らない。ADR-0017 §5 と同じ)。同じキーに置き直すと新しい版になる。
   - キーは `originals/{取引先}/received/{原本の SHA-256}.pgp`・`originals/{取引先}/sent/{contrl・aperak}/{SHA-256}.pgp`。後から読むための写しは `readable/...`(§8)。参照は `{キー}#{版の ID}`。
   - **順番**: 原本の保管 → 復号と署名の検証 → 写しの保管 → 3 段階の検査 → 応答の暗号化と保管 → 受け取りの記録・受け付けた注文・送る応答・監査を 1 つのトランザクション(`AcceptDocumentUseCase`)。どこで落ちても、同じファイルでやり直せば収まる(原本と写しは版が増えるだけ。記録の前なら、重複の判定は初めての受け取りのまま)。2 つの処理が同じ交換を同時に記録したときは、初めての受け取りの一意索引で片方を一時的な失敗にし、やり直しで送り直しとして扱う。
-- 原本の SHA-256 を `platform/audit` の監査のチェーンに記録する(ADR-0017。action `b2b.document.receive`・`b2b.ack.send`)。原本を書く S3 の資格情報は、ほかの用途と分ける(Issue #6 のコメント。⑥)。
+- 原本の SHA-256 を `platform/audit` の監査のチェーンに記録する(ADR-0017。action `b2b.document.receive`・`b2b.ack.send`)。原本を書く S3 の資格情報は、ほかの用途と分ける(Issue #6 のコメント)。
+  - P12 ⑥b: S3 の identity は 2 つ。原本を書く `eiaf-b2b-gateway`(バケット `eiaf-b2b-originals` の Read・List と、`originals/`・`readable/` の下の Write)と、
+    監査のアンカーを書く `eiaf-audit-b2b-gateway`(`eiaf-audit` の `anchors/b2b-gateway/` の下だけ。order-service と同じ形)。
+  - バケットポリシーで、`eiaf-b2b-gateway` の削除(削除マーカー・版)・Legal Hold・Object Lock とバージョニングの設定の変更・ポリシーの変更・バケットの削除を拒否する
+    (原本を消せる・保持を外せる資格情報をサービスに持たせない)。権限は `make verify PROFILE=b2b`(`scripts/s3-b2b.sh`)で確かめる。
+  - b2b-gateway は監査のアンカーを定期的に保存し(ADR-0017 §5)、改竄の検査は `make audit-verify SERVICE=b2b-gateway` で行う。
   - **受け取ったすべての文書を記録する**(DoD)。読めない文書(§8)も、構文の段階で拒否した交換も、送り直しも、受け取りの記録 1 行と監査の記録 1 件を、同じトランザクションで書く。監査の追記に失敗したら、受け取りの記録も残さない。
   - 監査の項目: 誰が = `partner` / 取引先の ID、何を = `b2b.document.receive` / `b2b_document` / 受け取りの記録の ID、結果 = 交換の枠を受け付けた・送り直しなら `success`、拒否・読めないなら `failure`、本文の代わり = 原本(暗号文)の SHA-256 と場所、補足 = 段階(`decryption`・`syntax`・`schema`・`business`・`none`)・復号した交換の SHA-256・交換の管理番号・メッセージの数と拒否の数・拒否した注文の数・拒否の理由(読めない文書)。
 - **保持期間は設定で決め、このリポジトリでは決めない**(ローカル基盤は検証を繰り返すために短くする)。
@@ -183,3 +188,4 @@ P12 の計画(承認 2026-10-30)で次を決めた。
 - 2026-11-02: P12 ⑤a で、取引先ごとのコードの対応表(§6)と、その取り込み(種類ごとに丸ごと入れ替え・監査 `b2b.codes.import`)を決めた。
 - 2026-11-02: P12 ⑤b で、社内への取り込み(§6)を実装した。計画の「Canonical の注文」を order の API の要求に読み替え、送信待ち・結果の分け方・送り直しの上限・肯定の APERAK と APR901・監査 `b2b.order.submit`・業務の応答の期限のアラートを決めた。
 - 2026-11-02: P12 ⑥a で、b2b-gateway の app(serve の 4 つの繰り返し・codes import のコマンド・設定)を作り、§4・§6・§7 の結線の記述を更新した。
+- 2026-11-02: P12 ⑥b で、ローカル基盤(compose の b2b profile・2 つの S3 の identity とバケットポリシー・監査のアンカー・アラート・ダッシュボード・verify)を作った(§5)。

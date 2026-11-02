@@ -1,5 +1,6 @@
 package io.eia.b2bgateway.application.port.inbound
 
+import io.eia.b2bgateway.domain.validation.InterchangeResult
 import io.eia.shared.kernel.DomainError
 import io.eia.shared.kernel.Result
 
@@ -32,7 +33,39 @@ public class AcceptedDocument(
     public val documentId: String,
     public val outcome: DocumentOutcome,
     public val receipt: Receipt?,
-)
+) {
+    /**
+     * いちばん早い拒否の段階(受け取りの記録の監査の段階と同じ規則。ADR-0040 §5)。読めない文書は復号、交換の拒否と UNB を読めないものは構文、
+     * 交換の枠を受け付けたものはメッセージの枠の誤り → 構文、中身の誤り → スキーマ、注文の拒否 → 業務。送り直しと拒否のないものは NONE。
+     */
+    public val stage: RejectionStage
+        get() =
+            when (outcome) {
+                DocumentOutcome.UNREADABLE -> RejectionStage.DECRYPTION
+                DocumentOutcome.NO_ENVELOPE, DocumentOutcome.REJECTED -> RejectionStage.SYNTAX
+                DocumentOutcome.RESENT -> RejectionStage.NONE
+                DocumentOutcome.CHECKED -> checkedStage()
+            }
+
+    private fun checkedStage(): RejectionStage {
+        val messages = (receipt?.result as? InterchangeResult.Checked)?.messages.orEmpty()
+        return when {
+            messages.any { it.header != null } -> RejectionStage.SYNTAX
+            messages.any { it.errors.isNotEmpty() } -> RejectionStage.SCHEMA
+            receipt?.orders.orEmpty().any { !it.accepted } -> RejectionStage.BUSINESS
+            else -> RejectionStage.NONE
+        }
+    }
+}
+
+/** 文書を拒否した段階(運用の通知。ROADMAP P12 の DoD「構文・スキーマ・業務のどのエラーでも運用通知が出る」)。 */
+public enum class RejectionStage {
+    DECRYPTION,
+    SYNTAX,
+    SCHEMA,
+    BUSINESS,
+    NONE,
+}
 
 public enum class DocumentOutcome {
     /** 復号・署名の検証に失敗した(応答を返せない。運用に知らせ、取引先に台帳の連絡先から連絡する) */

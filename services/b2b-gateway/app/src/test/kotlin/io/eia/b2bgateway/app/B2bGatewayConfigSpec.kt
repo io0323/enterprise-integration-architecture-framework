@@ -43,18 +43,27 @@ class B2bGatewayConfigSpec :
             config.submitWindow shouldBe 12.hours
         }
 
-        test("serve には、原本の置き場・保持期間・Gateway・トークンのエンドポイントが要る(保持期間に既定は置かない)") {
-            B2bGatewayConfig
-                .fromEnvironment(minimal)
-                .ok()
-                .forServe()
-                .fields() shouldContainExactlyInAnyOrder
+        test("serve には、原本の置き場・保持期間・Gateway・トークンと、監査のアンカーの置き場・保持期間が要る(保持期間に既定は置かない)") {
+            val required =
                 listOf(
                     B2bGatewayConfig.S3_ENDPOINT,
                     B2bGatewayConfig.ORIGINAL_RETENTION,
                     B2bGatewayConfig.GATEWAY_URL,
                     B2bGatewayConfig.TOKEN_URL,
                 )
+            B2bGatewayConfig
+                .fromEnvironment(minimal)
+                .ok()
+                .forServe()
+                .fields() shouldContainExactlyInAnyOrder
+                required + listOf(B2bGatewayConfig.AUDIT_S3_ENDPOINT, B2bGatewayConfig.ANCHOR_RETENTION)
+            // アンカーを無効にすれば、その置き場は要らない
+            val withoutAnchor = minimal + (B2bGatewayConfig.ANCHOR_ENABLED to "false")
+            B2bGatewayConfig
+                .fromEnvironment(withoutAnchor)
+                .ok()
+                .forServe()
+                .fields() shouldContainExactlyInAnyOrder required
 
             val serve =
                 B2bGatewayConfig
@@ -65,6 +74,8 @@ class B2bGatewayConfigSpec :
                                 B2bGatewayConfig.ORIGINAL_RETENTION to "P1D",
                                 B2bGatewayConfig.GATEWAY_URL to "http://apisix:9080",
                                 B2bGatewayConfig.TOKEN_URL to "http://keycloak:8080/realms/eiaf/protocol/openid-connect/token",
+                                B2bGatewayConfig.AUDIT_S3_ENDPOINT to "http://seaweedfs:8333",
+                                B2bGatewayConfig.ANCHOR_RETENTION to "P1D",
                             ),
                     ).ok()
                     .forServe()
@@ -81,6 +92,7 @@ class B2bGatewayConfigSpec :
                         B2bGatewayConfig.S3_ENDPOINT to "seaweedfs:8333",
                         B2bGatewayConfig.HEALTH_PORT to "70000",
                         B2bGatewayConfig.SUBMIT_WINDOW to "24h",
+                        B2bGatewayConfig.ANCHOR_ENABLED to "yes",
                     ),
                 ).fields() shouldContainExactlyInAnyOrder
                 listOf(
@@ -89,6 +101,7 @@ class B2bGatewayConfigSpec :
                     B2bGatewayConfig.S3_ENDPOINT,
                     B2bGatewayConfig.HEALTH_PORT,
                     B2bGatewayConfig.SUBMIT_WINDOW,
+                    B2bGatewayConfig.ANCHOR_ENABLED,
                 )
         }
 

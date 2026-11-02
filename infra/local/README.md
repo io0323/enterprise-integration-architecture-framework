@@ -48,7 +48,7 @@ docker compose -f infra/local/docker-compose.yml --env-file infra/local/images.e
 | `cdc` | kafka-connect(Debezium), postgres-exporter, kafka-exporter, legacy-migrate・kafka-topics・schema-publish(1 回だけ動いて終わる), legacy-order-acl | Outbox + CDC(P06)、レガシーの CDC と Anti-Corruption Layer(P06 ⑤。ADR-0026)と、その監視(P06 ④) |
 | `iot` | mosquitto, mosquitto-exporter(Telegraf), kafka-topics・schema-publish(1 回だけ動いて終わる), iot-bridge, kafka-exporter | IoT のテレメトリ(P11。ADR-0039)。デバイスは自分のトピック `devices/{tenant}/{deviceId}/...` にだけ書け(デバイスの一覧 `mosquitto/devices.txt` から起動のたびにパスワードと ACL を作る)、iot-bridge が `iot.telemetry.reported.v1` に出す。溜め込みの数と捨てた数は Telegraf が `$SYS` から Prometheus に出す。対応は `docs/runbooks/iot-bridge.md` |
 | `file` | seaweedfs(S3), seaweedfs-init, sftp, sftp-b2b, file-exchange-migrate(1 回だけ動いて終わる), file-exchange | ファイル連携(P09。ADR-0032)。file-exchange が受け口の売上ファイルを検査し、取引先の代わりの sftp-b2b(partner01)に PGP で送る。送り手の batch-etl と一緒に動かすときは `make up PROFILE="order batch file"` |
-| `b2b` | seaweedfs(S3), sftp-b2b | B2B / EDI(P12) |
+| `b2b` | seaweedfs(S3), seaweedfs-init, sftp-b2b, b2b-gateway-migrate(1 回だけ動いて終わる), b2b-gateway | B2B / EDI(P12。ADR-0040・ADR-0041)。b2b-gateway が取引先の代わりの sftp-b2b(partner01)の `to-eiaf` を見回って受注の文書を受け付け、原本を Object Lock のバケットに置き、応答を `from-eiaf` に返す。受け付けた注文を order の API に取り込むときは `make up PROFILE="order b2b"` |
 | `chaos` | toxiproxy | 障害注入(P04b, P14) |
 | `order` | order-migrate・kafka-topics・schema-publish(1 回だけ動いて終わる), order-service, kafka-connect, postgres-exporter, kafka-exporter, seaweedfs, seaweedfs-init | API 連携のサンプル業務サービス(P05。ADR-0024)。SeaweedFS は監査のアンカーの保存先(ADR-0017 §5) |
 | `saga` | inventory-migrate・payment-migrate・shipping-migrate・kafka-topics・schema-publish(1 回だけ動いて終わる), inventory-service, payment-service, shipping-service, kafka-connect, postgres-exporter, kafka-exporter | 注文 Saga の参加者(P07。ADR-0029)。返事は Outbox + Debezium(コネクタ `inventory-outbox`・`payment-outbox`・`shipping-outbox`)で発行する。Orchestrator は order-service(order profile。`make up PROFILE="order saga"` で両方を動かす) |
@@ -171,6 +171,17 @@ curl -s -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token
   - 監視は Grafana の **File — Sales daily**(uid `eiaf-file`)と `prometheus/rules/file-exchange.rules.yml`。手順は `docs/runbooks/file-exchange.md`。
   - `make verify PROFILE=file` は、バケットの権限(両方の identity の管理操作の拒否)・ホスト鍵の固定・売上ファイルの受け取りから配送まで・
     GnuPG での復号と署名の検証・メトリクス・アラート・ダッシュボードを確かめる。
+- **B2B / EDI Gateway(ADR-0040・ADR-0041)**: `make up PROFILE=b2b` が installDist と開発用の PGP の鍵(`make pgp-keys`。自社 eiaf・取引先 partner01・保管用 archive)の後に、
+  `seaweedfs-init`(バケット `eiaf-b2b-originals`(Object Lock)とバケットポリシー)→ `b2b-gateway-migrate`(所有者)→ `b2b-gateway`(アプリのロール)の順に動かす。
+  - **P12 ⑥b より前に作ったボリュームには DB `b2b_gateway` とそのロールが無いので、`make clean` が必要**(DB は postgres の初回起動のときだけ作る)。
+  - S3 の identity は 2 つ: 原本を書く `eiaf-b2b-gateway`(`originals/`・`readable/` の下だけ。削除・Legal Hold・バケットの管理操作はバケットポリシーで拒否)と、
+    監査のアンカーを書く `eiaf-audit-b2b-gateway`(`eiaf-audit` の `anchors/b2b-gateway/` の下だけ)。原本の保持期間はローカルだけ `P1D`(`B2B_GATEWAY_ORIGINAL_RETENTION`)。
+  - 取引先のコードの対応表は空で始まる。取り込みは `make b2b-codes PARTNER=partner01 KIND=<buyers|delivery-parties|items> FILE=<CSV> OPERATOR=<運用者>`。
+  - 監視は Grafana の **B2B — EDI gateway**(uid `eiaf-b2b`)と `prometheus/rules/b2b.rules.yml`・`trading-partner.rules.yml`。手順は `docs/runbooks/b2b-partner-credentials.md`。
+  - 改竄の検査は `make audit-verify SERVICE=b2b-gateway`。
+  - `make verify PROFILE=b2b` は、バケットと 2 つの identity の権限・ホスト鍵の固定・取引先の側として署名と暗号化をした受注の文書の受け付け
+    (原本の COMPLIANCE・監査)→ CONTRL と APERAK(対応表が空なので業務の拒否)の送信・GnuPG での復号と署名の検証・監査のアンカー・
+    メトリクス・拒否の警告・アラート・ダッシュボード(鍵の期限を二重に数えないこと)を確かめる。
 - **SaaS(CRM)の顧客の連携(ADR-0035・ADR-0036)**: `make up PROFILE=saas` が installDist の後に、`webhook-receiver-migrate`・`integration-flow-migrate`(所有者の資格情報。業務の表・`inbox`・`outbox`・Debezium の CONNECT)→ 各サービス(アプリのロール)の順に動かし、起動の後にコネクタ `webhook-receiver-outbox`・`integration-flow-outbox` を登録する。
   - saas-mock は CRM の模擬(状態はメモリの上だけ)。顧客の作成・変更(管理の API)で、署名した Webhook を Gateway の署名のルート(JWT ではない。接続元ごとの Rate Limit 120 回/分・本文の上限 256 KiB)に送る。webhook-receiver は署名を検証し、受け取りの記録(本文は持たない)と取り込みのトピック `integration.crm-webhook.received.v1`(confidential・保持 7 日。`kafka/topics.conf`)への Outbox を書いて 204 を返す。
   - integration-flow は取り込みのトピックを読み、Flow の定義(`contracts/flows`)で Canonical の `Customer` にして `sales.customer.changed.v1` に出す。CRM の API を 1 分ごと(`INTEGRATION_FLOW_POLL_INTERVAL`。Flow の既定は 15 分)に同期し、Webhook と同じ新旧の記録で古い版を出さない。

@@ -16,6 +16,13 @@
 | `TradingPartnerCredentialExpiringSoon` | 期限まで 30 日を切った | warning |
 | `TradingPartnerCredentialExpiringCritical` | 期限まで 7 日を切った | critical |
 | `TradingPartnerCredentialExpired` | 期限が切れた | critical |
+| `B2bDocumentRejected` | 取引先の文書を拒否した(段階ごと。下の「拒否した文書」) | warning |
+| `B2bInboxStuck` | 受け付けに失敗したファイルが、処理中のディレクトリに 15 分残っている(下の「受け取りのディレクトリ」) | warning |
+| `B2bInboxUnavailable` | 取引先の受け取りのディレクトリを 15 分見られない(下の「期限が切れたとき」) | warning |
+| `B2bAcknowledgementSendFailing` | 応答を送れない状態が 15 分続いている(下の「応答の送信」) | warning |
+| `B2bOrderSubmissionFailing` | 受け付けた注文を order の API に取り込めない状態が 15 分続いている(下の「社内への取り込み」) | warning |
+| `B2bAperakDeadlineApproaching` / `B2bAperakDeadlinePassed` | 業務の応答の期限まで 1 時間を切った / 過ぎた(下の「社内への取り込み」) | warning / critical |
+| `B2bOrderSubmissionExpired` | 送り直しの上限を過ぎた注文がある(下の「送り直しの上限を過ぎた注文」) | critical |
 
 - メトリクスは `eia_trading_partner_credential_expiry_seconds`(期限の UNIX 秒。ラベル `trading_partner_id`・`trading_partner_credential`)。
 - 鍵の種類(`trading_partner_credential`):
@@ -115,6 +122,7 @@ b2b-gateway は、取引先が注文に書いたコード(GLN・取引先の商�
   b2b-gateway codes import <取引先> <buyers|delivery-parties|items> <CSV のファイル> --operator <運用者>
   ```
   - アプリのロールの資格情報と台帳(`B2B_GATEWAY_PARTNERS_FILE`)で動く(所有者のパスワードを環境に渡さない)。`--operator` は監査の「誰が」に残る運用者の名前。
+  - ローカル基盤では `make b2b-codes PARTNER=partner01 KIND=items FILE=items.csv OPERATOR=ops-1`(ファイルをコンテナに読み込み専用で渡す)。
   - 終了コード: 0 = 入れ替えた(版と行の数を表示)、2 = 使い方・ファイルの誤り(何も変えていない)、1 = DB の失敗など(やり直してよい)。
 
 ## 社内への取り込み
@@ -137,3 +145,18 @@ b2b-gateway は、取引先が注文に書いたコード(GLN・取引先の商�
 3. 登録されていなければ、取引先の連絡先(`contacts` の `business`)と相談し、手で登録するか、取引先に同じ注文を新しい交換で送り直してもらう
    (送り直しの交換は新しい管理番号で届くので、新しい送信待ちになる。同じ注文番号は ORD007 で拒否されるので、取引先には新しい注文番号で送ってもらう)。
 4. 取引先には APERAK を自動では返さない。結果を連絡先に伝える。
+
+## 拒否した文書
+アラート `B2bDocumentRejected`(取引先・段階ごと。メトリクス `eia_b2b_documents_total` の `b2b_stage`)は、取引先の文書を拒否したことを運用者に知らせる。
+取引先には、構文・スキーマの段階は CONTRL、業務の段階は APERAK で、標準のコードと仕様の固定の文言だけを返している(社内の情報は返さない。ADR-0041 §5)。
+1. `b2b.received_document`(`outcome`・`stage`・`refusal`)と監査(`b2b.document.receive` の `details`)で、どの文書をどの段階で拒否したかを確かめる。
+2. 段階ごとの対応:
+   - `decryption`: 応答を返せない。上の「読めない文書」の手順で、取引先の連絡先に知らせる
+   - `syntax`・`schema`: 取引先の EDI の製品の設定や、仕様(`contracts/files/edi/`)の版の食い違い。取引先が CONTRL を受け取っているかを確かめ、必要なら調整する
+   - `business`: 対応表(買い手・届け先・商品。上の「コードの対応表」)・合意した通貨・注文番号の重複など。対応表の不足なら、取引先から最新の表を受け取って取り込み直す
+3. 同じ取引先で拒否が続くときは、取引先の連絡先(`contacts` の `operations`)と原因を確かめる。
+
+## 監査の改竄の検査
+- b2b-gateway は監査のハッシュチェーンの末尾を、アンカーとして `eiaf-audit` の `anchors/b2b-gateway/` に定期的に保存する(`B2B_GATEWAY_AUDIT_ANCHOR_INTERVAL`。ADR-0017 §5)。
+- 改竄の検査は `make audit-verify SERVICE=b2b-gateway`(終了コード 0 / 1 / 2。`docs/runbooks/audit-verify.md`)。
+- 受け取った文書の原本は `eiaf-b2b-originals` に Object Lock(COMPLIANCE)で置いてある。監査の `payload_sha256` と原本の SHA-256 を照らし合わせれば、原本が受け取ったものと同じことを確かめられる。

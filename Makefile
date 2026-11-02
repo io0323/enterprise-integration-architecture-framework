@@ -1,7 +1,7 @@
 # EIAF ローカル開発用コマンド(CLAUDE.md §7)
 GRADLE := ./gradlew
 
-.PHONY: help setup build check arch-test contract-check schemas alerts-test integration-test format env not-root certs pgp-keys order-dist legacy-dist saga-dist batch-dist file-dist saas-dist iot-dist up down logs ps verify stats clean e2e audit-verify legacy-simulate dlq-replay batch-etl file-exchange iot-reprocess-dlq
+.PHONY: help setup build check arch-test contract-check schemas alerts-test integration-test format env not-root certs pgp-keys order-dist legacy-dist saga-dist batch-dist file-dist b2b-dist saas-dist iot-dist up down logs ps verify stats clean e2e audit-verify legacy-simulate dlq-replay batch-etl file-exchange b2b-codes iot-reprocess-dlq
 
 # ローカル基盤(infra/local。ADR-0016)
 # PROFILE: core / cdc / iot / file / b2b / chaos / order / saga / batch / saas。core は常に含まれる(積み上げ方式)。空白区切りで複数指定できる。
@@ -90,10 +90,13 @@ file-dist: ## ファイル授受(file-exchange)のイメージの中身(installD
 saas-dist: ## SaaS 連携(saas-mock・webhook-receiver・integration-flow)と schema-publish のイメージの中身(installDist)を作る(ADR-0035・ADR-0036)
 	$(GRADLE) :services:saas-mock:app:installDist :services:webhook-receiver:app:installDist :services:integration-flow:app:installDist :tools:schema-publish:installDist
 
+b2b-dist: ## B2B / EDI Gateway(b2b-gateway)のイメージの中身(installDist)を作る(ADR-0040)
+	$(GRADLE) :services:b2b-gateway:app:installDist
+
 iot-dist: ## IoT の橋渡し(iot-bridge)と schema-publish のイメージの中身(installDist)を作る(ADR-0039)
 	$(GRADLE) :services:iot-bridge:app:installDist :tools:schema-publish:installDist
 
-up: not-root env certs $(if $(filter order,$(PROFILE)),order-dist) $(if $(filter cdc,$(PROFILE)),legacy-dist) $(if $(filter saga,$(PROFILE)),saga-dist) $(if $(filter batch,$(PROFILE)),batch-dist) $(if $(filter file,$(PROFILE)),file-dist pgp-keys) $(if $(filter saas,$(PROFILE)),saas-dist) $(if $(filter iot,$(PROFILE)),iot-dist) ## ローカル基盤を起動し、全コンテナが healthy になるまで待つ(例: make up PROFILE=cdc)
+up: not-root env certs $(if $(filter order,$(PROFILE)),order-dist) $(if $(filter cdc,$(PROFILE)),legacy-dist) $(if $(filter saga,$(PROFILE)),saga-dist) $(if $(filter batch,$(PROFILE)),batch-dist) $(if $(filter file,$(PROFILE)),file-dist pgp-keys) $(if $(filter b2b,$(PROFILE)),b2b-dist pgp-keys) $(if $(filter saas,$(PROFILE)),saas-dist) $(if $(filter iot,$(PROFILE)),iot-dist) ## ローカル基盤を起動し、全コンテナが healthy になるまで待つ(例: make up PROFILE=cdc)
 	@if [ -f $(INFRA)/certs/.renewed ]; then \
 		$(COMPOSE) --profile '*' rm --stop --force $(CERT_CONSUMERS) >/dev/null 2>&1 || true; \
 		rm -f $(INFRA)/certs/.renewed; \
@@ -131,6 +134,10 @@ batch-etl: env batch-dist ## 分析のバッチのコマンドを 1 回だけ実
 
 file-exchange: env file-dist ## ファイル授受のコマンドを 1 回だけ実行する(例: make file-exchange ARGS="receive sales_daily_20261013150000_001"。make up PROFILE=file の後。docs/runbooks/file-exchange.md)
 	@$(COMPOSE) --profile file run --rm --build --no-deps file-exchange $(ARGS)
+
+b2b-codes: env b2b-dist ## 取引先のコードの対応表を CSV で丸ごと入れ替える(例: make b2b-codes PARTNER=partner01 KIND=items FILE=items.csv OPERATOR=ops-1。make up PROFILE=b2b の後。docs/runbooks/b2b-partner-credentials.md)
+	@test -n "$(PARTNER)" -a -n "$(KIND)" -a -n "$(FILE)" -a -n "$(OPERATOR)" || { echo "PARTNER・KIND・FILE・OPERATOR を指定してください" >&2; exit 2; }
+	@$(COMPOSE) --profile b2b run --rm --build --no-deps -v "$(abspath $(FILE)):/import/codes.csv:ro" b2b-gateway codes import $(PARTNER) $(KIND) /import/codes.csv --operator $(OPERATOR)
 
 iot-reprocess-dlq: env iot-dist ## IoT のテレメトリの DLQ をデコードからやり直す。既定は dry-run(例: make iot-reprocess-dlq ARGS="--limit 10 [--execute]"。make up PROFILE=iot の後。docs/runbooks/iot-bridge.md)
 	@$(COMPOSE) --profile iot run --rm --build --no-deps iot-bridge reprocess-dlq $(ARGS)

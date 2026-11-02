@@ -712,6 +712,149 @@ verify_b2b() {
   else
     pass "sftp-b2b: 社内向け(sftp-file)の鍵を拒否する"
   fi
+  verify_sftp_host_key
+  verify_b2b_bucket
+  verify_b2b_gateway
+}
+
+# B2B の原本のバケットと、b2b-gateway の 2 つの資格情報(原本・監査のアンカー)の範囲(scripts/s3-b2b.sh。P12 ⑥b。Issue #6)
+verify_b2b_bucket() {
+  local output line
+  output="$(docker run --rm --network eiaf \
+    -e ADMIN_ACCESS_KEY="$S3_ACCESS_KEY" -e ADMIN_SECRET_KEY="$S3_SECRET_KEY" \
+    -e B2B_ACCESS_KEY="$B2B_GATEWAY_S3_ACCESS_KEY" -e B2B_SECRET_KEY="$B2B_GATEWAY_S3_SECRET_KEY" \
+    -e ANCHOR_ACCESS_KEY="$B2B_GATEWAY_AUDIT_S3_ACCESS_KEY" -e ANCHOR_SECRET_KEY="$B2B_GATEWAY_AUDIT_S3_SECRET_KEY" \
+    -e RUN_ID="$(date +%s)-$$" -e S3_ENDPOINT=http://seaweedfs:8333 \
+    -v "$here/scripts/s3-b2b.sh:/s3-b2b.sh:ro" --entrypoint bash "$AWS_CLI_IMAGE" /s3-b2b.sh 2>&1 || true)"
+  while IFS= read -r line; do
+    case "$line" in
+      "OK "*) pass "S3 b2b: ${line#OK }" ;;
+      "NG "*) fail "S3 b2b: ${line#NG }" ;;
+    esac
+  done <<<"$output"
+  grep -q -E '^(OK|NG) ' <<<"$output" || fail "S3 b2b: 検査スクリプトを実行できない ($(tail -1 <<<"$output"))"
+}
+
+# 取引先の秘密鍵と EIAF の公開鍵だけを入れた一時の鍵束で、GnuPG のコマンド([1])を動かす(鍵は 0600 なので、ホストの利用者の uid で動かす)。
+# [1] の中では $passphrase(取引先の鍵のパスフレーズ)と $eiaf(EIAF の鍵のフィンガープリント)が使える。作業のディレクトリは /work
+b2b_partner_gpg() { # b2b_partner_gpg <作業のディレクトリ> <gpg のコマンド>
+  docker run --rm -i --user "$(id -u):$(id -g)" -v "$here/secrets/pgp-partner01.sec.asc:/keys/partner.sec.asc:ro" \
+    -v "$here/secrets/pgp-eiaf.pub.asc:/keys/eiaf.pub.asc:ro" -v "$1:/work" --entrypoint bash eiaf-gnupg:local -c '
+      set -euo pipefail
+      mkdir -m 700 -p "$GNUPGHOME"
+      read -r passphrase || true
+      gpg --batch --quiet --import /keys/eiaf.pub.asc 2>/dev/null
+      eiaf="$(gpg --batch --with-colons --list-keys | awk -F: "/^fpr:/ { print \$10; exit }")"
+      gpg --batch --quiet --pinentry-mode loopback --passphrase-fd 3 --import /keys/partner.sec.asc 3<<<"$passphrase" 2>/dev/null
+      '"$2" <"$here/secrets/pgp-partner01.passphrase"
+}
+
+# b2b-gateway(P12。ADR-0040・ADR-0041)。取引先の側として、受注の文書(ORDERS)を GnuPG で署名・暗号化して受け取りのディレクトリに置き、
+# 受け付け(原本の保管・記録・監査)→ 応答(CONTRL と APERAK)の送信までを確かめる。b2b profile では取引先のコードの対応表が空なので、
+# 注文は業務の段階で拒否され(買い手・商品が対応表にない)、APERAK は RE になる(社内への取り込みは order profile と一緒の E2E。P12 ⑧)
+verify_b2b_gateway() {
+  local work stamp reference name doc
+  work="$(mktemp -d)"
+  stamp="$(date -u +%y%m%d%H%M%S)"
+  reference="V$stamp"
+  name="orders-$stamp.edi.pgp"
+  b2b_sql() { "${compose[@]}" exec -T postgres psql -U postgres -d b2b_gateway -tAc "$1"; }
+  docker build -q -t eiaf-gnupg:local --build-arg DEBIAN_IMAGE="$DEBIAN_IMAGE" "$here/images/gnupg" >/dev/null
+
+  # 契約のサンプル(contracts/files/edi/edifact-orders.v1.yaml)の形の交換(明細 1 つ)。管理番号は毎回変える
+  printf '%s' "UNA:+.? 'UNB+UNOA:3+4912345000019:14+4900000000001:14+$(date -u +%y%m%d:%H%M)+$reference'UNH+1+ORDERS:D:96A:UN'BGM+220+PO-$reference+9'DTM+137:$(date -u +%Y%m%d):102'NAD+BY+4912345000019::9'NAD+SU+4900000000001::9'CUX+2:JPY:9'LIN+1++4901234567894:EN'QTY+21:1'PRI+AAA:100'UNS+S'CNT+2:1'UNT+12+1'UNZ+1+$reference'" >"$work/orders.edi"
+  b2b_partner_gpg "$work" 'gpg --batch --quiet --pinentry-mode loopback --passphrase-fd 3 --trust-model always --recipient "$eiaf" \
+    --sign --encrypt --output /work/orders.edi.pgp /work/orders.edi 3<<<"$passphrase"' >/dev/null 2>&1 || true
+  if [[ -s "$work/orders.edi.pgp" ]] && sftp -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$here/secrets/sftp-b2b.known_hosts" -o LogLevel=ERROR \
+    -o BatchMode=yes -i "$here/secrets/sftp-b2b" -P 19223 -b - partner01@127.0.0.1 >/dev/null 2>&1 <<SFTP
+put $work/orders.edi.pgp to-eiaf/$name.part
+rename to-eiaf/$name.part to-eiaf/$name
+SFTP
+  then
+    pass "sftp-b2b: 取引先の側として、署名・暗号化した受注の文書を受け取りのディレクトリ(to-eiaf)に置ける(一時名 → 正式名)"
+  else
+    fail "sftp-b2b: 受注の文書を受け取りのディレクトリに置けない"
+  fi
+
+  check "b2b-gateway: 文書を受け付け、交換を検査した(received_document が CHECKED)" \
+    retry 18 5 equals CHECKED b2b_sql "select outcome from b2b.received_document where file_name = '$name'"
+  doc="$(b2b_sql "select id from b2b.received_document where file_name = '$name'" 2>/dev/null || true)"
+  check "b2b-gateway: 対応表にない買い手・商品の注文を、業務の段階で拒否した(監査 b2b.document.receive の段階 business)" \
+    equals business b2b_sql "select details->>'stage' from audit.audit_log where action = 'b2b.document.receive' and target_id = '$doc'"
+  check "b2b-gateway: 応答(CONTRL と APERAK)を取引先に送った" \
+    retry 18 5 equals "APERAK:SENT CONTRL:SENT" b2b_sql "select string_agg(kind || ':' || state, ' ' order by kind) from b2b.acknowledgement where document_id = '$doc'"
+  check "b2b-gateway: 送った応答ごとに監査(b2b.ack.send)がある" \
+    equals 2 b2b_sql "select count(*) from audit.audit_log a join b2b.acknowledgement k on a.target_id = k.id::text where a.action = 'b2b.ack.send' and k.document_id = '$doc'"
+  local original_key original_version mode
+  original_key="$(b2b_sql "select split_part(original_ref, '#', 1) from b2b.received_document where id = '$doc'" 2>/dev/null || true)"
+  original_version="$(b2b_sql "select split_part(original_ref, '#', 2) from b2b.received_document where id = '$doc'" 2>/dev/null || true)"
+  mode="$(docker run --rm --network eiaf -e AWS_ACCESS_KEY_ID="$S3_ACCESS_KEY" -e AWS_SECRET_ACCESS_KEY="$S3_SECRET_KEY" -e AWS_DEFAULT_REGION=us-east-1 \
+    "$AWS_CLI_IMAGE" --endpoint-url http://seaweedfs:8333 s3api get-object-retention --bucket eiaf-b2b-originals --key "$original_key" \
+    --version-id "$original_version" --query Retention.Mode --output text 2>/dev/null || true)"
+  if [[ "$mode" == COMPLIANCE ]]; then
+    pass "b2b-gateway: 原本(受け取った暗号文)を Object Lock の COMPLIANCE で保管した($original_key)"
+  else
+    fail "b2b-gateway: 原本の保持のモードが COMPLIANCE でない (${mode:-なし})"
+  fi
+
+  # 取引先の側: 届いた応答を取り出し、GnuPG で復号して EIAF の署名を確かめる
+  local contrl aperak status
+  contrl="$(b2b_sql "select remote_name from b2b.acknowledgement where document_id = '$doc' and kind = 'CONTRL'" 2>/dev/null || true)"
+  aperak="$(b2b_sql "select remote_name from b2b.acknowledgement where document_id = '$doc' and kind = 'APERAK'" 2>/dev/null || true)"
+  sftp -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$here/secrets/sftp-b2b.known_hosts" -o LogLevel=ERROR -o BatchMode=yes \
+    -i "$here/secrets/sftp-b2b" -P 19223 -b - partner01@127.0.0.1 >/dev/null 2>&1 <<SFTP || true
+get from-eiaf/$contrl $work/contrl.pgp
+get from-eiaf/$aperak $work/aperak.pgp
+SFTP
+  status="$(b2b_partner_gpg "$work" 'for f in contrl aperak; do gpg --batch --quiet --pinentry-mode loopback --passphrase-fd 3 --status-fd 1 \
+    --output "/work/$f.edi" --decrypt "/work/$f.pgp" 3<<<"$passphrase"; done' 2>/dev/null || true)"
+  if [[ "$(grep -c '^\[GNUPG:\] VALIDSIG' <<<"$status")" == 2 && "$(grep -c '^\[GNUPG:\] GOODMDC' <<<"$status")" == 2 ]]; then
+    pass "GnuPG: 取引先の鍵で応答(CONTRL・APERAK)を復号でき、EIAF の鍵の署名と改竄の検知(MDC)を確かめられる"
+  else
+    fail "GnuPG: 届いた応答を復号・検証できない($(grep -o -E 'GNUPG:\] [A-Z_]+' <<<"$status" | sort -u | tr '\n' ' '))"
+  fi
+  check "b2b-gateway: CONTRL は受け取った交換の管理番号を写し、交換を受け付けた(UCI の 0083 = 7)" \
+    grep -q "UCI+$reference+4912345000019:14+4900000000001:14+7'" "$work/contrl.edi"
+  check "b2b-gateway: APERAK は注文を拒否し(RE)、仕様の固定の文言だけで理由を返す(ORD001 買い手・ORD004 商品)" \
+    bash -c "grep -q \"+9+RE'\" '$work/aperak.edi' && grep -q 'ERC+ORD001::ZZZ' '$work/aperak.edi' && grep -q 'ERC+ORD004::ZZZ' '$work/aperak.edi'"
+
+  # 監査のアンカー(compose では 1 分ごと)と、全体の検査(make audit-verify SERVICE=b2b-gateway)
+  local output astatus=0
+  sleep 70
+  output="$("$here/scripts/audit-anchored.sh" b2b-gateway 2>&1)" || astatus=$?
+  if [[ "$astatus" == 0 ]]; then
+    pass "監査: make audit-verify SERVICE=b2b-gateway が OK(アンカーあり。$(grep -o -E 'records=[0-9]+ head_seq=[0-9]+ anchor_versions=[0-9]+' <<<"$output"))"
+  else
+    fail "監査: make audit-verify SERVICE=b2b-gateway が OK でないか、アンカーがない ($(grep -E '^(NG|ERROR|注意)|^audit-anchored' <<<"$output" | head -3 | tr '\n' ' '))"
+  fi
+
+  # メトリクス(OTLP → Prometheus)・アラートのルール・ダッシュボード
+  check "Prometheus: b2b-gateway が拒否した文書の数を出す(partner01・business)" \
+    retry 18 10 bash -c "curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=sum(eia_b2b_documents_total{trading_partner_id=\"partner01\",b2b_stage=\"business\"})' | grep -q '\"value\"'"
+  check "Prometheus: b2b-gateway が応答の送信の数を出す(partner01・sent)" \
+    retry 18 10 bash -c "curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=sum(eia_b2b_acknowledgements_total{trading_partner_id=\"partner01\",b2b_outcome=\"sent\"})' | grep -q '\"value\"'"
+  check "Prometheus: 拒否した文書の警告(B2bDocumentRejected。段階 business)が出る(運用通知。ROADMAP P12 の DoD)" \
+    retry 18 10 bash -c "curl -fsS http://localhost:19090/api/v1/alerts | python3 -c 'import json,sys; sys.exit(0 if any(a[\"labels\"][\"alertname\"]==\"B2bDocumentRejected\" and a[\"labels\"].get(\"b2b_stage\")==\"business\" for a in json.load(sys.stdin)[\"data\"][\"alerts\"]) else 1)'"
+  check "Prometheus: B2B のアラートのルールを読み込んでいる" \
+    bash -c "curl -fsS http://localhost:19090/api/v1/rules | python3 -c 'import json,sys; n={r[\"name\"] for g in json.load(sys.stdin)[\"data\"][\"groups\"] for r in g[\"rules\"]}; sys.exit(0 if {\"B2bDocumentRejected\",\"B2bInboxStuck\",\"B2bInboxUnavailable\",\"B2bAcknowledgementSendFailing\",\"B2bOrderSubmissionFailing\",\"B2bAperakDeadlineApproaching\",\"B2bAperakDeadlinePassed\",\"B2bOrderSubmissionExpired\"} <= n else 1)'"
+  check "台帳(b2b/partners.json)は make env が作り、鍵とホスト鍵の期日がどれも 30 日より先" \
+    python3 -c 'import datetime,json,sys; d=json.load(open(sys.argv[1])); dates=[k["validUntil"] for p in d["partners"] for k in [p["sftp"]["hostKey"],p["sftp"]["clientKey"]]+([p["pgp"]] if "pgp" in p else [])]; sys.exit(0 if dates and min(dates) > (datetime.date.today()+datetime.timedelta(days=30)).isoformat() else 1)' "$here/b2b/partners.json"
+  # 鍵の期限は、P12 ⑦ までは file-exchange と b2b-gateway の両方が同じ系列を出す。ダッシュボードの式(取引先と鍵の種類ごとの min)が、
+  # 出しているサービスの数によらず、取引先 partner01 の鍵の種類ごとに 1 系列(3 系列)になることを確かめる(二重に数えない。承認の条件)
+  check "Grafana の鍵の期限のパネルの式は、取引先と鍵の種類ごとに 1 系列(二重に数えない)" \
+    retry 18 10 bash -c "curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=min by (trading_partner_id, trading_partner_credential) (eia_trading_partner_credential_expiry_seconds{trading_partner_id=\"partner01\"}) - time()' | python3 -c 'import json,sys; sys.exit(0 if len(json.load(sys.stdin)[\"data\"][\"result\"]) == 3 else 1)'"
+  local dash result
+  dash="$(curl -fsS -u "admin:$GRAFANA_ADMIN_PASSWORD" http://localhost:19300/api/dashboards/uid/eiaf-b2b || true)"
+  if [[ "$(json 'd["meta"]["folderTitle"] + "/" + d["dashboard"]["title"]' <<<"$dash" 2>/dev/null)" == "EIAF/B2B — EDI gateway" ]]; then
+    pass "Grafana: ダッシュボード B2B — EDI gateway(フォルダ EIAF)を provisioning で読み込んでいる"
+    # 処理中に残ったファイル・取り込み・期限・Circuit Breaker・リトライと拒否は、b2b profile だけ(order なし)・平常時は空でよい
+    result="$(dashboard_panels_return_data "$dash" "処理中に残ったファイル" "社内への取り込み(1 時間あたり)" "業務の応答(APERAK)の期限までの残り" \
+      "取引先の SFTP と order の API の Circuit Breaker" "リトライと拒否" "B2B のアラート(firing / pending)")"
+    if [[ "$result" == ok ]]; then pass "Grafana: B2B のダッシュボードの全パネルの式が、Prometheus でデータを返す"; else fail "Grafana: B2B のパネルの式が想定外: $result"; fi
+  else
+    fail "Grafana: ダッシュボード eiaf-b2b を読み込めない"
+  fi
+  rm -rf "$work"
 }
 
 # ------------------------------------------------------------------ chaos

@@ -7,6 +7,7 @@ import io.eia.b2bgateway.application.port.inbound.OrderDecision
 import io.eia.b2bgateway.application.port.inbound.Receipt
 import io.eia.b2bgateway.application.port.inbound.ReceiveInterchangeUseCase
 import io.eia.b2bgateway.application.port.inbound.ReceivedDocument
+import io.eia.b2bgateway.application.port.inbound.RejectionStage
 import io.eia.b2bgateway.application.port.outbound.AcknowledgementKind
 import io.eia.b2bgateway.application.port.outbound.DocumentCrypto
 import io.eia.b2bgateway.application.port.outbound.DocumentRecord
@@ -289,5 +290,19 @@ class AcceptDocumentSpec :
             shouldThrow<IllegalArgumentException> {
                 AcceptDocumentService(AcceptFakes(), AcceptFakes(), AcceptFakes(), AcceptFakes(), FixedClock(NOW), 24.hours)
             }
+        }
+        test("拒否の段階(運用の通知): 読めない → 復号、交換の拒否 → 構文、業務で拒否した注文 → 業務、送り直しと拒否なし → なし") {
+            fun stage(
+                outcome: DocumentOutcome,
+                receipt: Receipt? = null,
+            ) = AcceptedDocument("doc-1", outcome, receipt).stage
+
+            stage(DocumentOutcome.UNREADABLE) shouldBe RejectionStage.DECRYPTION
+            stage(DocumentOutcome.REJECTED) shouldBe RejectionStage.SYNTAX
+            stage(DocumentOutcome.NO_ENVELOPE) shouldBe RejectionStage.SYNTAX
+            stage(DocumentOutcome.RESENT) shouldBe RejectionStage.NONE
+            stage(DocumentOutcome.CHECKED, receipt(orders = listOf(decision("1", "PO-1")))) shouldBe RejectionStage.NONE
+            stage(DocumentOutcome.CHECKED, receipt(orders = listOf(decision("1", "PO-1", listOf(BusinessRule.UNKNOWN_ITEM))))) shouldBe
+                RejectionStage.BUSINESS
         }
     })

@@ -33,6 +33,12 @@ import io.eia.b2bgateway.application.usecase.ReceivingPorts
 import io.eia.b2bgateway.application.usecase.SendAcknowledgementsService
 import io.eia.b2bgateway.application.usecase.SubmitOrdersService
 import io.eia.platform.audit.AuditMetrics
+import io.eia.platform.audit.anchor.AnchorCycle
+import io.eia.platform.audit.anchor.AnchorMetrics
+import io.eia.platform.audit.anchor.AnchorPublisher
+import io.eia.platform.audit.anchor.S3AnchorStore
+import io.eia.platform.audit.anchor.S3AnchorStoreConfig
+import io.eia.platform.audit.anchor.ServiceName
 import io.eia.platform.audit.jdbc.AuditLog
 import io.eia.platform.filetransfer.store.S3ObjectStore
 import io.eia.platform.filetransfer.store.S3StoreConfig
@@ -47,6 +53,7 @@ import io.eia.platform.tradingpartner.CredentialExpiries
 import io.eia.platform.tradingpartner.CredentialExpiryMetrics
 import io.eia.platform.tradingpartner.TradingPartnerLedger
 import io.eia.shared.kernel.getOrElse
+import io.eia.shared.kernel.getOrNull
 import io.eia.shared.resilience.CircuitBreakerConfig
 import io.eia.shared.resilience.Resilience
 import io.eia.shared.resilience.ResilienceConfig
@@ -180,6 +187,7 @@ private fun Module.serveBeans(
         )
     }
     orderBeans(serve, config.clientId, secrets, runtime)
+    if (config.anchor.enabled) anchorBeans(config.anchor, secrets, runtime)
     single { B2bGatewayMetrics(runtime.meter) }
     // 取引先の鍵とホスト鍵の有効期限(ADR-0040 §3)。file-exchange も同じ系列を出すので、アラートとダッシュボードは最小値で見る
     single(createdAtStart = true) {
@@ -236,6 +244,42 @@ private fun Module.orderBeans(
         OrderSubmissionMetrics(runtime.meter) { snapshot.get() }
     }
 }
+
+/**
+ * 監査のアンカーの定期的な保存(ADR-0017 §5)。保存の前に、前回のアンカーからの差分を検証する([AnchorCycle])。
+ * S3 には b2b-gateway のアンカーの書込み用の identity(`eiaf-audit-b2b-gateway`。`anchors/b2b-gateway/` の下にだけ書ける)で接続する。
+ */
+private fun Module.anchorBeans(
+    anchor: B2bGatewayConfig.AnchorSettings,
+    secrets: SecretProvider,
+    runtime: ObservabilityRuntime,
+) {
+    val service = requireNotNull(ServiceName.parse(SERVICE_NAME).getOrNull())
+    single {
+        S3AnchorStore(
+            S3AnchorStoreConfig(
+                endpoint = requireNotNull(anchor.endpoint) { "${B2bGatewayConfig.AUDIT_S3_ENDPOINT} は起動の前に検査しています" },
+                bucket = anchor.bucket,
+                accessKeyName = B2bGatewayConfig.AUDIT_S3_ACCESS_KEY,
+                secretKeyName = B2bGatewayConfig.AUDIT_S3_SECRET_KEY,
+            ),
+            secrets,
+        )
+    }
+    single { AnchorMetrics(runtime.meter, anchor.interval.toJavaDuration()) }
+    single {
+        val retention = requireNotNull(anchor.retention) { "${B2bGatewayConfig.ANCHOR_RETENTION} は起動の前に検査しています" }
+        AnchorCycle(
+            service,
+            get<S3AnchorStore>(),
+            AnchorPublisher(service, get<S3AnchorStore>(), retention.toJavaDuration()),
+            get<AnchorMetrics>(),
+        )
+    }
+}
+
+/** 監査のサービスの名前(アンカーのキー `anchors/b2b-gateway/`。`make audit-verify SERVICE=b2b-gateway`)。 */
+internal const val SERVICE_NAME = "b2b-gateway"
 
 internal fun sha256(bytes: ByteArray): String = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes))
 

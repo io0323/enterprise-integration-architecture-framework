@@ -68,3 +68,82 @@ tests:
             exp_annotations:
               summary: "取引先 p1 の注文が、送り直しの上限を過ぎて社内に取り込めなかった(手の対応が要る)"
               runbook: docs/runbooks/b2b-partner-credentials.md#送り直しの上限を過ぎた注文
+
+  - name: 拒否した文書は、取引先と段階ごとにすぐ警告する。拒否のない文書では出さない
+    interval: 1m
+    input_series:
+      - series: 'eia_b2b_documents_total{job="b2b-gateway",trading_partner_id="p1",b2b_outcome="checked",b2b_stage="none"}'
+        values: "0+1x20"
+      - series: 'eia_b2b_documents_total{job="b2b-gateway",trading_partner_id="p1",b2b_outcome="checked",b2b_stage="business"}'
+        values: "0x5 1x15"
+      - series: 'eia_b2b_documents_total{job="b2b-gateway",trading_partner_id="p2",b2b_outcome="unreadable",b2b_stage="decryption"}'
+        values: "0x5 1x15"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: B2bDocumentRejected
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: B2bDocumentRejected
+        exp_alerts:
+          - exp_labels: { severity: warning, trading_partner_id: p1, b2b_stage: business }
+            exp_annotations:
+              summary: "取引先 p1 の文書を business の段階で拒否した"
+              runbook: docs/runbooks/b2b-partner-credentials.md#拒否した文書
+          - exp_labels: { severity: warning, trading_partner_id: p2, b2b_stage: decryption }
+            exp_annotations:
+              summary: "取引先 p2 の文書を decryption の段階で拒否した"
+              runbook: docs/runbooks/b2b-partner-credentials.md#拒否した文書
+
+  - name: 処理中に残るファイル・受け取りのディレクトリを見られない・応答を送れない・取り込めない状態は、15 分続いたら警告する
+    interval: 1m
+    input_series:
+      - series: 'eia_b2b_inbox_stuck{job="b2b-gateway",trading_partner_id="p1"}'
+        values: "1x30"
+      - series: 'eia_b2b_inbox_failures_total{job="b2b-gateway",trading_partner_id="p1",b2b_reason="list"}'
+        values: "0+1x30"
+      - series: 'eia_b2b_acknowledgements_total{job="b2b-gateway",trading_partner_id="p1",b2b_outcome="failed"}'
+        values: "0+1x30"
+      - series: 'eia_b2b_order_submissions_total{job="b2b-gateway",b2b_outcome="failed"}'
+        values: "0+1x30"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: B2bInboxStuck
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: B2bInboxStuck
+        exp_alerts:
+          - exp_labels: { severity: warning, trading_partner_id: p1 }
+            exp_annotations:
+              summary: "取引先 p1 のファイルが、受け付けに失敗して処理中のディレクトリに残っている"
+              runbook: docs/runbooks/b2b-partner-credentials.md#受け取りのディレクトリ
+      - eval_time: 25m
+        alertname: B2bInboxUnavailable
+        exp_alerts:
+          - exp_labels: { severity: warning, trading_partner_id: p1 }
+            exp_annotations:
+              summary: "取引先 p1 の受け取りのディレクトリを見られない(取引先の SFTP・鍵・ホスト鍵)"
+              runbook: docs/runbooks/b2b-partner-credentials.md#期限が切れたとき
+      - eval_time: 25m
+        alertname: B2bAcknowledgementSendFailing
+        exp_alerts:
+          - exp_labels: { severity: warning, trading_partner_id: p1 }
+            exp_annotations:
+              summary: "取引先 p1 に応答(CONTRL・APERAK)を送れない状態が続いている"
+              runbook: docs/runbooks/b2b-partner-credentials.md#応答の送信
+      - eval_time: 25m
+        alertname: B2bOrderSubmissionFailing
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "受け付けた注文を、order の API に取り込めない状態が続いている"
+              runbook: docs/runbooks/b2b-partner-credentials.md#社内への取り込み
+
+  - name: 1 回だけの失敗(次の回に回復)では、続いている状態の警告は出さない
+    interval: 1m
+    input_series:
+      - series: 'eia_b2b_acknowledgements_total{job="b2b-gateway",trading_partner_id="p1",b2b_outcome="failed"}'
+        values: "0x5 1x25"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: B2bAcknowledgementSendFailing
+        exp_alerts: []

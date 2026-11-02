@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # 開発用の PGP の鍵を GnuPG で infra/local/secrets/ に作る(P09 ⑥。ADR-0032 §8)。`make pgp-keys` と `make up`(file の profile)から呼ぶ。
-# - eiaf: 自社の鍵(file-exchange が送るファイルに署名する)。partner01: 取引先の代わりの鍵(file-exchange が暗号化に使い、
-#   取引先の側として make verify が復号して署名を確かめる)。
+# - eiaf: 自社の鍵(file-exchange が送るファイルに署名する。b2b-gateway が受け取った文書を復号し、応答に署名する)。
+#   partner01: 取引先の代わりの鍵(file-exchange・b2b-gateway が暗号化に使い、取引先の側として make verify が復号して署名を確かめる)。
+#   archive: 保管用の鍵(b2b-gateway が復号した交換の写しを暗号化する。サービスに渡すのは公開鍵だけ。ADR-0040 §8)。
 # - 鍵は GnuPG(infra/local/images/gnupg)で作る。取引先が実際に使う gpg の鍵を、file-exchange(Bouncy Castle)が読めることを
 #   確かめるため(GnuPG との相互運用。承認の条件)。主鍵は署名と証明、副鍵は暗号化(RSA 3072)。秘密鍵はパスフレーズで保護する。
 # - 既にあれば何もしない(作り直すときは secrets/pgp-* を消してから実行する。docs/runbooks/file-exchange.md)。
 # - secrets/ は .gitignore 済み。鍵とパスフレーズはコミットしない。
 #
-# 作るファイル(<name> は eiaf と partner01):
+# 作るファイル(<name> は eiaf・partner01・archive):
 #   pgp-<name>.pub.asc     公開鍵(ASCII armor)
 #   pgp-<name>.sec.asc     秘密鍵(ASCII armor。パスフレーズで保護)
 #   pgp-<name>.passphrase  パスフレーズ(改行なし)
@@ -16,11 +17,12 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 dir="$here/secrets"
 image=eiaf-gnupg:local
-names=(eiaf partner01)
+names=(eiaf partner01 archive)
 user_id() { # macOS の bash 3.2 には連想配列がない
   case "$1" in
     eiaf) echo "EIAF Dev <eiaf-dev@example.invalid>" ;;
     partner01) echo "Partner01 Dev <partner01-dev@example.invalid>" ;;
+    archive) echo "EIAF Archive Dev <eiaf-archive-dev@example.invalid>" ;;
   esac
 }
 

@@ -100,13 +100,13 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           docker system prune --all --force >/dev/null
           df -h /
-      # order / cdc / saga / batch / file / saas / iot profile: イメージの中身(installDist)を Gradle で作る(make up が order-dist / legacy-dist / saga-dist / batch-dist / file-dist / saas-dist / iot-dist を実行する)
-      - if: ${{ matrix.profile == 'order' || matrix.profile == 'cdc' || matrix.profile == 'saga' || matrix.profile == 'batch' || matrix.profile == 'file' || matrix.profile == 'saas' || matrix.profile == 'iot' }}
+      # order / cdc / saga / batch / file / b2b / saas / iot profile: イメージの中身(installDist)を Gradle で作る(make up が order-dist / legacy-dist / saga-dist / batch-dist / file-dist / b2b-dist / saas-dist / iot-dist を実行する。b2b は make audit-verify でも Gradle を使う)
+      - if: ${{ matrix.profile == 'order' || matrix.profile == 'cdc' || matrix.profile == 'saga' || matrix.profile == 'batch' || matrix.profile == 'file' || matrix.profile == 'b2b' || matrix.profile == 'saas' || matrix.profile == 'iot' }}
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: "21"
-      - if: ${{ matrix.profile == 'order' || matrix.profile == 'cdc' || matrix.profile == 'saga' || matrix.profile == 'batch' || matrix.profile == 'file' || matrix.profile == 'saas' || matrix.profile == 'iot' }}
+      - if: ${{ matrix.profile == 'order' || matrix.profile == 'cdc' || matrix.profile == 'saga' || matrix.profile == 'batch' || matrix.profile == 'file' || matrix.profile == 'b2b' || matrix.profile == 'saas' || matrix.profile == 'iot' }}
         uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
       - name: Up
         run: make up PROFILE=${{ matrix.profile }}

@@ -1,5 +1,12 @@
 # B2B / EDI Gateway(b2b-gateway。P12)のアラート。対応は docs/runbooks/b2b-partner-credentials.md。単体テストは b2b.test.yml(make alerts-test)。
 #
+# 受け取りと応答(P12 ⑥b。ROADMAP P12 の DoD「構文・スキーマ・業務のどのエラーでも、正しいエラー応答と運用通知が出る」)
+# - 拒否した文書(eia_b2b_documents_total の b2b_stage が none 以外)は、取引先と段階ごとに警告する。取引先には CONTRL・APERAK で
+#   返しているが、運用者が取引先との調整(鍵・製品の設定・対応表)の要否を判断する。読めない文書(decryption)は応答を返せないので、
+#   運用者が取引先の連絡先に知らせる
+# - 受け付けに失敗し続けて処理中に残るファイル(eia_b2b_inbox_stuck)、受け取りのディレクトリを見られない状態、応答を送れない状態、
+#   社内への取り込みの失敗が続く状態は、15 分続いたら警告する(DB・S3・鍵・取引先の SFTP・order の API のどれかの障害)
+#
 # 業務の応答(APERAK)の期限(P12 の承認の条件 1。ADR-0040 §6・ADR-0041 §5)
 # - 受け付けた注文は、order の API が受け付けたら肯定の APERAK(TPA で選んだ取引先)、受け付けなかったら拒否の APERAK を返す。
 #   その期限は TPA の aperakDeadline(受け取った時刻から)。送信待ちの注文があるかぎり、どちらかの応答を返す義務がありうるので、
@@ -37,3 +44,47 @@ groups:
         annotations:
           summary: "取引先 {{ $labels.trading_partner_id }} の注文が、送り直しの上限を過ぎて社内に取り込めなかった(手の対応が要る)"
           runbook: docs/runbooks/b2b-partner-credentials.md#送り直しの上限を過ぎた注文
+
+      - alert: B2bDocumentRejected
+        expr: sum by (trading_partner_id, b2b_stage) (increase(eia_b2b_documents_total{b2b_stage!="none"}[15m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "取引先 {{ $labels.trading_partner_id }} の文書を {{ $labels.b2b_stage }} の段階で拒否した"
+          runbook: docs/runbooks/b2b-partner-credentials.md#拒否した文書
+
+      - alert: B2bInboxStuck
+        expr: max by (trading_partner_id) (eia_b2b_inbox_stuck) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "取引先 {{ $labels.trading_partner_id }} のファイルが、受け付けに失敗して処理中のディレクトリに残っている"
+          runbook: docs/runbooks/b2b-partner-credentials.md#受け取りのディレクトリ
+
+      - alert: B2bInboxUnavailable
+        expr: sum by (trading_partner_id) (increase(eia_b2b_inbox_failures_total{b2b_reason="list"}[5m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "取引先 {{ $labels.trading_partner_id }} の受け取りのディレクトリを見られない(取引先の SFTP・鍵・ホスト鍵)"
+          runbook: docs/runbooks/b2b-partner-credentials.md#期限が切れたとき
+
+      - alert: B2bAcknowledgementSendFailing
+        expr: sum by (trading_partner_id) (increase(eia_b2b_acknowledgements_total{b2b_outcome="failed"}[5m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "取引先 {{ $labels.trading_partner_id }} に応答(CONTRL・APERAK)を送れない状態が続いている"
+          runbook: docs/runbooks/b2b-partner-credentials.md#応答の送信
+
+      - alert: B2bOrderSubmissionFailing
+        expr: sum (increase(eia_b2b_order_submissions_total{b2b_outcome="failed"}[5m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "受け付けた注文を、order の API に取り込めない状態が続いている"
+          runbook: docs/runbooks/b2b-partner-credentials.md#社内への取り込み
