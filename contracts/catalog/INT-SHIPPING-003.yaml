@@ -1,0 +1,13 @@
+id: INT-SHIPPING-003
+name: Shipment Query
+description: 出荷の照会(社内専用の gRPC。mTLS 必須。ADR-0042)。注文ごとの出荷をまとめて読む。スコープ shipping.shipment:read。
+style: grpc
+pattern: request-reply
+provider: { owner: team-logistics, system: shipping-service }
+consumers:
+  - { owner: team-storefront, system: bff-graphql }
+contract: contracts/proto/io/eia/shipping/v1/shipment_query_service.proto
+tier: 2
+dataClassification: confidential
+slo: { availability: "99.9", latencyP99: "200ms" }
+lifecycle: design

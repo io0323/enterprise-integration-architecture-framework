@@ -30,6 +30,8 @@ jackson3 = "3.2.3"
 slf4j = "2.0.20"
 # 外部 CLI。tools/contract-check の build.gradle.kts がチェックサムを検証して取得する(ADR-0013)。
 oasdiff = "1.32.1"
+# proto の lint と破壊的変更検知(確認日: 2026-11-02。ADR-0042 §3)
+buf = "1.75.0"
 # P04a ② observability(確認日: 2026-09-27。ADR-0018)
 # OTel の計装ライブラリ(opentelemetry-instrumentation の logback / ktor / kafka / jdbc)は 2.31.1-alpha のみのため使わない(ADR-0018 §4)。
 opentelemetry = "1.66.0"

@@ -15,6 +15,7 @@ import io.eia.tools.contract.rules.FlowRules
 import io.eia.tools.contract.rules.LifecycleRules
 import io.eia.tools.contract.rules.OpenApiCompatibility
 import io.eia.tools.contract.rules.OpenApiRules
+import io.eia.tools.contract.rules.ProtoRules
 import java.nio.file.Path
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -49,17 +50,20 @@ class ContractCheck(
     private val oasdiff: Path?,
     private val bindings: List<CanonicalBinding> = CanonicalBindings.ALL,
     private val today: LocalDate = LocalDate.now(ZoneOffset.UTC),
+    private val buf: Path? = null,
 ) {
     fun run(): CheckResult {
         val contracts = Contracts.load(root)
         val openApi = OpenApiRules.check(contracts)
         val asyncApi = AsyncApiRules.check(contracts)
+        val proto = ProtoRules(buf)
         val baseline = baselineRoot?.takeIf { it.resolve(Contracts.CONTRACTS_DIR).isDirectory() }?.let(Contracts::load)
         val compatibility =
             baseline
                 ?.let {
                     AvroRules.checkFullCompatibility(contracts, it) +
                         OpenApiCompatibility(oasdiff).check(contracts, it) +
+                        proto.checkCompatibility(contracts, it) +
                         FileCompatibility.check(contracts, it) +
                         DeviceRules.checkUnchanged(contracts, it) +
                         EdiRules.checkUnchanged(contracts, it)
@@ -78,6 +82,7 @@ class ContractCheck(
                 Waivers.checkActive(waivers, ContractUsage.of(contracts)) +
                 openApi.violations +
                 asyncApi.violations +
+                proto.check(contracts) +
                 AvroRules.checkNaming(contracts) +
                 OpenApiRules.checkExternal(contracts) +
                 FlowRules(contracts).check() +

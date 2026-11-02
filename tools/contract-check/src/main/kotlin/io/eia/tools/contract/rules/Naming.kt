@@ -25,6 +25,7 @@ object Naming {
     private val FILE_PATTERNS = listOf(FILE_SPEC, MANIFEST_SCHEMA, FILE_SPEC_SCHEMA, EDI_SPEC_SCHEMA, EDI_SPEC)
     private val FILES_README = setOf("README.md")
     private val MQTT_TOPIC = Regex("^devices/\\{tenant\\}/\\{deviceId\\}/$SEGMENT$")
+    private val PROTO_FILE = Regex("^contracts/proto/io/eia/([a-z][a-z0-9]*)/v([1-9][0-9]*)/[a-z][a-z0-9_]*\\.proto$")
     private val DEVICE_PAYLOAD = Regex("^($SEGMENT)\\.v([1-9][0-9]*)\\.schema\\.json$")
 
     /** Topic 名の検査。DLQ(`{topic}.dlq`)は元の Topic 名で検査する。 */
@@ -115,6 +116,10 @@ object Naming {
             Rule.NAMING_MQTT_TOPIC to "'$topic' は devices/{tenant}/{deviceId}/{channel}(channel は小文字・kebab-case)ではありません"
         }
 
+    /** proto の置き場所(リポジトリルートからの相対パス)。形が違えば null(ADR-0042 §2)。 */
+    fun protoLocation(path: String): ProtoLocation? =
+        PROTO_FILE.find(path)?.let { ProtoLocation(it.groupValues[1], it.groupValues[2].toInt()) }
+
     /** contracts/devices のファイル名から版(v{n} の n)を返す。形式が違えば null。 */
     fun devicePayloadVersion(fileName: String): Int? =
         DEVICE_PAYLOAD
@@ -125,3 +130,9 @@ object Naming {
 
     private const val EVENT_GROUP = 3
 }
+
+/** proto の置き場所から読み取った domain と版。 */
+data class ProtoLocation(
+    val domain: String,
+    val version: Int,
+)

@@ -1,0 +1,57 @@
+// 出荷の照会(INT-SHIPPING-003。社内専用。ADR-0042)。
+//
+// 接続: mTLS(開発用 CA。ADR-0008)。クライアント証明書のないクライアントは接続できない。
+// 認可: metadata の `authorization: Bearer <JWT>`。スコープ `shipping.shipment:read`。
+// 伝搬: metadata の `traceparent` と `x-correlation-id`。
+// 締め切り: 呼び出し側は gRPC の deadline を必ず指定する。
+//
+// 状態コード:
+//   INVALID_ARGUMENT   order_ids が 0 件・上限を超える・値の形が不正
+//   UNAUTHENTICATED    トークンがない・不正
+//   PERMISSION_DENIED  スコープが足りない・クライアント証明書が許可の一覧にない
+//   DEADLINE_EXCEEDED  deadline の超過
+//   UNAVAILABLE        一時的に処理できない(DB に接続できないなど)
+syntax = "proto3";
+
+package io.eia.shipping.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// 他のサービスが生成したスタブを読めるよう、サービスのパッケージ(io.eia.shipping)とは分ける(ADR-0042 §2)
+option java_multiple_files = true;
+option java_package = "io.eia.platform.grpcstubs.shipping.v1";
+
+// 出荷の照会。読み取りだけで、出荷を変えない(手配は注文 Saga のコマンド。INT-SHIPPING-001)。
+service ShipmentQueryService {
+  // 注文ごとの出荷を、まとめて読む。冪等で、再試行してよい。
+  rpc BatchGetShipments(BatchGetShipmentsRequest) returns (BatchGetShipmentsResponse);
+}
+
+message BatchGetShipmentsRequest {
+  // 読む注文の ID。1〜20 件。重複してよい(1 件として扱う)。1 件は 1〜64 文字。
+  repeated string order_ids = 1;
+}
+
+message BatchGetShipmentsResponse {
+  // 出荷の記録がある注文。順序は決めない。
+  // 記録のない注文は含めない(まだ手配していないか、保持期間を過ぎた。読めなかったこと(エラー)とは区別される)。
+  repeated Shipment shipments = 1;
+}
+
+message Shipment {
+  string order_id = 1;
+  ShipmentStatus status = 2;
+  // 出荷の ID。status が SHIPPED のときだけ入る。
+  string shipment_id = 3;
+  // 出荷した時刻。status が SHIPPED のときだけ入る。
+  google.protobuf.Timestamp shipped_at = 4;
+  // 届け先の国(ISO 3166-1 alpha-2)。status が SHIPPED のときだけ入る。住所は持たない(データの最小化)。
+  string destination_country = 5;
+}
+
+// 値は増えることがある。未知の値は受信側で扱いを決める(Tolerant Reader。Framework 5.3)。
+enum ShipmentStatus {
+  SHIPMENT_STATUS_UNSPECIFIED = 0;
+  SHIPMENT_STATUS_SHIPPED = 1;
+  SHIPMENT_STATUS_REJECTED = 2;
+}

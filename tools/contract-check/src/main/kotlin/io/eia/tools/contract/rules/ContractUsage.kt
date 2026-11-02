@@ -5,7 +5,7 @@ import io.eia.tools.contract.Contracts
 
 /**
  * 契約のファイル(リポジトリルートからの相対パス)と、それを使う連携(カタログのエントリ)の対応(ADR-0034)。
- * 連携が使うのは、カタログの `contract`(OpenAPI・AsyncAPI・ファイルの仕様)と、AsyncAPI の payload が参照する Avro・デバイスの形式のスキーマ。
+ * 連携が使うのは、カタログの `contract`(OpenAPI・AsyncAPI・proto・ファイルの仕様)と、AsyncAPI の payload が参照する Avro・デバイスの形式のスキーマ。
  * ライフサイクルの検査(契約のファイルの削除)・互換性の検査と状態の連動・互換性の検査の例外の条件で使う。
  */
 object ContractUsage {

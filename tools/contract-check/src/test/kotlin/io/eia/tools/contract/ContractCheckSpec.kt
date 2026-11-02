@@ -4,6 +4,7 @@ import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 
 private const val OPENAPI = "contracts/openapi/order-api.v1.yaml"
 private const val ASYNCAPI = "contracts/asyncapi/order-events.v1.yaml"
@@ -26,6 +27,10 @@ private const val FLOW = "contracts/flows/crm-customer.v1.flow.yaml"
 private const val EDI_ORDERS = "contracts/files/edi/edifact-orders.v1.yaml"
 private const val CATALOG_EDI_ORDERS = "contracts/catalog/INT-B2B-001.yaml"
 private const val CATALOG_EDI_APERAK = "contracts/catalog/INT-B2B-003.yaml"
+private const val PROTO_STOCK = "contracts/proto/io/eia/inventory/v1/stock_query_service.proto"
+private const val PROTO_SHIPMENT = "contracts/proto/io/eia/shipping/v1/shipment_query_service.proto"
+private const val CATALOG_PROTO_STOCK = "contracts/catalog/INT-INVENTORY-003.yaml"
+private const val CATALOG_PROTO_SHIPMENT = "contracts/catalog/INT-SHIPPING-003.yaml"
 private const val REFUND_FIELD = """{ "name": "refundAmount", "type": "long" },"""
 
 /**
@@ -316,6 +321,31 @@ private val cases =
         Case("Avro: enum 値の追加(FORWARD だけが壊れる)", setOf("CC-COMPAT-001", "CC-CANON-001"), withBaseline = true) {
             replace(ORDER_CREATED, "\"DELIVERED\", \"CANCELLED\"", "\"DELIVERED\", \"CANCELLED\", \"RETURNED\"")
         },
+        Case("proto: package に版がない", setOf("CC-STRUCT-006")) {
+            replace(PROTO_STOCK, "package io.eia.inventory.v1;", "package io.eia.inventory;")
+        },
+        Case("proto: 構文の誤り", setOf("CC-STRUCT-006")) {
+            replace(PROTO_STOCK, "int64 available = 2;", "int64 available = 2")
+        },
+        Case("proto: 置き場所の形が違う", setOf("CC-NAMING-013")) {
+            write("contracts/proto/acme/inventory/v1/stock_query_service.proto", "syntax = \"proto3\";\n\npackage acme.inventory.v1;\n")
+                .replace(CATALOG_PROTO_STOCK, PROTO_STOCK, "contracts/proto/acme/inventory/v1/stock_query_service.proto")
+                .delete(PROTO_STOCK)
+        },
+        Case("proto: java_package が決まりと違う", setOf("CC-NAMING-013")) {
+            replace(PROTO_STOCK, "io.eia.platform.grpcstubs.inventory.v1", "io.eia.inventory.grpc.v1")
+        },
+        Case("proto: カタログに登録していない", setOf("CC-CATALOG-006")) {
+            write(
+                "contracts/proto/io/eia/inventory/v1/unregistered_service.proto",
+                "syntax = \"proto3\";\n\npackage io.eia.inventory.v1;\n\noption java_multiple_files = true;\n" +
+                    "option java_package = \"io.eia.platform.grpcstubs.inventory.v1\";\n",
+            )
+        },
+        Case("proto: domain が連携 ID と違う", setOf("CC-NAMING-010")) {
+            replace(CATALOG_PROTO_STOCK, PROTO_STOCK, PROTO_SHIPMENT)
+                .replace(CATALOG_PROTO_SHIPMENT, PROTO_SHIPMENT, PROTO_STOCK)
+        },
         Case("OpenAPI: 必須パラメータの追加", setOf("CC-COMPAT-002"), withBaseline = true) {
             replace(
                 OPENAPI,
@@ -482,6 +512,94 @@ class ContractCheckSpec :
                 .check(baseline)
                 .violations
                 .shouldBeEmpty()
+        }
+
+        context("proto の破壊的変更(buf。CC-COMPAT-006)") {
+            // 状態はリポジトリの値に頼らず明示する(どちらも E2E の後に active になる)
+            fun active() =
+                Workspace
+                    .ofRepositoryContracts()
+                    .setLifecycle(CATALOG_PROTO_STOCK, "lifecycle: active")
+                    .setLifecycle(CATALOG_PROTO_SHIPMENT, "lifecycle: active")
+
+            test("項目の型の変更") {
+                val result = active().replace(PROTO_STOCK, "int64 available = 2;", "string available = 2;").check(active())
+
+                result.ruleIds shouldBe setOf("CC-COMPAT-006")
+                result.violations.single().file shouldBe PROTO_STOCK
+                result.violations.single().message shouldContain "FIELD_SAME_TYPE"
+            }
+
+            test("項目の番号の変更") {
+                val result = active().replace(PROTO_STOCK, "string sku = 1;", "string sku = 4;").check(active())
+
+                result.ruleIds shouldBe setOf("CC-COMPAT-006")
+            }
+
+            test("RPC の削除") {
+                val result =
+                    active()
+                        .replace(PROTO_STOCK, "  rpc BatchGetStock(BatchGetStockRequest) returns (BatchGetStockResponse);\n", "")
+                        .check(active())
+
+                result.ruleIds shouldBe setOf("CC-COMPAT-006")
+            }
+
+            test("互換な変更(新しい番号の項目)は通る") {
+                val result =
+                    active()
+                        .replace(PROTO_STOCK, "  int64 available = 2;\n", "  int64 available = 2;\n  string warehouse = 4;\n")
+                        .check(active())
+
+                result.violations.shouldBeEmpty()
+            }
+
+            test("ファイルの削除は、そのファイルの違反として報告する(buf の報告には path がない)") {
+                val result =
+                    active()
+                        .replace(CATALOG_PROTO_STOCK, PROTO_STOCK, PROTO_SHIPMENT)
+                        .delete(PROTO_STOCK)
+                        .check(active())
+
+                result.violations.filter { it.rule.id == "CC-COMPAT-006" }.map { it.file } shouldBe listOf(PROTO_STOCK)
+            }
+
+            test("proto がすべてなくなっても、黙って通さない") {
+                val deleted = Workspace.ofRepositoryContracts()
+                listOf(PROTO_STOCK, PROTO_SHIPMENT).forEach { deleted.delete(it) }
+                val result = deleted.check(active())
+
+                result.violations
+                    .filter { it.rule.id == "CC-COMPAT-006" }
+                    .map { it.file }
+                    .toSet() shouldBe
+                    setOf(PROTO_STOCK, PROTO_SHIPMENT)
+            }
+
+            test("設計中の連携だけが使う proto の破壊的変更は許可し、記録する") {
+                fun design() = Workspace.ofRepositoryContracts().setLifecycle(CATALOG_PROTO_STOCK, "lifecycle: design")
+
+                val result = design().replace(PROTO_STOCK, "int64 available = 2;", "string available = 2;").check(design())
+
+                result.violations.shouldBeEmpty()
+                result.designAllowed.map { it.rule.id }.toSet() shouldBe setOf("CC-COMPAT-006")
+            }
+
+            test("比較元に proto がなければ、すべて新規として通る") {
+                val baseline = Workspace.ofRepositoryContracts()
+                listOf(PROTO_STOCK, PROTO_SHIPMENT).forEach { baseline.delete(it) }
+
+                val result = Workspace.ofRepositoryContracts().check(baseline)
+
+                result.ruleIds.filter { it.startsWith("CC-COMPAT-") }.shouldBeEmpty()
+            }
+        }
+
+        test("buf がなければ、proto があるときに CC-TOOL-001 で失敗する(黙って省略しない)") {
+            val result = Workspace.ofRepositoryContracts().check(buf = null)
+
+            result.ruleIds shouldBe setOf("CC-TOOL-001")
+            result.violations.single().message shouldContain "buf"
         }
 
         test("oasdiff がなければ、比較が必要なときに CC-TOOL-001 で失敗する(黙って省略しない)") {
