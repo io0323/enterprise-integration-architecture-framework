@@ -15,5 +15,6 @@ dataClassification: confidential
 # latencyP99 は、書き終わったファイルを見つけてから、構文とスキーマの段階の応答(CONTRL。INT-B2B-002)を送るまで
 slo: { availability: "99.9", latencyP99: "15m" }
 # 受け取った文書ごとに、原本の SHA-256 と保管の参照を記録する(ADR-0017 §1・ADR-0040)。保持期間は法令に従う(環境ごとの設定)
-audit: { actions: [b2b.document.receive], dataClassification: confidential, retention: legal }
+# b2b.codes.import は、受け付けの業務の検査と社内への取り込みが引く、取引先ごとのコードの対応表の入れ替え(運用者のコマンド。ADR-0040 §6)
+audit: { actions: [b2b.document.receive, b2b.codes.import], dataClassification: confidential, retention: legal }
 lifecycle: design

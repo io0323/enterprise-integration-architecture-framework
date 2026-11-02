@@ -13,12 +13,14 @@ import io.eia.b2bgateway.domain.edifact.ServiceCharacters
 import io.eia.b2bgateway.domain.order.BusinessContext
 import io.eia.b2bgateway.domain.order.BusinessRule
 import io.eia.b2bgateway.domain.order.CodeResolution
+import io.eia.b2bgateway.domain.order.InternalCustomer
 import io.eia.b2bgateway.domain.order.InternalItem
 import io.eia.b2bgateway.domain.order.ItemCode
 import io.eia.b2bgateway.domain.order.OrderLine
 import io.eia.b2bgateway.domain.order.OrderRules
 import io.eia.b2bgateway.domain.order.PurchaseOrder
 import io.eia.b2bgateway.domain.order.PurchaseOrders
+import io.eia.b2bgateway.domain.order.ShippingAddress
 import io.eia.b2bgateway.domain.receipt.DuplicateCheck
 import io.eia.b2bgateway.domain.receipt.Duplicates
 import io.eia.b2bgateway.domain.receipt.PreviousReceipt
@@ -61,8 +63,8 @@ private val ORDER =
 
 private val RESOLUTION =
     CodeResolution(
-        buyers = mapOf("4912345000019" to "cust-1"),
-        deliveryParties = mapOf("4912345000026" to "addr-1"),
+        buyers = mapOf("4912345000019" to InternalCustomer("cust-1", ShippingAddress("JP", "100-0001", null, "Chiyoda", "1-1", null))),
+        deliveryParties = mapOf("4912345000026" to ShippingAddress("JP", "100-0001", null, "Chiyoda", "1-1", null)),
         items =
             mapOf(
                 ItemCode.BuyerPartNumber("ABC-123") to InternalItem("prod-1", "SKU-1"),
