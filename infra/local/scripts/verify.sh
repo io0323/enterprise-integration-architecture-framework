@@ -543,8 +543,6 @@ verify_file() {
   current="file"
   verify_s3
   verify_sftp sftp 19222 eiaf-file sftp-file
-  verify_sftp sftp-b2b 19223 partner01 sftp-b2b
-  verify_sftp_host_key
   verify_file_bucket
   verify_file_exchange
 }
@@ -589,8 +587,8 @@ verify_file_bucket() {
 }
 
 # file-exchange(ADR-0032): 送り手(batch-etl の identity)として契約どおりの売上ファイル(CSV + gzip)とマニフェストを受け口に置き、
-# 受け取り(archive)→ 取引先(sftp-b2b)への配送までを確かめる。取引先の側として、届いた .pgp を GnuPG で復号し、
-# EIAF の鍵の署名を確かめる(Bouncy Castle と GnuPG の相互運用。鍵も GnuPG で作った。make pgp-keys)
+# 受け取り(archive)→ 取引先に送るための受け渡しの場所(outbound/sales-daily/)への写しまでを確かめる。取引先への送信は b2b-gateway
+# (b2b profile の verify_b2b_files。P12 ⑦b)
 verify_file_exchange() {
   local work name stamp fx_sql
   work="$(mktemp -d)"
@@ -628,72 +626,32 @@ PY
 
   check "file-exchange: マニフェストの到着で受け取り、archive に収めた(received_file が STORED・ARCHIVE)" \
     retry 18 5 equals "STORED ARCHIVE" fx_sql "select state || ' ' || destination from exchange.received_file where file_name = '$name'"
-  check "file-exchange: 取引先 partner01 に送った(delivery が SENT)" \
-    retry 18 5 equals "SENT" fx_sql "select state from exchange.delivery where file_name = '$name' and partner_id = 'partner01'"
-
-  # 取引先の側: 届いたファイルを取り出し、GnuPG で復号して署名を確かめる
-  if sftp -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$here/secrets/sftp-b2b.known_hosts" -o LogLevel=ERROR -o BatchMode=yes \
-    -i "$here/secrets/sftp-b2b" -P 19223 -b - partner01@127.0.0.1 >/dev/null 2>&1 <<EOF
-get outbox/$name.csv.gz.pgp $work/$name.csv.gz.pgp
-rm outbox/$name.csv.gz.pgp
-EOF
-  then
-    pass "sftp-b2b: 取引先の outbox に $name.csv.gz.pgp が届いた"
+  local handed
+  handed="$(docker run --rm --network eiaf -e AWS_ACCESS_KEY_ID="$S3_ACCESS_KEY" -e AWS_SECRET_ACCESS_KEY="$S3_SECRET_KEY" -e AWS_DEFAULT_REGION=us-east-1 \
+    "$AWS_CLI_IMAGE" --endpoint-url http://seaweedfs:8333 s3api list-objects-v2 --bucket eiaf-file-exchange --prefix "outbound/sales-daily/$name" \
+    --query 'Contents[].Key' --output text 2>/dev/null || true)"
+  if grep -q "outbound/sales-daily/$name.csv.gz" <<<"$handed" && grep -q "outbound/sales-daily/$name.manifest.json" <<<"$handed"; then
+    pass "file-exchange: 合格のファイル(データとマニフェスト)を、取引先に送るための受け渡しの場所(outbound/sales-daily/)に写した"
   else
-    fail "sftp-b2b: 取引先の outbox から .pgp を取り出せない"
+    fail "file-exchange: 受け渡しの場所に $name のデータとマニフェストがない (${handed:-なし})"
   fi
-  local status=""
-  if [[ -s "$work/$name.csv.gz.pgp" ]]; then
-    docker build -q -t eiaf-gnupg:local --build-arg DEBIAN_IMAGE="$DEBIAN_IMAGE" "$here/images/gnupg" >/dev/null
-    # 取引先の秘密鍵と、EIAF の公開鍵だけを入れた一時の鍵束で、復号と署名の検証をする(status は GnuPG の機械向けの出力)
-    # 鍵(0600)と作業のディレクトリ(mktemp。0700)を読み書きできるよう、ホストの利用者の uid で動かす(Linux ではイメージの uid 1000 では読めない)
-    status="$(docker run --rm -i --user "$(id -u):$(id -g)" -v "$here/secrets/pgp-partner01.sec.asc:/keys/partner.sec.asc:ro" \
-      -v "$here/secrets/pgp-eiaf.pub.asc:/keys/eiaf.pub.asc:ro" -v "$work:/work" --entrypoint bash eiaf-gnupg:local -c '
-        set -euo pipefail
-        mkdir -m 700 -p "$GNUPGHOME"
-        read -r passphrase || true
-        gpg --batch --quiet --import /keys/eiaf.pub.asc 2>/dev/null
-        gpg --batch --quiet --pinentry-mode loopback --passphrase-fd 3 --import /keys/partner.sec.asc 3<<<"$passphrase" 2>/dev/null
-        gpg --batch --quiet --pinentry-mode loopback --passphrase-fd 3 --status-fd 1 --output /work/decrypted \
-          --decrypt "/work/'"$name"'.csv.gz.pgp" 3<<<"$passphrase"
-      ' <"$here/secrets/pgp-partner01.passphrase" || true)"
-  fi
-  local eiaf_fpr
-  eiaf_fpr="$(docker run --rm -i --entrypoint bash eiaf-gnupg:local -c 'mkdir -m 700 -p "$GNUPGHOME"; gpg --batch --with-colons --show-keys' \
-    <"$here/secrets/pgp-eiaf.pub.asc" 2>/dev/null | awk -F: '/^fpr:/ { print $10; exit }')"
-  if grep -q "^\[GNUPG:\] VALIDSIG $eiaf_fpr " <<<"$status" && grep -q '^\[GNUPG:\] DECRYPTION_OKAY' <<<"$status" &&
-    grep -q '^\[GNUPG:\] GOODMDC' <<<"$status"; then
-    pass "GnuPG: 取引先の鍵で復号でき、EIAF の鍵の署名と改竄の検知(MDC)を確かめられる(Bouncy Castle との相互運用)"
-  else
-    fail "GnuPG: 届いたファイルを復号・検証できない($(grep -o -E 'GNUPG:\] [A-Z_]+' <<<"$status" | tr '\n' ' '))"
-  fi
-  if [[ -f "$work/decrypted" ]] && cmp -s "$work/decrypted" "$work/$name.csv.gz"; then
-    pass "GnuPG: 復号した中身が、送り手が置いた売上ファイルと同じ"
-  else
-    fail "GnuPG: 復号した中身が、送り手が置いた売上ファイルと違う"
-  fi
+  check "PostgreSQL: file_exchange_app は過去の配送の記録(delivery)を読めるが、書けない(P12 ⑦b。ADR-0032 §8)" \
+    equals "1 0 0" fx_sql "select has_table_privilege('file_exchange_app', 'exchange.delivery', 'SELECT')::int || ' ' || has_table_privilege('file_exchange_app', 'exchange.delivery', 'INSERT')::int || ' ' || has_table_privilege('file_exchange_app', 'exchange.delivery', 'UPDATE')::int"
 
   # メトリクス(OTLP → Prometheus)・アラートのルール・ダッシュボード
   check "Prometheus: file-exchange が受け取った数を出す(archive)" \
     retry 18 10 bash -c "curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=sum(eia_file_exchange_files_received_total{file_exchange_destination=\"archive\"})' | grep -q '\"value\"'"
-  check "Prometheus: file-exchange が配送の数を出す(partner01・sent)" \
-    retry 18 10 bash -c "curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=sum(eia_file_exchange_deliveries_total{file_exchange_partner=\"partner01\",file_exchange_outcome=\"sent\"})' | grep -q '\"value\"'"
+  check "Prometheus: file-exchange が受け渡しの場所に写した数を出す" \
+    retry 18 10 bash -c "curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=sum(eia_file_exchange_handoffs_total) > 0' | grep -q '\"value\"'"
   check "Prometheus: ファイル授受のアラートのルールを読み込んでいる" \
-    bash -c "curl -fsS http://localhost:19090/api/v1/rules | python3 -c 'import json,sys; n={r[\"name\"] for g in json.load(sys.stdin)[\"data\"][\"groups\"] for r in g[\"rules\"]}; sys.exit(0 if {\"FileExchangeQuarantined\",\"FileExchangeNameReused\",\"FileExchangeInboxStale\",\"FileExchangeDeliveryFailed\",\"FileExchangePartnerCircuitOpen\"} <= n else 1)'"
-  # 取引先の台帳の鍵の期限(P12 ③。ADR-0040 §3)。期日は make env が鍵を作った日から 1 年後を書くので、いつ動かしても期限内のはず
-  check "台帳(b2b/partners.json)は make env が作り、鍵とホスト鍵の期日がどれも 30 日より先" \
-    python3 -c 'import datetime,json,sys; d=json.load(open(sys.argv[1])); dates=[k["validUntil"] for p in d["partners"] for k in [p["sftp"]["hostKey"],p["sftp"]["clientKey"]]+([p["pgp"]] if "pgp" in p else [])]; sys.exit(0 if dates and min(dates) > (datetime.date.today()+datetime.timedelta(days=30)).isoformat() else 1)' "$here/b2b/partners.json"
-  check "Prometheus: 鍵の期限のメトリクス(partner01)を出し、どれも 30 日より先" \
-    retry 18 10 bash -c "curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=min(eia_trading_partner_credential_expiry_seconds{trading_partner_id=\"partner01\"}) - time() > 30 * 86400' | grep -q '\"value\"'"
-  check "Prometheus: 鍵の期限のアラートのルールを読み込み、平常時は firing / pending がない" \
-    bash -c "curl -fsS http://localhost:19090/api/v1/rules | python3 -c 'import json,sys; g=[g for g in json.load(sys.stdin)[\"data\"][\"groups\"] if g[\"name\"]==\"trading-partner\"]; sys.exit(0 if g and len(g[0][\"rules\"])==3 and all(r[\"state\"]==\"inactive\" for r in g[0][\"rules\"]) else 1)'"
+    bash -c "curl -fsS http://localhost:19090/api/v1/rules | python3 -c 'import json,sys; n={r[\"name\"] for g in json.load(sys.stdin)[\"data\"][\"groups\"] for r in g[\"rules\"]}; sys.exit(0 if {\"FileExchangeQuarantined\",\"FileExchangeNameReused\",\"FileExchangeInboxStale\"} <= n else 1)'"
   local dash result
   dash="$(curl -fsS -u "admin:$GRAFANA_ADMIN_PASSWORD" http://localhost:19300/api/dashboards/uid/eiaf-file || true)"
   if [[ "$(json 'd["meta"]["folderTitle"] + "/" + d["dashboard"]["title"]' <<<"$dash" 2>/dev/null)" == "EIAF/File — Sales daily" ]]; then
     pass "Grafana: ダッシュボード File — Sales daily(フォルダ EIAF)を provisioning で読み込んでいる"
-    # quarantine・受け取り済みの名前・配送の失敗・リトライと拒否・アラートは、平常時は空でよい
+    # quarantine・受け取り済みの名前・アラートは、平常時は空でよい
     result="$(dashboard_panels_return_data "$dash" "quarantine に移した数(理由ごと)" "受け取り済みの名前で届いた数" \
-      "配送の失敗(取引先ごと)" "取引先の SFTP のリトライと拒否" "ファイル授受のアラート(firing / pending)")"
+      "ファイル授受のアラート(firing / pending)")"
     if [[ "$result" == ok ]]; then pass "Grafana: ファイル授受のダッシュボードの全パネルの式が、Prometheus でデータを返す"; else fail "Grafana: ファイル授受のパネルの式が想定外: $result"; fi
   else
     fail "Grafana: ダッシュボード eiaf-file を読み込めない"
@@ -896,10 +854,15 @@ SFTP
     retry 18 10 bash -c "curl -fsS http://localhost:19090/api/v1/alerts | python3 -c 'import json,sys; sys.exit(0 if any(a[\"labels\"][\"alertname\"]==\"B2bDocumentRejected\" and a[\"labels\"].get(\"b2b_stage\")==\"business\" for a in json.load(sys.stdin)[\"data\"][\"alerts\"]) else 1)'"
   check "Prometheus: B2B のアラートのルールを読み込んでいる" \
     bash -c "curl -fsS http://localhost:19090/api/v1/rules | python3 -c 'import json,sys; n={r[\"name\"] for g in json.load(sys.stdin)[\"data\"][\"groups\"] for r in g[\"rules\"]}; sys.exit(0 if {\"B2bDocumentRejected\",\"B2bInboxStuck\",\"B2bInboxUnavailable\",\"B2bAcknowledgementSendFailing\",\"B2bOrderSubmissionFailing\",\"B2bAperakDeadlineApproaching\",\"B2bAperakDeadlinePassed\",\"B2bOrderSubmissionExpired\"} <= n else 1)'"
+  # 取引先の台帳の鍵の期限(P12 ③。ADR-0040 §3)。期日は make env が鍵を作った日から 1 年後を書くので、いつ動かしても期限内のはず
   check "台帳(b2b/partners.json)は make env が作り、鍵とホスト鍵の期日がどれも 30 日より先" \
     python3 -c 'import datetime,json,sys; d=json.load(open(sys.argv[1])); dates=[k["validUntil"] for p in d["partners"] for k in [p["sftp"]["hostKey"],p["sftp"]["clientKey"]]+([p["pgp"]] if "pgp" in p else [])]; sys.exit(0 if dates and min(dates) > (datetime.date.today()+datetime.timedelta(days=30)).isoformat() else 1)' "$here/b2b/partners.json"
-  # 鍵の期限は、P12 ⑦ までは file-exchange と b2b-gateway の両方が同じ系列を出す。ダッシュボードの式(取引先と鍵の種類ごとの min)が、
-  # 出しているサービスの数によらず、取引先 partner01 の鍵の種類ごとに 1 系列(3 系列)になることを確かめる(二重に数えない。承認の条件)
+  check "Prometheus: 鍵の期限のメトリクス(partner01)を出し、どれも 30 日より先" \
+    retry 18 10 bash -c "curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=min(eia_trading_partner_credential_expiry_seconds{trading_partner_id=\"partner01\"}) - time() > 30 * 86400' | grep -q '\"value\"'"
+  check "Prometheus: 鍵の期限のアラートのルールを読み込み、平常時は firing / pending がない" \
+    bash -c "curl -fsS http://localhost:19090/api/v1/rules | python3 -c 'import json,sys; g=[g for g in json.load(sys.stdin)[\"data\"][\"groups\"] if g[\"name\"]==\"trading-partner\"]; sys.exit(0 if g and len(g[0][\"rules\"])==3 and all(r[\"state\"]==\"inactive\" for r in g[0][\"rules\"]) else 1)'"
+  # 鍵の期限は、P12 ⑦b からは b2b-gateway だけが出す。ダッシュボードの式(取引先と鍵の種類ごとの min)が、出しているサービスの数によらず、
+  # 取引先 partner01 の鍵の種類ごとに 1 系列(3 系列)になることを確かめる(二重に数えない。承認の条件)
   check "Grafana の鍵の期限のパネルの式は、取引先と鍵の種類ごとに 1 系列(二重に数えない)" \
     retry 18 10 bash -c "curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=min by (trading_partner_id, trading_partner_credential) (eia_trading_partner_credential_expiry_seconds{trading_partner_id=\"partner01\"}) - time()' | python3 -c 'import json,sys; sys.exit(0 if len(json.load(sys.stdin)[\"data\"][\"result\"]) == 3 else 1)'"
   local dash result

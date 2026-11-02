@@ -29,7 +29,6 @@ import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.HexFormat
-import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 import java.util.zip.GZIPOutputStream
 import kotlin.random.Random
@@ -43,7 +42,7 @@ private const val OUTBOX = "/config/outbox"
 private const val PARTNER = "partner01"
 private val STAMP: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMddHHmmss").withZone(ZoneOffset.UTC)
 
-/** compose のコマンド(core・batch・file の profile)。 */
+/** compose のコマンド(core・batch・file・b2b の profile)。 */
 private fun composeCommand(vararg args: String): List<String> =
     listOf(
         "docker",
@@ -60,6 +59,8 @@ private fun composeCommand(vararg args: String): List<String> =
         "batch",
         "--profile",
         "file",
+        "--profile",
+        "b2b",
     ) + args
 
 /** コマンドを実行し、終了コードと出力を返す。[environment] は子のプロセスに渡す環境変数(値をコマンドの引数に出さない)。 */
@@ -77,10 +78,8 @@ private fun run(
 
 private fun compose(vararg args: String): Pair<Int, String> = run(composeCommand(*args))
 
-/** batch-etl・file-exchange のコマンドを 1 回だけ実行する(`make batch-etl` / `make file-exchange` と同じ。運用者の操作)。 */
+/** batch-etl のコマンドを 1 回だけ実行する(`make batch-etl` と同じ。運用者の操作)。 */
 private fun batchEtl(vararg args: String): Pair<Int, String> = compose("run", "--rm", "--no-deps", "batch-etl", *args)
-
-private fun fileExchange(vararg args: String): Pair<Int, String> = compose("run", "--rm", "--no-deps", "file-exchange", *args)
 
 /** DB を管理者で読む(結果の観察だけ。サービスはブラックボックスのまま)。 */
 private fun sql(
@@ -93,7 +92,9 @@ private fun fx(query: String): String = sql("file_exchange", query)
 private fun received(name: String): String =
     fx("SELECT state || ' ' || destination || ' ' || coalesce(reason, '-') FROM exchange.received_file WHERE file_name = '$name'")
 
-private fun delivery(name: String): String = fx("SELECT state FROM exchange.delivery WHERE file_name = '$name' AND partner_id = '$PARTNER'")
+/** b2b-gateway が取引先 partner01 に送った記録の数(P12 ⑦b から、取引先への送信は b2b-gateway。ADR-0040 §7)。 */
+private fun delivered(name: String): String =
+    sql("b2b_gateway", "SELECT count(*) FROM b2b.file_delivery WHERE name = '$name' AND partner_id = '$PARTNER'")
 
 private fun receiveRun(name: String): String =
     fx("SELECT status FROM batch.batch_run WHERE dag_id = 'file-exchange.receive' AND partition_key = '$name'")
@@ -213,7 +214,7 @@ private fun quarantined(reason: String): Double =
     )
 
 private fun failedDeliveries(): Double =
-    prometheusSum("""sum(eia_file_exchange_deliveries_total{file_exchange_partner="$PARTNER",file_exchange_outcome="failed"})""")
+    prometheusSum("""sum(eia_b2b_file_deliveries_total{trading_partner_id="$PARTNER",b2b_outcome="failed"})""")
 
 private fun openedCircuits(): Double =
     prometheusSum("""sum(eia_resilience_circuit_breaker_transitions_total{eia_dependency_name="sftp-$PARTNER",to="open"})""")
@@ -239,12 +240,14 @@ private fun traceServices(traceId: String): Set<String> =
         }.toSet()
 
 /**
- * ROADMAP P09 の DoD(ADR-0032)。基盤は `make up PROFILE="order cdc saga batch file" E2E=1`。
+ * ROADMAP P09 の DoD(ADR-0032)。基盤は `make up PROFILE="order cdc saga batch file b2b" E2E=1`。
+ * P12 ⑦b から、取引先への送信は b2b-gateway が行う(file-exchange は受け渡しの場所に写すだけ。ADR-0040 §7)。
  *
- * 1. 注文 → 分析のバッチ → 日次の売上ファイル → file-exchange の受け取り → 取引先(sftp-b2b)への配送が、本物の流れでつながる。
- *    マニフェストの traceparent で、送り手(batch-etl)と受け手(file-exchange)の span が Tempo の同じトレースにある。
- * 2. 改竄・欠損のファイルを受け手が拒否する(quarantine。取引先には送らない)。
- * 3. 取引先の SFTP を止めると、配送の失敗と Circuit Breaker の Open が Prometheus まで届き、戻した後の再実行で送り終える。
+ * 1. 注文 → 分析のバッチ → 日次の売上ファイル → file-exchange の受け取り → 受け渡し → b2b-gateway の取引先(sftp-b2b)への送信が、
+ *    本物の流れでつながる。マニフェストの traceparent で、送り手(batch-etl)と受け手(file-exchange)の span が Tempo の同じトレースにある。
+ * 2. 改竄・欠損のファイルを受け手が拒否する(quarantine。受け渡さないので、取引先には送らない)。
+ * 3. 取引先の SFTP を止めると、送信の失敗と Circuit Breaker の Open が Prometheus まで届き、戻した後は b2b-gateway が次の回で送り終える
+ *    (運用者の再実行は要らない)。
  *
  * 公開されたエンドポイント(Gateway・Kafka・S3・Tempo・Prometheus)と、運用者のコマンド(compose の run)・コンテナの停止(障害の注入)・
  * DB とコンテナの中の観察だけを使う。
@@ -272,7 +275,7 @@ class FileExchangeE2E :
             withClue("受け取って archive に収める") {
                 eventually { received(name).takeIf { it == "STORED ARCHIVE -" } } shouldBe "STORED ARCHIVE -"
             }
-            withClue("取引先に送る") { eventually { delivery(name).takeIf { it == "SENT" } } shouldBe "SENT" }
+            withClue("b2b-gateway が取引先に送る") { eventually { delivered(name).takeIf { it == "1" } } shouldBe "1" }
             val dataFile = fx("SELECT data_file FROM exchange.received_file WHERE file_name = '$name'")
             outbox() shouldContain "$dataFile.pgp"
 
@@ -299,8 +302,8 @@ class FileExchangeE2E :
             val (tampered, missing) = publish(Damage.TAMPERED, Damage.MISSING)
             eventually { received(tampered).takeIf { it.startsWith("STORED") } } shouldBe "STORED QUARANTINE checksum_mismatch"
             eventually { received(missing).takeIf { it.startsWith("STORED") } } shouldBe "STORED QUARANTINE data_missing"
-            delivery(tampered) shouldBe ""
-            delivery(missing) shouldBe ""
+            delivered(tampered) shouldBe "0"
+            delivered(missing) shouldBe "0"
             outbox().none { it.startsWith(tampered) || it.startsWith(missing) } shouldBe true
             withClue("quarantine の数が理由ごとに Prometheus に出る(FileExchangeQuarantined の元)") {
                 eventually(Duration.ofSeconds(60)) {
@@ -314,7 +317,7 @@ class FileExchangeE2E :
             }
         }
 
-        test("取引先の SFTP を止めると、配送の失敗と Circuit Breaker の Open が Prometheus に届き、戻した後の再実行で送り終える") {
+        test("取引先の SFTP を止めると、送信の失敗と Circuit Breaker の Open が Prometheus に届き、戻した後は b2b-gateway が次の回で送り終える") {
             val started = System.nanoTime()
             // 段階ごとの経過の秒(E2E の所要時間を見るため。CI の出力に残る)
             val phase = { label: String -> println("取引先の停止と回復: $label ${Duration.ofNanos(System.nanoTime() - started).toSeconds()} 秒") }
@@ -324,39 +327,33 @@ class FileExchangeE2E :
             compose("stop", "sftp-b2b").let { (exit, output) -> withClue(output) { exit shouldBe 0 } }
             phase("取引先の SFTP を止めた")
             try {
-                // 4 つ送る。Circuit Breaker の判定(直近 20 回のうち 10 回以上で失敗率 50%)とリトライバジェットは本番の既定のまま。
-                // 失敗が続くとリトライバジェットが尽きて SFTP のリトライを見送るので、1 つの配送はおよそステップの 3 回の試行 = 3 回の呼び出しで
-                // 終わる。4 つ(約 12 回)で Open になる
+                // 4 つ送る。Circuit Breaker の判定(直近 20 回のうち 10 回以上で失敗率 50%)とリトライは本番の既定のまま。
+                // b2b-gateway は 2 秒ごと(E2E の設定)に受け渡しの場所を一覧して送るので、送れない組の試みが重なって Open になる
                 val names = publish(Damage.NONE, Damage.NONE, Damage.NONE, Damage.NONE)
                 names.forEach { name ->
-                    withClue("$name の受け取りは成功し、配送は失敗して送信中のまま残る") {
-                        eventually { receiveRun(name).takeIf { it == "FAILED" } } shouldBe "FAILED"
+                    withClue("$name の受け取りと受け渡しは成功し、取引先には送れていない") {
+                        eventually { receiveRun(name).takeIf { it == "SUCCEEDED" } } shouldBe "SUCCEEDED"
                         received(name) shouldBe "STORED ARCHIVE -"
-                        delivery(name) shouldBe "SENDING"
+                        delivered(name) shouldBe "0"
                     }
                 }
-                phase("配送の失敗(4 つ)")
-                // 取引先の SFTP を戻すのと、メトリクスが Prometheus に届くのを待つのを並べて行う(どちらも 10 秒ほどかかる)。
-                // 配送の失敗の数と Open への遷移の数は単調に増えるだけなので、戻した後に読んでも判定は変わらない
-                val restarted = CompletableFuture.supplyAsync { compose("up", "-d", "--wait", "sftp-b2b") }
-                withClue("配送の失敗と Circuit Breaker の Open が Prometheus に届く") {
-                    eventually(Duration.ofSeconds(60), Duration.ofSeconds(2)) {
+                phase("受け取りと受け渡し(4 つ)")
+                withClue("送信の失敗と Circuit Breaker の Open が Prometheus に届く") {
+                    eventually(Duration.ofSeconds(90), Duration.ofSeconds(2)) {
                         true.takeIf { failedDeliveries() > failedBefore && openedCircuits() > openedBefore }
                     }.shouldNotBeNull()
                 }
-
                 phase("メトリクスが届いた")
-                restarted.get().let { (exit, output) -> withClue(output) { exit shouldBe 0 } }
+                compose("up", "-d", "--wait", "sftp-b2b").let { (exit, output) -> withClue(output) { exit shouldBe 0 } }
                 running = true
                 phase("取引先の SFTP を戻した")
-                // 運用者の再実行(docs/runbooks/file-exchange.md#取引先に送れないとき)。4 つを同時に動かす
-                val reruns = names.map { name -> CompletableFuture.supplyAsync { fileExchange("receive", name) } }.map { it.get() }
-                reruns.forEach { (exit, output) -> withClue(output) { exit shouldBe 0 } }
-                phase("再実行で送り終えた")
                 names.forEach { name ->
-                    delivery(name) shouldBe "SENT"
+                    withClue("$name を b2b-gateway が次の回で送り終える(再実行は要らない)") {
+                        eventually(Duration.ofSeconds(90)) { delivered(name).takeIf { it == "1" } } shouldBe "1"
+                    }
                     outbox() shouldContain "$name.csv.gz.pgp"
                 }
+                phase("送り終えた")
             } finally {
                 // 途中で失敗しても、取引先の SFTP は戻しておく(ほかのシナリオのため)
                 if (!running) compose("up", "-d", "--wait", "sftp-b2b")

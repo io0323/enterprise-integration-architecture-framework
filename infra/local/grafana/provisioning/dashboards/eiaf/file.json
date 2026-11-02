@@ -6,7 +6,7 @@
     "file",
     "INT-SALES-004"
   ],
-  "description": "日次の売上ファイルのファイル授受(file-exchange。ADR-0032)の受け取り・受け口の滞留・取引先への配送。P09 ⑥。対応は docs/runbooks/file-exchange.md。",
+  "description": "日次の売上ファイルのファイル授受(file-exchange。ADR-0032)の受け取り・受け口の滞留・取引先に送るための受け渡し(送信は b2b-gateway)。P09 ⑥。対応は docs/runbooks/file-exchange.md。",
   "timezone": "browser",
   "schemaVersion": 41,
   "version": 1,
@@ -432,7 +432,7 @@
     {
       "id": 9,
       "type": "row",
-      "title": "取引先への配送(ADR-0032 §8)",
+      "title": "取引先に送るための受け渡し(ADR-0032 §8・ADR-0040 §7)",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -445,15 +445,15 @@
     {
       "id": 10,
       "type": "timeseries",
-      "title": "配送の結果(取引先ごと)",
-      "description": "sent は送った、already_present は相手の側にあったので送らずに送信済みにした、already_sent は前の実行で送信済み。",
+      "title": "受け渡しの場所に写した数(1 時間あたり)",
+      "description": "合格のファイルを、取引先に送るための受け渡しの場所(outbound/sales-daily/)に写した数。取引先への送信は b2b-gateway(ダッシュボード B2B — EDI gateway のファイルの送信のパネル。P12 ⑦b)。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
+        "w": 24,
         "x": 0,
         "y": 19
       },
@@ -500,134 +500,8 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "sum by (file_exchange_partner, file_exchange_outcome) (increase(eia_file_exchange_deliveries_total{file_exchange_outcome!=\"failed\"}[1h]))",
-          "legendFormat": "{{file_exchange_partner}} {{file_exchange_outcome}}"
-        }
-      ]
-    },
-    {
-      "id": 11,
-      "type": "timeseries",
-      "title": "配送の失敗(取引先ごと)",
-      "description": "送れなかった配送(FileExchangeDeliveryFailed)。平常時は空。docs/runbooks/file-exchange.md#取引先に送れないとき。",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 19
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 10,
-            "spanNulls": true,
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "min": 0
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "A",
-          "expr": "sum by (file_exchange_partner) (increase(eia_file_exchange_deliveries_total{file_exchange_outcome=\"failed\"}[1h]))",
-          "legendFormat": "{{file_exchange_partner}}"
-        }
-      ]
-    },
-    {
-      "id": 12,
-      "type": "timeseries",
-      "title": "取引先の SFTP の Circuit Breaker",
-      "description": "Resilience sftp-{取引先の ID} の状態(今の状態だけ 1)。open が 5 分を超えるとアラート(FileExchangePartnerCircuitOpen)。",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 19
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 10,
-            "spanNulls": true,
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "min": 0
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "A",
-          "expr": "max by (eia_dependency_name, state) (eia_resilience_circuit_breaker_state_ratio{eia_dependency_name=~\"sftp-.+\"})",
-          "legendFormat": "{{eia_dependency_name}} {{state}}"
+          "expr": "sum(increase(eia_file_exchange_handoffs_total[1h]))",
+          "legendFormat": "受け渡し"
         }
       ]
     },
@@ -645,78 +519,6 @@
       "panels": []
     },
     {
-      "id": 14,
-      "type": "timeseries",
-      "title": "取引先の SFTP のリトライと拒否",
-      "description": "リトライした回数と、Circuit Breaker が接続せずに断った回数。平常時は空。",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 28
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 10,
-            "spanNulls": true,
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "min": 0
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "A",
-          "expr": "sum by (eia_dependency_name) (increase(eia_resilience_retries_total{eia_dependency_name=~\"sftp-.+\"}[1h]))",
-          "legendFormat": "{{eia_dependency_name}} retries"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "B",
-          "expr": "sum by (eia_dependency_name, kind) (increase(eia_resilience_rejections_total{eia_dependency_name=~\"sftp-.+\"}[1h]))",
-          "legendFormat": "{{eia_dependency_name}} {{kind}}"
-        }
-      ]
-    },
-    {
       "id": 15,
       "type": "timeseries",
       "title": "ファイル授受のアラート(firing / pending)",
@@ -727,8 +529,8 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
+        "w": 24,
+        "x": 0,
         "y": 28
       },
       "fieldConfig": {

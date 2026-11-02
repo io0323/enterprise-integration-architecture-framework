@@ -402,15 +402,12 @@ services:
     restart: "no"
 
   # 受け口(バケット eiaf-file-exchange の inbox/sales-daily/)に届いたファイルを検査して archive / quarantine に移し、合格のファイルを
-  # 取引先(sftp-b2b の partner01)に PGP で暗号化・署名して送る。アプリのロールのパスワードだけを渡す。
-  # - 取引先の台帳(b2b/partners.json。b2b-gateway と共有する 1 つの台帳。ADR-0040)には秘密情報の名前だけを書き、値は secrets/ のファイルを _FILE で渡す
-  # - 鍵(secrets/*。0600)を読めるよう、ホストの利用者の uid で動かす(Makefile の EIAF_UID。root では make up が止まる)
-  # - 取引先の SFTP には依存しない(止まっていても受け取りは動き、配送は取引先ごとの Circuit Breaker と再実行で続ける)
+  # 取引先に送るための受け渡しの場所(outbound/sales-daily/)に写す。取引先への送信は b2b-gateway(b2b profile。P12 ⑦b。ADR-0040 §7)。
+  # アプリのロールのパスワードだけを渡す
   file-exchange:
     build: *file-exchange-build
     profiles: [file]
     command: ["serve"]
-    user: "${EIAF_UID:-65532}:${EIAF_GID:-65532}"
     depends_on:
       file-exchange-migrate:
         condition: service_completed_successfully
@@ -424,29 +421,12 @@ services:
       FILE_EXCHANGE_S3_ENDPOINT: http://seaweedfs:8333
       FILE_EXCHANGE_S3_ACCESS_KEY: ${FILE_EXCHANGE_S3_ACCESS_KEY:?make env を実行してください}
       FILE_EXCHANGE_S3_SECRET_KEY: ${FILE_EXCHANGE_S3_SECRET_KEY:?}
-      FILE_EXCHANGE_PARTNERS_FILE: /config/partners.json
-      # 自社の署名の鍵(make pgp-keys が GnuPG で作る)
-      FILE_EXCHANGE_PGP_SECRET_KEY_FILE: /secrets/pgp-eiaf.sec.asc
-      FILE_EXCHANGE_PGP_PASSPHRASE_FILE: /secrets/pgp-eiaf.passphrase
-      # 取引先 partner01 の鍵(台帳に書いた名前)
-      PARTNER01_SFTP_KNOWN_HOSTS_FILE: /secrets/sftp-b2b.known_hosts
-      PARTNER01_SFTP_KEY_FILE: /secrets/sftp-b2b
-      PARTNER01_PGP_PUBLIC_KEY_FILE: /secrets/pgp-partner01.pub.asc
-      # 到着の確認の間隔・取引先の Circuit Breaker の Open の期間・配送のリトライの最初の待ち時間。E2E では tests/e2e/e2e.env で短くする
-      # (make up E2E=1。理由は e2e.env のコメント)
+      # 到着の確認の間隔。E2E では tests/e2e/e2e.env で短くする(make up E2E=1)
       FILE_EXCHANGE_POLL_INTERVAL: ${FILE_EXCHANGE_POLL_INTERVAL:-30s}
-      FILE_EXCHANGE_SFTP_OPEN_DURATION: ${FILE_EXCHANGE_SFTP_OPEN_DURATION:-30s}
-      FILE_EXCHANGE_DELIVER_RETRY_DELAY: ${FILE_EXCHANGE_DELIVER_RETRY_DELAY:-5s}
       OTEL_SERVICE_NAME: file-exchange
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
     volumes:
       - *probe-volume
-      - ./b2b/partners.json:/config/partners.json:ro
-      - ./secrets/pgp-eiaf.sec.asc:/secrets/pgp-eiaf.sec.asc:ro
-      - ./secrets/pgp-eiaf.passphrase:/secrets/pgp-eiaf.passphrase:ro
-      - ./secrets/pgp-partner01.pub.asc:/secrets/pgp-partner01.pub.asc:ro
-      - ./secrets/sftp-b2b.known_hosts:/secrets/sftp-b2b.known_hosts:ro
-      - ./secrets/sftp-b2b:/secrets/sftp-b2b:ro
     mem_limit: 256m
     healthcheck:
       <<: *healthcheck
@@ -473,7 +453,7 @@ services:
   # 取引先(sftp-b2b の partner01)の受け取りのディレクトリ(/config/to-eiaf)を見回って受注の文書を受け付け、原本を Object Lock の
   # バケット(eiaf-b2b-originals)に置き、応答(CONTRL・APERAK)を /config/from-eiaf に返し、受け付けた注文を Gateway 経由で order の API に
   # 取り込む(order profile と一緒に動かす。make up PROFILE="order b2b")。アプリのロールのパスワードだけを渡す。
-  # - 取引先の台帳(b2b/partners.json。file-exchange と共有する 1 つの台帳)には秘密情報の名前だけを書き、値は secrets/ のファイルを _FILE で渡す
+  # - 取引先の台帳(b2b/partners.json。台帳を読むのは b2b-gateway だけ。ADR-0040 §2)には秘密情報の名前だけを書き、値は secrets/ のファイルを _FILE で渡す
   # - 鍵(secrets/*。0600)を読めるよう、ホストの利用者の uid で動かす(Makefile の EIAF_UID)
   # - 取引先の SFTP と order の API には依存しない(止まっていれば、取引先ごとの Circuit Breaker と次の回のやり直しで続ける)
   b2b-gateway:
@@ -526,6 +506,7 @@ services:
       B2B_GATEWAY_SEND_INTERVAL: ${B2B_GATEWAY_SEND_INTERVAL:-30s}
       B2B_GATEWAY_SUBMIT_INTERVAL: ${B2B_GATEWAY_SUBMIT_INTERVAL:-30s}
       B2B_GATEWAY_METRICS_INTERVAL: ${B2B_GATEWAY_METRICS_INTERVAL:-1m}
+      B2B_GATEWAY_SFTP_OPEN_DURATION: ${B2B_GATEWAY_SFTP_OPEN_DURATION:-30s}
       OTEL_SERVICE_NAME: b2b-gateway
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
     volumes:
@@ -983,11 +964,11 @@ services:
       test: ["CMD", "nc", "-z", "127.0.0.1", "2222"]
 
   # SFTP(b2b profile。取引先向け。ADR-0008 で B2B のプロトコルは SFTP のみ)。社内向けの sftp とは利用者・鍵・保存領域を分ける。
-  # file profile では、file-exchange が日次の売上ファイルを送る取引先(partner01)の代わり(P09。ADR-0032 §8)。
+  # b2b-gateway が受注の文書を受け取り、応答と日次の売上ファイルを送る取引先(partner01)の代わり(P12。ADR-0040)。
   # ホスト鍵は make env が作ったもの(secrets/sftp-b2b-host-key)を起動時に入れる。接続する側は known_hosts でこの鍵に固定する
   sftp-b2b:
     image: ${SFTP_IMAGE:?}
-    profiles: [b2b, file]
+    profiles: [b2b]
     environment:
       PUID: 1000
       PGID: 1000

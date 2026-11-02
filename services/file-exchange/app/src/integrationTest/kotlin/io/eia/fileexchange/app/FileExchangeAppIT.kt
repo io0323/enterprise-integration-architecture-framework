@@ -13,11 +13,9 @@ import io.eia.platform.security.secret.EnvSecretProvider
 import io.eia.platform.security.secret.SecretName
 import io.eia.platform.testsupport.InfraImages
 import io.eia.platform.testsupport.SeaweedFsContainer
-import io.eia.platform.testsupport.SftpServerContainer
-import io.eia.platform.testsupport.TestKeys
-import io.eia.platform.testsupport.TestLedgers
 import io.eia.shared.kernel.Result
 import io.kotest.assertions.fail
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.shouldBe
@@ -28,6 +26,7 @@ import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
 import org.postgresql.ds.PGSimpleDataSource
+import org.postgresql.util.PSQLException
 import org.testcontainers.postgresql.PostgreSQLContainer
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider
@@ -68,11 +67,6 @@ class FileExchangeAppIT :
         val ktor = HttpClient(CIO)
         val sequence = AtomicInteger()
         val traceId = "4bf92f3577b34da6a3ce929d0e0e4736"
-        // 取引先(partner01)の代わりの SFTP のサーバと、配送の鍵
-        val client = TestKeys.ssh()
-        val sftp = SftpServerContainer("partner01", client.publicKey)
-        val ours = TestKeys.pgp("EIAF <eiaf@example.com>")
-        val partnerPgp = TestKeys.pgp("Partner <partner@example.com>")
 
         fun ownerEnv(): Map<String, String> =
             mapOf(
@@ -148,27 +142,32 @@ class FileExchangeAppIT :
             return name.base
         }
 
-        /** 取引先の台帳と、台帳に書いた名前の秘密情報(配送する受け取りの環境)。 */
-        fun deliveryEnv(): Map<String, String> {
-            val registry = workDir.resolve("partners.json")
-            Files.writeString(
-                registry,
-                TestLedgers.json(TestLedgers.Partner(host = sftp.host, port = sftp.sshPort)),
+        /** 切り替えより前の状態を作る: archive に収めたファイル(データとマニフェスト)と、受け取りの記録・配送の記録(管理者で書く)。 */
+        fun archivedBeforeSwitch(
+            name: String,
+            delivery: String?,
+            storedDaysAgo: Int = 1,
+        ) {
+            store("eiaf").use { admin ->
+                (admin.put("archive/sales-daily/$name.parquet", "data-$name".encodeToByteArray()) as Result.Ok).value
+                (admin.put("archive/sales-daily/$name.manifest.json", "{}".encodeToByteArray()) as Result.Ok).value
+            }
+            query(
+                "INSERT INTO exchange.received_file (file_name, destination, data_file, state, stored_at) " +
+                    "VALUES ('$name', 'ARCHIVE', '$name.parquet', 'STORED', now() - interval '$storedDaysAgo days') RETURNING file_name",
             )
-            return mapOf(
-                FileExchangeConfig.PARTNERS_FILE to registry.toString(),
-                "P01_KNOWN_HOSTS" to sftp.knownHostsLine(),
-                "P01_SSH_KEY" to client.privateKey,
-                "P01_PGP_PUBLIC_KEY" to partnerPgp.publicKey,
-                FileExchangeConfig.PGP_SECRET_KEY.value to ours.secretKey,
-                FileExchangeConfig.PGP_PASSPHRASE.value to ours.passphrase,
-            )
+            delivery?.let { state ->
+                val sentAt = if (state == "SENT") "now()" else "null"
+                query(
+                    "INSERT INTO exchange.delivery (file_name, partner_id, remote_name, state, sent_at) " +
+                        "VALUES ('$name', 'partner01', '$name.parquet.pgp', '$state', $sentAt) RETURNING file_name",
+                )
+            }
         }
 
         beforeSpec {
             postgres.start()
             seaweed.start()
-            sftp.start()
             PGSimpleDataSource()
                 .apply {
                     setURL(postgres.jdbcUrl)
@@ -200,7 +199,6 @@ class FileExchangeAppIT :
 
         afterSpec {
             ktor.close()
-            sftp.stop()
             seaweed.stop()
             postgres.stop()
             workDir.toFile().deleteRecursively()
@@ -232,20 +230,62 @@ class FileExchangeAppIT :
             keys(inbox).none { it.contains(name) } shouldBe true
         }
 
-        test("receive(台帳あり): 受け取った後に、取引先に PGP で暗号化して SFTP で送る。台帳の誤りは設定の誤り(2)") {
+        test("receive: 受け取った後に、合格のファイル(データとマニフェスト)を受け渡しの場所に写す。取引先への送信は b2b-gateway(P12 ⑦b)") {
             val name = publish()
-            FileExchangeCommands.run(listOf("receive", name), appEnv() + deliveryEnv()) shouldBe FileExchangeCommands.OK
-            sftp.list("/config/outbox").filter { it.startsWith(name) } shouldContainExactly listOf("$name.parquet.pgp")
-            query(
-                "SELECT state || ' ' || already_present FROM exchange.delivery WHERE file_name = '$name' AND partner_id = 'partner01'",
-            ) shouldBe
-                "SENT false"
+            FileExchangeCommands.run(listOf("receive", name), appEnv()) shouldBe FileExchangeCommands.OK
+            keys("outbound/sales-daily/").filter { it.contains(name) } shouldContainExactly
+                listOf("outbound/sales-daily/$name.manifest.json", "outbound/sales-daily/$name.parquet")
+            // 運用者の再実行でも写し直すだけ(同じ結果)
+            FileExchangeCommands.run(listOf("receive", name), appEnv()) shouldBe FileExchangeCommands.OK
+            keys("outbound/sales-daily/").filter { it.contains(name) }.size shouldBe 2
+        }
 
-            val broken = workDir.resolve("broken.json").also { Files.writeString(it, """{"partners": [{"id": "partner01"}]}""") }
-            FileExchangeCommands.run(
-                listOf("receive", name),
-                appEnv() + deliveryEnv() + (FileExchangeConfig.PARTNERS_FILE to broken.toString()),
-            ) shouldBe FileExchangeCommands.USAGE
+        test("切り替えの移行(handoff-unsent): 直接送っていた頃に archive に収め、送り終えていないファイルだけを写す。既定は dry-run(承認の条件 2)") {
+            archivedBeforeSwitch("sales_daily_20261001150000_501", delivery = "SENT")
+            archivedBeforeSwitch("sales_daily_20261001150000_502", delivery = "SENDING")
+            archivedBeforeSwitch("sales_daily_20261001150000_503", delivery = null)
+            archivedBeforeSwitch("sales_daily_20261001150000_504", delivery = null, storedDaysAgo = 30)
+            val migrated = { keys("outbound/sales-daily/").filter { it.contains("sales_daily_20261001150000_50") } }
+
+            FileExchangeCommands.run(listOf("handoff-unsent"), appEnv()) shouldBe FileExchangeCommands.OK
+            migrated() shouldBe emptyList()
+
+            FileExchangeCommands.run(listOf("handoff-unsent", "--execute"), appEnv()) shouldBe FileExchangeCommands.OK
+            migrated() shouldContainExactly
+                listOf(
+                    "outbound/sales-daily/sales_daily_20261001150000_502.manifest.json",
+                    "outbound/sales-daily/sales_daily_20261001150000_502.parquet",
+                    "outbound/sales-daily/sales_daily_20261001150000_503.manifest.json",
+                    "outbound/sales-daily/sales_daily_20261001150000_503.parquet",
+                )
+            // 期間を広げれば古いファイルも対象になる。使い方の誤りは 2
+            FileExchangeCommands.run(listOf("handoff-unsent", "--days", "60", "--execute"), appEnv()) shouldBe FileExchangeCommands.OK
+            migrated().filter { it.contains("_504.") }.size shouldBe 2
+            FileExchangeCommands.run(listOf("handoff-unsent", "--days", "0"), appEnv()) shouldBe FileExchangeCommands.USAGE
+            FileExchangeCommands.run(listOf("handoff-unsent", "--force"), appEnv()) shouldBe FileExchangeCommands.USAGE
+        }
+
+        test("配送の記録(delivery)は読み取り専用: アプリのロールは読めるが、書けない(承認の条件 3)") {
+            val app =
+                PGSimpleDataSource().apply {
+                    setURL(postgres.jdbcUrl.replaceAfterLast('/', "file_exchange"))
+                    user = "file_exchange_app"
+                    password = appPassword
+                }
+            app.connection.use { c ->
+                c.createStatement().executeQuery("SELECT count(*) FROM exchange.delivery").use { it.next() } shouldBe true
+                shouldThrow<PSQLException> {
+                    c.createStatement().executeUpdate(
+                        "UPDATE exchange.delivery SET state = 'SENT', sent_at = now() WHERE state = 'SENDING'",
+                    )
+                }.sqlState shouldBe "42501"
+                shouldThrow<PSQLException> {
+                    c.createStatement().executeUpdate(
+                        "INSERT INTO exchange.delivery (file_name, partner_id, remote_name, state) " +
+                            "VALUES ('sales_daily_20261001150000_503', 'partner02', 'x.pgp', 'SENDING')",
+                    )
+                }.sqlState shouldBe "42501"
+            }
         }
 
         test("serve: マニフェストの到着で受け取り、ready になる。実行の span はマニフェストの traceparent と同じトレース") {

@@ -1,7 +1,7 @@
 package io.eia.fileexchange.app
 
-import io.eia.fileexchange.application.port.inbound.DeliverFileUseCase
-import io.eia.fileexchange.application.port.inbound.DeliveryReport
+import io.eia.fileexchange.application.port.inbound.HandOffFileUseCase
+import io.eia.fileexchange.application.port.inbound.HandoffReport
 import io.eia.fileexchange.application.port.inbound.ReceiveFileUseCase
 import io.eia.fileexchange.application.port.inbound.ReceiveOutcome
 import io.eia.fileexchange.application.port.inbound.SweepReport
@@ -9,23 +9,17 @@ import io.eia.fileexchange.domain.ReceiptDestination
 import io.eia.platform.batch.BatchJob
 import io.eia.platform.batch.DagDefinition
 import io.eia.platform.batch.DagId
-import io.eia.platform.batch.StepBuilder
 import io.eia.platform.batch.Trigger
 import io.eia.platform.batch.dag
 import io.eia.platform.filetransfer.store.ObjectReader
-import io.eia.shared.kernel.err
-import io.eia.shared.kernel.flatMap
 import io.eia.shared.kernel.map
-import io.eia.shared.kernel.ok
 import io.eia.shared.kernel.onOk
 import io.opentelemetry.api.common.AttributeKey
 import io.opentelemetry.api.common.Attributes
 import io.opentelemetry.api.metrics.LongCounter
 import io.opentelemetry.api.metrics.Meter
-import org.slf4j.LoggerFactory
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.time.Clock
-import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.DurationUnit
 
@@ -34,8 +28,8 @@ import kotlin.time.DurationUnit
  * 実行の span の親はマニフェストの traceparent(送り手の書き出しの span。ADR-0030 §5)。
  * データファイルがなくても起動し(`requireDataFile = false`)、欠損は検査で不合格にして quarantine に送る。
  *
- * 受け取りの後に、合格のファイルを取引先に配送する(`deliver`。ADR-0032 §8)。1 つの取引先に送れなければ、ほかの取引先に送ってから
- * ステップを失敗にする(ステップのリトライと、運用者の再実行 `receive <名前>` で、送れなかった取引先だけに送る)。
+ * 受け取りの後に、合格のファイルを取引先に送るための受け渡しの場所に写す(`handoff`。ADR-0032 §8・ADR-0040 §7)。取引先への送信は
+ * b2b-gateway が行う(P12 ⑦b)。写せなければステップを失敗にする(ステップのリトライと、運用者の再実行 `receive <名前>` で写し直す)。
  */
 internal object ReceiveJob {
     val DAG_ID: DagId = DagId("file-exchange.receive")
@@ -43,14 +37,10 @@ internal object ReceiveJob {
     /** 連携カタログの ID(日次の売上ファイル)。 */
     const val INTEGRATION_ID: String = "INT-SALES-004"
 
-    private val logger = LoggerFactory.getLogger(ReceiveJob::class.java)
-
-    /** @param deliverRetryDelay 配送のステップのリトライの最初の待ち時間(2 倍ずつ延ばし、上限は 1 分) */
     fun dag(
         receive: ReceiveFileUseCase,
-        deliver: DeliverFileUseCase,
+        handOff: HandOffFileUseCase,
         metrics: FileExchangeMetrics,
-        deliverRetryDelay: Duration = StepBuilder.DEFAULT_RETRY.initialDelay,
     ): DagDefinition =
         dag(DAG_ID.value) {
             integrationId = INTEGRATION_ID
@@ -59,16 +49,9 @@ internal object ReceiveJob {
                     expected = 1.minutes
                     action { context -> receive(context.run.partition.value).onOk(metrics::received).map { } }
                 }
-            step("deliver", received) {
-                expected = 5.minutes
-                retry = StepBuilder.DEFAULT_RETRY.copy(initialDelay = deliverRetryDelay)
-                action { context ->
-                    deliver(context.run.partition.value).flatMap { report ->
-                        metrics.delivered(report)
-                        report.failures.forEach { logger.warn("{} を取引先 {} に送れません({})", report.name, it.partner, it.error.code) }
-                        report.failures.firstOrNull()?.let { err(it.error) } ?: ok(Unit)
-                    }
-                }
+            step("handoff", received) {
+                expected = 1.minutes
+                action { context -> handOff(context.run.partition.value).onOk(metrics::handedOff).map { } }
             }
         }
 
@@ -88,9 +71,8 @@ internal object ReceiveJob {
  * | `eia.file_exchange.files.extra` | counter | `file_exchange.reason`(`duplicate` / `name_reused`)。受け取り済みの名前で届いたファイル |
  * | `eia.file_exchange.inbox.waiting` | gauge | なし。直近の見回りで、受け口に残っていたファイルの数 |
  * | `eia.file_exchange.inbox.oldest_age` | gauge(秒) | なし。受け口に残っているファイルのうち、マニフェストの createdAt が最も古いものの経過時間 |
- * | `eia.file_exchange.deliveries` | counter | `file_exchange.partner`(取引先の ID)・`file_exchange.outcome`(下記) |
+ * | `eia.file_exchange.handoffs` | counter | なし。取引先に送るための受け渡しの場所に写したファイルの数(送信は b2b-gateway。ADR-0040 §7) |
  *
- * 配送の結果は `sent`(送った)・`already_present`(相手の側にあった)・`already_sent`(送信済み)・`failed`(送れなかった)。
  * 属性にファイルの名前は入れない(系列が増え続けるため)。
  */
 internal class FileExchangeMetrics(
@@ -109,11 +91,11 @@ internal class FileExchangeMetrics(
             .setUnit("{file}")
             .setDescription("受け取り済みの名前で届き、quarantine に移したファイルの数")
             .build()
-    private val deliveries: LongCounter =
+    private val handoffs: LongCounter =
         meter
-            .counterBuilder("eia.file_exchange.deliveries")
-            .setUnit("{delivery}")
-            .setDescription("取引先への配送の数(取引先と結果ごと)")
+            .counterBuilder("eia.file_exchange.handoffs")
+            .setUnit("{file}")
+            .setDescription("取引先に送るための受け渡しの場所に写したファイルの数")
             .build()
     private val lastSweep = AtomicReference<SweepReport?>()
 
@@ -140,9 +122,8 @@ internal class FileExchangeMetrics(
         received.add(1, Attributes.of(DESTINATION, destination, REASON, outcome.file.reason ?: "none"))
     }
 
-    fun delivered(report: DeliveryReport) {
-        report.delivered.forEach { deliveries.add(1, Attributes.of(PARTNER, it.partner.value, OUTCOME, it.outcome.code)) }
-        report.failures.forEach { deliveries.add(1, Attributes.of(PARTNER, it.partner.value, OUTCOME, "failed")) }
+    fun handedOff(report: HandoffReport) {
+        if (!report.quarantined) handoffs.add(1)
     }
 
     fun swept(report: SweepReport) {
@@ -153,7 +134,5 @@ internal class FileExchangeMetrics(
     private companion object {
         val DESTINATION: AttributeKey<String> = AttributeKey.stringKey("file_exchange.destination")
         val REASON: AttributeKey<String> = AttributeKey.stringKey("file_exchange.reason")
-        val PARTNER: AttributeKey<String> = AttributeKey.stringKey("file_exchange.partner")
-        val OUTCOME: AttributeKey<String> = AttributeKey.stringKey("file_exchange.outcome")
     }
 }

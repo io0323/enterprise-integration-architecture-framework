@@ -157,7 +157,12 @@ S3 の部分は P09 ③a、SFTP と PGP(§8)は ③b で決めた。Parquet の�
 - PGP は、取引先への SFTP の経路では必須、社内の S3 の経路では任意(P09 の計画)。どこで使うかは file-exchange(⑤)が決める。
 - 単体テスト(`PgpFilesSpec`): 数 MB の往復、改竄、なりすまし(第三者の署名)、自社あてでない暗号文、署名のない暗号文、改竄の検知のない形式、鍵の誤り。統合テスト(`SftpIT`)で、暗号化と署名をして SFTP で送ったファイルを、取引先の鍵で署名を確かめて復号できること、サーバの上で 1 バイト変えると不合格になることを確かめる。
 
-#### 取引先への配送(file-exchange。P09 ⑤b)
+#### 取引先への配送(file-exchange。P09 ⑤b。P12 ⑦b で b2b-gateway に移した)
+> **P12 ⑦b(2026-11-02)からの形**: 取引先への送信は b2b-gateway だけが行う(ADR-0040 §7。売上ファイルと応答の送り方を 1 つにする)。この小節の以下の内容は、⑤b から ⑦b までの形の記録として残す。
+> - **受け渡しのステップ**: DAG `file-exchange.receive` の `deliver` を `handoff` に替えた。合格(archive)のファイルを、データファイル → マニフェスト(最後。完了の合図)の順に、同じバケットの受け渡しの場所 `outbound/sales-daily/`(`FILE_EXCHANGE_OUTBOUND_PREFIX`)に写す(`S3Handoff`)。quarantine のファイルは写さない。写すのはコピーなので、やり直しても同じ中身で上書きするだけ(冪等)。メトリクスは `eia.file_exchange.handoffs`。b2b-gateway が受け渡しの場所を毎回一覧し、ファイルと取引先の組ごとの記録のないものを送る(ADR-0040 §7)。
+> - **file-exchange は取引先を知らない**: 台帳・PGP・SFTP・Resilience `sftp-{ID}` の設定と部品(`PartnerRegistry`・`SftpPartnerOutbox`・`PgpKeyExpiry`・`DeliverFileService`)を消した。鍵の期限のメトリクスと台帳のアラートは b2b-gateway が出す。
+> - **配送の記録 `exchange.delivery` は、過去の配送の記録として読み取り専用で残す**(⑦ の承認の条件 3)。マイグレーション `V3__delivery_read_only.sql` で、アプリのロールから INSERT・UPDATE の権限を外した(SELECT は残す。表に COMMENT を付けた)。統合テスト(`FileExchangeAppIT`)で、アプリのロールが読めて、書き込みが権限の誤り(SQLSTATE 42501)になることを確かめる。
+> - **切り替えの 1 回きりの移行**(⑦ の承認の条件 2): 切り替えの時点で、archive に移したが `delivery` で全部の取引先に `SENT` になっていないファイル(送信中で止まった・まだ送っていない)は、誰も送らなくなる。コマンド `handoff-unsent [--days N] [--execute]` が、受け取りの記録が `STORED` で直近 N 日(既定 14。受け渡しの場所の保存期間と同じ)のうち、配送の記録がない・`SENT` でない記録があるファイルを一覧し(既定は一覧だけ)、`--execute` で受け渡しの場所に写す。受け取りの実行と同じロック(`file-exchange.receive` のパーティション)で写す。既に送った取引先への送り直しは、b2b-gateway の送る前の正式名の確認(`exists`)で防ぐ。手順は Runbook(file-exchange.md「取引先への送信の切り替え」)。統合テスト(`FileExchangeAppIT`)で、一覧だけでは写さないこと、`--execute` で対象のファイルだけを写すこと、`--days` の範囲を確かめる。
 - **配送のステップ**: 受け取りの DAG `file-exchange.receive` に、`receive` の後のステップ `deliver` を足した。合格(archive)のファイルを、そのデータセット(`{system}_{dataset}`。名前から時刻と連番を除いたもの)を送る取引先ごとに送る。quarantine に移したファイルは送らない。
   - 1 つの取引先に送れなくても、ほかの取引先には送ってから、ステップを失敗にする(ステップのリトライと、運用者の再実行 `receive <名前>` で、送れなかった取引先だけに送る。受け取りは `STORED` なので何もしない)。
 - **取引先の台帳**(承認の条件 2): JSON のファイル(`FILE_EXCHANGE_PARTNERS_FILE`)に、**取引先の ID ごとに** 送るデータセット・送り先(SFTP のホスト・ポート・利用者・ディレクトリ)・ホスト鍵(known_hosts)・クライアントの鍵・PGP の公開鍵を持つ。P12 の B2B Gateway の取引先の台帳に、この形のまま引き継ぐ。
@@ -218,3 +223,4 @@ S3 の部分は P09 ③a、SFTP と PGP(§8)は ③b で決めた。Parquet の�
 - 2026-10-18: P09 ⑥ で、ローカル基盤(§7: バケットと identity とバケットポリシー・置き場の停止と取り込みの独立・ホスト鍵の固定・GnuPG の鍵と相互運用・アラート・ダッシュボード・Runbook)を書いた。
 - 2026-10-31: P12 ③ で、取引先の台帳を b2b-gateway と共有する 1 つの台帳(`infra/local/b2b/partners.json`。読み込みは `platform/trading-partner`)に移した(ADR-0040 §2)。§8 の台帳の項目は、送るデータセットを `documents`(連携カタログの ID・向き・データセット)に移し、識別子・鍵の期日・合意・連絡先を足した形になった。file-exchange の `PartnerRegistry` は、台帳からファイルの送り先(`PartnerDestination`)を作る変換になった。取引先への送信は P12 ⑦ で b2b-gateway に移す。
 - 2026-10-31: P12 ④a で、`PgpKeys` に取引先の旧い公開鍵(署名の検証にだけ使う)を持たせ、署名の鍵の差し替えの間は新旧の両方の署名を受け付けるようにした(`PgpVerification.Verified` は実際に署名した鍵のフィンガープリント。ADR-0040 §8)。原本の保管のために、Object Lock(COMPLIANCE)で置く `LockedObjectWriter`(`S3ObjectStore.putLocked`)を足した。
+- 2026-11-02: P12 ⑦b で、取引先への送信を b2b-gateway に移した(§8「取引先への配送」の冒頭)。file-exchange の `deliver` のステップを、受け渡しの場所 `outbound/sales-daily/` に写す `handoff` に替え、台帳・PGP・SFTP の部品を消した。配送の記録 `exchange.delivery` は過去の配送の記録として読み取り専用で残す(アプリのロールから INSERT・UPDATE を外した)。切り替えのときの 1 回きりの移行のコマンド `handoff-unsent` を足した。

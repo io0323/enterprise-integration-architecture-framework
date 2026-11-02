@@ -25,7 +25,8 @@ internal object FileExchangeCommands {
     const val FAILED = 1
     const val USAGE = 2
     private const val MIGRATE_POOL_SIZE = 3
-    private const val USAGE_TEXT = "使い方: file-exchange migrate | serve | receive <ファイルの名前(拡張子なし)> [--restart] | sweep"
+    private const val USAGE_TEXT =
+        "使い方: file-exchange migrate | serve | receive <ファイルの名前(拡張子なし)> [--restart] | sweep | handoff-unsent [--days <日数>] [--execute]"
     private val NAME = Regex("^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
     /** serve・receive・sweep の環境にあってはならない変数(所有者のパスワード。ADR-0024 §2)。 */
@@ -43,10 +44,11 @@ internal object FileExchangeCommands {
             "serve" -> withoutOwnerPassword(env) { serve(env) }
             "receive" -> withoutOwnerPassword(env) { receive(args.drop(1), env) }
             "sweep" -> withoutOwnerPassword(env) { if (args.size == 1) sweep(env) else usage() }
+            "handoff-unsent" -> withoutOwnerPassword(env) { HandoffUnsentCommand.run(args.drop(1), env) }
             else -> usage()
         }
 
-    private fun usage(): Int = USAGE.also { logger.error(USAGE_TEXT) }
+    fun usage(): Int = USAGE.also { logger.error(USAGE_TEXT) }
 
     private fun withoutOwnerPassword(
         env: Map<String, String>,
@@ -93,7 +95,7 @@ internal object FileExchangeCommands {
             }
         }
 
-    private fun withWired(
+    fun withWired(
         env: Map<String, String>,
         block: (org.koin.core.Koin) -> Int,
     ): Int =

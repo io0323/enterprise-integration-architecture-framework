@@ -1,7 +1,6 @@
 package io.eia.fileexchange.app
 
 import com.zaxxer.hikari.HikariDataSource
-import io.eia.fileexchange.adapters.partner.PartnerRegistry
 import io.eia.fileexchange.application.port.inbound.SweepInboxUseCase
 import io.eia.platform.batch.BatchScheduler
 import io.eia.platform.filetransfer.store.S3ObjectStore
@@ -92,10 +91,9 @@ internal class FileExchangeServer private constructor(
             FileExchangeConfig
                 .fromEnvironment(env)
                 .flatMap { config -> config.forRun().map { endpoint -> config to endpoint } }
-                .flatMap { (config, endpoint) -> config.partners().map { partners -> Triple(config, endpoint, partners) } }
-                .flatMap { (config, endpoint, partners) ->
+                .flatMap { (config, endpoint) ->
                     when (val password = EnvSecretProvider(env).get(FileExchangeConfig.APP_PASSWORD)) {
-                        is Result.Ok -> ok(Inputs(config, endpoint, partners, password.value))
+                        is Result.Ok -> ok(Inputs(config, endpoint, password.value))
                         is Result.Err -> err(ValidationError.of(FileExchangeConfig.APP_PASSWORD.value, password.error.message))
                     }
                 }.flatMap { inputs ->
@@ -180,6 +178,5 @@ internal class FileExchangeServer private constructor(
 internal data class Inputs(
     val config: FileExchangeConfig,
     val s3Endpoint: URI,
-    val partners: PartnerRegistry,
     val appPassword: Secret,
 )
