@@ -188,7 +188,7 @@ private fun Module.serveBeans(
     }
     orderBeans(serve, config.clientId, secrets, runtime)
     if (config.anchor.enabled) anchorBeans(config.anchor, secrets, runtime)
-    single { B2bGatewayMetrics(runtime.meter) }
+    single { B2bGatewayMetrics(runtime.meter, partners) }
     // 取引先の鍵とホスト鍵の有効期限(ADR-0040 §3)。file-exchange も同じ系列を出すので、アラートとダッシュボードは最小値で見る
     single(createdAtStart = true) {
         val expiry = PartnerPgpKeyExpiry(secrets)

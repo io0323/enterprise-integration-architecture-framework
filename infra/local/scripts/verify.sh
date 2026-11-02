@@ -56,7 +56,7 @@ client_token() {
 header_value() { awk -v name="$(tr '[:upper:]' '[:lower:]' <<<"$1")" -F': ' 'tolower($1) == name { sub(/\r$/, "", $2); print $2; exit }'; }
 
 # 1 回だけ動いて終わるコンテナ(終了コード 0 で終わっていれば正常)
-oneshot_services=" order-migrate schema-publish legacy-migrate kafka-topics inventory-migrate payment-migrate shipping-migrate batch-etl-migrate file-exchange-migrate webhook-receiver-migrate integration-flow-migrate "
+oneshot_services=" order-migrate schema-publish legacy-migrate kafka-topics inventory-migrate payment-migrate shipping-migrate batch-etl-migrate file-exchange-migrate b2b-gateway-migrate webhook-receiver-migrate integration-flow-migrate "
 
 # ------------------------------------------------------------------ 共通: healthy
 verify_health() {
@@ -830,7 +830,7 @@ SFTP
 
   # メトリクス(OTLP → Prometheus)・アラートのルール・ダッシュボード
   check "Prometheus: b2b-gateway が拒否した文書の数を出す(partner01・business)" \
-    retry 18 10 bash -c "curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=sum(eia_b2b_documents_total{trading_partner_id=\"partner01\",b2b_stage=\"business\"})' | grep -q '\"value\"'"
+    retry 18 10 bash -c "curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=sum(eia_b2b_documents_rejected_total{trading_partner_id=\"partner01\",b2b_stage=\"business\"}) > 0' | grep -q '\"value\"'"
   check "Prometheus: b2b-gateway が応答の送信の数を出す(partner01・sent)" \
     retry 18 10 bash -c "curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=sum(eia_b2b_acknowledgements_total{trading_partner_id=\"partner01\",b2b_outcome=\"sent\"})' | grep -q '\"value\"'"
   check "Prometheus: 拒否した文書の警告(B2bDocumentRejected。段階 business)が出る(運用通知。ROADMAP P12 の DoD)" \
