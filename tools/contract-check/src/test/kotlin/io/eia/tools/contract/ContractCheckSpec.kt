@@ -49,6 +49,9 @@ private fun Workspace.fileIntegrationActive(): Workspace = setLifecycle(CATALOG_
 /** 受注の文書(INT-B2B-001)を active にする。EDI の仕様の互換性の違反のサンプルは、比較元と変更後の両方で active にして検査する。 */
 private fun Workspace.ediIntegrationActive(): Workspace = setLifecycle(CATALOG_EDI_ORDERS, "lifecycle: active")
 
+/** 受注の文書(INT-B2B-001)を設計中に戻す(今の状態によらない)。設計中の連携だけが使う仕様の変更を許す規則の確認に使う。 */
+private fun Workspace.ediIntegrationDesign(): Workspace = setLifecycle(CATALOG_EDI_ORDERS, "lifecycle: design")
+
 private val cases =
     listOf(
         // --- 構造 ---
@@ -339,8 +342,8 @@ private val cases =
                 .replace(EDI_ORDERS, "description: GTIN }", "description: 商品の GTIN }")
                 .replace(EDI_ORDERS, "name: Buyer }", "name: Buyer party }")
         },
-        Case("EDI の仕様: 設計中(design)の連携だけが使う仕様の変更は許す", emptySet(), withBaseline = true) {
-            replace(EDI_ORDERS, "    max: 999\n", "    max: 500\n")
+        Case("EDI の仕様: 設計中(design)の連携だけが使う仕様の変更は許す", emptySet(), withBaseline = true, prepareBaseline = { ediIntegrationDesign() }) {
+            ediIntegrationDesign().replace(EDI_ORDERS, "    max: 999\n", "    max: 500\n")
         },
         Case("ファイルの仕様: 列の削除と型の変更", setOf("CC-COMPAT-003"), withBaseline = true, prepareBaseline = { fileIntegrationActive() }) {
             fileIntegrationActive()
