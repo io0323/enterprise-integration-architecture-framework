@@ -1,5 +1,7 @@
 package io.eia.b2bgateway.adapters.persistence
 
+import io.eia.b2bgateway.adapters.archive.sha256
+import io.eia.b2bgateway.adapters.order.PlaceOrderJson
 import io.eia.b2bgateway.application.port.inbound.Receipt
 import io.eia.b2bgateway.application.port.outbound.DocumentRecord
 import io.eia.b2bgateway.application.port.outbound.ReceiptRecords
@@ -29,7 +31,8 @@ import kotlin.time.toJavaInstant
 
 /**
  * 受け取りの記録(ADR-0040 §5・ADR-0041 §11)。表は `b2b.received_document`・`received_order`・`acknowledgement`。
- * 1 つの文書の記録・受け付けた注文・送る応答・監査(`b2b.document.receive`。ADR-0017)を 1 つのトランザクションで書く。
+ * 1 つの文書の記録・受け付けた注文・送る応答・社内に取り込む注文の送信待ち(`order_submission`)・監査(`b2b.document.receive`。ADR-0017)を
+ * 1 つのトランザクションで書く。
  *
  * 監査の記録の項目
  * | 項目 | 値 |
@@ -80,6 +83,7 @@ public class JdbcReceipts(
             insertDocument(connection, id, document, summary)
             insertOrders(connection, id, document)
             insertAcknowledgements(connection, id, document)
+            insertSubmissions(connection, id, document)
             val event = auditEvent(id, document, summary, trace)
             when (val appended = log.append(connection, event)) {
                 is Result.Ok -> Unit
@@ -173,6 +177,43 @@ public class JdbcReceipts(
                 statement.setString(++index, acknowledgement.readableRef)
                 statement.executeUpdate()
             }
+        }
+    }
+
+    /** 社内に取り込む注文の送信待ち。要求の本文は、ここで JSON にして固定する(ADR-0040 §6)。 */
+    private fun insertSubmissions(
+        connection: Connection,
+        id: UUID,
+        document: DocumentRecord,
+    ) {
+        if (document.submissions.isEmpty()) return
+        connection.prepareStatement(INSERT_SUBMISSION).use { statement ->
+            document.submissions.forEach { submission ->
+                val body = PlaceOrderJson.encode(submission.request)
+                val header = submission.header
+                var index = 0
+                statement.setObject(++index, UUID.randomUUID())
+                statement.setObject(++index, id)
+                statement.setString(++index, document.file.partnerId)
+                statement.setString(++index, submission.orderNumber)
+                statement.setString(++index, submission.messageReference)
+                statement.setString(++index, submission.request.idempotencyKey)
+                statement.setBytes(++index, body)
+                statement.setString(++index, sha256(body))
+                statement.setString(++index, header.serviceCharacters.una)
+                statement.setString(++index, header.characterSet.identifier)
+                statement.setString(++index, header.syntaxVersion)
+                statement.setString(++index, header.sender.id)
+                statement.setString(++index, header.sender.qualifier)
+                statement.setString(++index, header.recipient.id)
+                statement.setString(++index, header.recipient.qualifier)
+                statement.setString(++index, header.controlReference)
+                statement.setBoolean(++index, submission.positiveAperak)
+                statement.setTimestamp(++index, Timestamp.from(submission.aperakDeadline.toJavaInstant()))
+                statement.setTimestamp(++index, Timestamp.from(submission.retryUntil.toJavaInstant()))
+                statement.addBatch()
+            }
+            statement.executeBatch()
         }
     }
 
@@ -276,6 +317,12 @@ public class JdbcReceipts(
         const val INSERT_ACKNOWLEDGEMENT = """
             INSERT INTO b2b.acknowledgement (id, document_id, partner_id, kind, original_ref, original_sha256, readable_ref)
             VALUES (?, ?, ?, ?, ?, ?, ?)
+        """
+        const val INSERT_SUBMISSION = """
+            INSERT INTO b2b.order_submission (id, document_id, partner_id, order_number, message_reference, idempotency_key, body, body_sha256,
+              service_characters, character_set, syntax_version, sender_id, sender_qualifier, recipient_id, recipient_qualifier, control_reference,
+              positive_aperak, aperak_deadline, retry_until)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
         const val COPY_ACKNOWLEDGEMENTS = """
             INSERT INTO b2b.acknowledgement (id, document_id, partner_id, kind, original_ref, original_sha256, readable_ref)

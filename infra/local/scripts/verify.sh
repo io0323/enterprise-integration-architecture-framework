@@ -1114,6 +1114,23 @@ verify_gateway() {
     --data-urlencode 'scope=sales.order:read' || true)"
   if [[ "$code" == 400 ]]; then pass "Keycloak: eiaf-batch-etl は sales.order:read を取れない"; else fail "Keycloak: eiaf-batch-etl の sales.order:read の要求が $code"; fi
 
+  # B2B / EDI Gateway(eiaf-b2b-gateway)は、受け付けた注文の登録だけができる(最小権限。ADR-0040 §6)
+  local b2b_token
+  b2b_token="$(curl -fsS -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token \
+    -d grant_type=client_credentials -d client_id=eiaf-b2b-gateway --data-urlencode "client_secret=$EIAF_B2B_GATEWAY_CLIENT_SECRET" \
+    --data-urlencode 'scope=sales.order:write' | json 'd["access_token"]' 2>/dev/null || true)"
+  if [[ -z "$b2b_token" ]]; then
+    fail "Keycloak: eiaf-b2b-gateway のトークンを取れない(このクライアントより前に作ったボリュームなら make clean → make up)"
+  else
+    pass "Keycloak: eiaf-b2b-gateway は sales.order:write のトークンを取れる"
+    code="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $b2b_token" "$url/ord-none" || true)"
+    if [[ "$code" == 403 ]]; then pass "Gateway: eiaf-b2b-gateway は注文を読めない(403)"; else fail "Gateway: eiaf-b2b-gateway の注文の参照が $code"; fi
+  fi
+  code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token \
+    -d grant_type=client_credentials -d client_id=eiaf-b2b-gateway --data-urlencode "client_secret=$EIAF_B2B_GATEWAY_CLIENT_SECRET" \
+    --data-urlencode 'scope=sales.order:read' || true)"
+  if [[ "$code" == 400 ]]; then pass "Keycloak: eiaf-b2b-gateway は sales.order:read を取れない"; else fail "Keycloak: eiaf-b2b-gateway の sales.order:read の要求が $code"; fi
+
   # 同じ Idempotency-Key の再送で同じ応答(ROADMAP P05 の DoD。Gateway 経由)
   local key="verify-gw-$$-$(date +%s)" body first second
   body='{"customerId":"cust-gw","lines":[{"productId":"prod-1","sku":"SKU-1","quantity":1,"unitPrice":{"amount":"1000","currency":"JPY"}}],"shippingAddress":{"countryCode":"JP","postalCode":"100-0001","city":"Chiyoda","line1":"1-1"}}'

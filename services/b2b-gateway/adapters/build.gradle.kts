@@ -1,5 +1,7 @@
 plugins {
     id("eia.jvm-library")
+    // order の API の要求(契約の PlaceOrderRequest)の JSON
+    id("org.jetbrains.kotlin.plugin.serialization")
 }
 
 dependencies {
@@ -16,12 +18,19 @@ dependencies {
     // 取引先の SFTP の Timeout・Retry・Circuit Breaker(取引先ごと。ADR-0021)。Resilience は app で ResilienceMetrics から作って渡す
     api(project(":shared:resilience"))
     implementation(project(":platform:observability"))
+    // 社内への取り込み(order の API を Gateway 経由で呼ぶ。INT-SALES-001): Client Credentials のトークン(ADR-0019 §4)と、
+    // 応答の分類(HttpCallClassifier。ADR-0037)。Resilience は app で作って渡す(ADR-0021)
+    api(project(":platform:security"))
+    api(project(":shared:integration-sdk:http"))
+    api(libs.ktor.client.core)
+    implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.flyway.core)
     runtimeOnly(libs.flyway.database.postgresql)
     runtimeOnly(libs.postgresql)
 
     testImplementation(project(":platform:test-support"))
+    testImplementation(libs.ktor.client.mock)
 
     integrationTestImplementation(project(":platform:test-support"))
     integrationTestImplementation(libs.testcontainers.postgresql)

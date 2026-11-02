@@ -14,6 +14,7 @@ import io.eia.b2bgateway.adapters.persistence.B2bGatewaySchema
 import io.eia.b2bgateway.adapters.persistence.JdbcAcknowledgements
 import io.eia.b2bgateway.adapters.persistence.JdbcCodeTables
 import io.eia.b2bgateway.adapters.persistence.JdbcControlReferences
+import io.eia.b2bgateway.adapters.persistence.JdbcOrderSubmissions
 import io.eia.b2bgateway.adapters.persistence.JdbcReceipts
 import io.eia.b2bgateway.adapters.spec.YamlEdiSpecs
 import io.eia.b2bgateway.application.port.inbound.AcceptedDocument
@@ -23,13 +24,18 @@ import io.eia.b2bgateway.application.port.inbound.IncomingDocument
 import io.eia.b2bgateway.application.port.inbound.InvalidCodeTable
 import io.eia.b2bgateway.application.port.inbound.PollSummary
 import io.eia.b2bgateway.application.port.inbound.SendSummary
+import io.eia.b2bgateway.application.port.inbound.SubmitSummary
 import io.eia.b2bgateway.application.port.outbound.CodeLookup
+import io.eia.b2bgateway.application.port.outbound.OrderApi
+import io.eia.b2bgateway.application.port.outbound.Placement
 import io.eia.b2bgateway.application.usecase.AcceptDocumentService
+import io.eia.b2bgateway.application.usecase.AcknowledgementPorts
 import io.eia.b2bgateway.application.usecase.ImportCodeTableService
 import io.eia.b2bgateway.application.usecase.PollInboxService
 import io.eia.b2bgateway.application.usecase.ReceiveInterchangeService
 import io.eia.b2bgateway.application.usecase.ReceivingPorts
 import io.eia.b2bgateway.application.usecase.SendAcknowledgementsService
+import io.eia.b2bgateway.application.usecase.SubmitOrdersService
 import io.eia.b2bgateway.domain.codes.CodeKind
 import io.eia.b2bgateway.domain.order.CodeResolution
 import io.eia.b2bgateway.domain.order.InternalCustomer
@@ -66,7 +72,9 @@ import io.eia.shared.resilience.Resilience
 import io.eia.shared.resilience.ResilienceConfig
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.collections.shouldContainExactly
+import io.kotest.matchers.longs.shouldBeGreaterThan
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
@@ -162,6 +170,29 @@ private val ITEMS_CSV =
     gtin,4901234567900,prod-2,SKU-2
     """.trimIndent()
 
+/** order の API の代わり。送った Idempotency-Key と本文を残し、[refused] のキーは 422、それ以外は受け付ける。 */
+private class FakeOrderApi(
+    private val refused: Set<String> = emptySet(),
+) : OrderApi {
+    val placed = mutableMapOf<String, String>()
+
+    override suspend fun place(
+        idempotencyKey: String,
+        body: ByteArray,
+    ): Result<Placement, DomainError> {
+        placed[idempotencyKey] = body.decodeToString()
+        return ok(
+            if (idempotencyKey in
+                refused
+            ) {
+                Placement.Refused(422)
+            } else {
+                Placement.Accepted("ord-${idempotencyKey.substringAfter("b2b:")}")
+            },
+        )
+    }
+}
+
 /** アンカーのない監査の検証(チェーンと件数だけを確かめる。アンカーの保存は P12 ⑥)。 */
 private object NoAnchors : AnchorStore {
     override fun put(
@@ -183,6 +214,7 @@ private object NoAnchors : AnchorStore {
  * - 署名の鍵の差し替えの間は、旧い鍵の署名も受け付ける(台帳の acceptUntil まで)
  * - すべての文書が監査に記録され、ハッシュチェーンの検証が通る(DoD)
  */
+@Suppress("LargeClass") // 受け取り → 応答の送信 → 社内への取り込みを 1 つの環境で順に確かめ、最後に全件の監査を照合するため分けない
 class AcceptDocumentIT :
     FunSpec({
         val postgres = PostgreSQLContainer(InfraImages.get("POSTGRES_IMAGE").asCompatibleSubstituteFor("postgres"))
@@ -378,6 +410,50 @@ class AcceptDocumentIT :
                 is Result.Err -> file
             }
         }
+
+        /** 社内への取り込み(order の API だけ代わり)。[at] は送る時刻(受け付けの時刻は 2026-10-31T00:00Z の数秒後)。 */
+        suspend fun submitOrders(
+            api: FakeOrderApi,
+            at: Instant = now.plus(Duration.ofHours(1)),
+        ): SubmitSummary {
+            val ledger = (TradingPartnerLedger.parse(TestLedgers.json(TestLedgers.Partner())) as Result.Ok).value
+            val secrets = secrets()
+            val store =
+                S3ObjectStore(
+                    S3StoreConfig(URI(seaweed.endpoint), BUCKET, SecretName("IT_S3_ACCESS_KEY"), SecretName("IT_S3_SECRET_KEY")),
+                    secrets,
+                )
+            val archive =
+                S3OriginalArchive(
+                    store,
+                    secrets,
+                    ArchiveKeyNames(
+                        SecretName("B2B_ARCHIVE_PGP_PUBLIC_KEY"),
+                        SecretName("B2B_PGP_SECRET_KEY"),
+                        SecretName("B2B_PGP_PASSPHRASE"),
+                    ),
+                    Duration.ofMinutes(3),
+                    workDir,
+                    java.time.Clock.systemUTC(),
+                )
+            val crypto = PgpDocumentCrypto(ledger, secrets, SecretName("B2B_PGP_SECRET_KEY"), SecretName("B2B_PGP_PASSPHRASE"), workDir)
+            val service =
+                SubmitOrdersService(
+                    JdbcOrderSubmissions(app, AuditLog()),
+                    api,
+                    AcknowledgementPorts(YamlEdiSpecs(), JdbcControlReferences(app), crypto, archive),
+                    FixedClock(kotlin.time.Instant.parse(at.toString())),
+                )
+            return service().shouldBeInstanceOf<Result.Ok<SubmitSummary>>().value
+        }
+
+        /** 受け取りの記録の送信待ち(状態・Idempotency-Key・order の注文の ID・拒否のステータス)。 */
+        fun submission(documentId: String): List<String> =
+            query(
+                "SELECT state, idempotency_key, coalesce(order_id, '-'), coalesce(refused_status::text, '-') FROM b2b.order_submission " +
+                    "WHERE document_id = ?::uuid",
+                documentId,
+            ) { (1..4).joinToString(" ") { i -> it.getString(i) } }
 
         /** 受け取りの記録の監査(action・outcome・原本の SHA-256・段階)。 */
         fun audit(documentId: String): List<String> =
@@ -721,6 +797,88 @@ class AcceptDocumentIT :
                 )
             // 後のテストのために元の表に戻す
             importCodes(CodeKind.ITEMS, ITEMS_CSV) shouldBe ok(ImportedCodeTable(version = 3, rows = 2))
+        }
+
+        test("取り込みの送信待ち: 業務の段階を通った注文の要求(契約の JSON)を、受け付けの時点の対応表で作って固定する") {
+            val accepted = receive(sealedByPartner(orders("ICR9001")))
+
+            val (key, body, deadline) =
+                query(
+                    "SELECT idempotency_key, convert_from(body, 'UTF8'), aperak_deadline - d.received_at " +
+                        "FROM b2b.order_submission s JOIN b2b.received_document d ON d.id = s.document_id WHERE s.document_id = ?::uuid",
+                    accepted.documentId,
+                ) { Triple(it.getString(1), it.getString(2), it.getString(3)) }.single()
+
+            key shouldBe "b2b:$PARTNER:ICR9001:1"
+            body shouldBe
+                """{"customerId":"cust-1","lines":[""" +
+                """{"productId":"prod-1","sku":"SKU-1","quantity":10,"unitPrice":{"amount":"1200","currency":"JPY"}},""" +
+                """{"productId":"prod-2","sku":"SKU-2","quantity":5,"unitPrice":{"amount":"980","currency":"JPY"}}],""" +
+                """"shippingAddress":{"countryCode":"JP","postalCode":"100-0001","region":"Tokyo","city":"Chiyoda",""" +
+                """"line1":"1-1","line2":null}}"""
+            deadline shouldBe "04:00:00"
+            val snapshot = (JdbcOrderSubmissions(app, AuditLog()).snapshot() as Result.Ok).value
+            (snapshot.deadlines.getValue(PARTNER) <= Instant.parse("2026-10-31T04:00:00Z").plusSeconds(60)) shouldBe true
+        }
+
+        test("取り込み: order が受け付けたら、肯定の APERAK(AP)を取引先あての暗号文で送信待ちにし、結果と監査を記録する") {
+            val accepted = receive(sealedByPartner(orders("ICR9101")))
+            val api = FakeOrderApi()
+
+            submitOrders(api).failed.shouldBeEmpty()
+
+            val stored =
+                query("SELECT convert_from(body, 'UTF8') FROM b2b.order_submission WHERE document_id = ?::uuid", accepted.documentId) {
+                    it.getString(1)
+                }.single()
+            api.placed.getValue("b2b:$PARTNER:ICR9101:1") shouldBe stored
+            submission(accepted.documentId).single() shouldBe "ACCEPTED b2b:$PARTNER:ICR9101:1 ord-$PARTNER:ICR9101:1 -"
+            val (_, kind, ref) = acknowledgements(accepted.documentId).single { it.second == "APERAK" }
+            kind shouldBe "APERAK"
+            val aperak = open(stored(ref), keyOwner = partner, signer = ours).decodeToString()
+            aperak shouldContain "UNB+UNOA:3+4900000000001:14+4912345000019:14+"
+            aperak shouldContain "+9+AP'"
+            aperak shouldContain "RFF+CO:PO-ICR9101'"
+            query(
+                "SELECT a.outcome, a.destination, a.details->>'outcome', a.details->>'order_id' FROM audit.audit_log a " +
+                    "JOIN b2b.order_submission s ON a.target_id = s.id::text " +
+                    "WHERE a.action = 'b2b.order.submit' AND s.document_id = ?::uuid",
+                accepted.documentId,
+            ) { (1..4).joinToString(" ") { i -> it.getString(i) } }.single() shouldBe
+                "success http:/sales/v1/orders accepted ord-$PARTNER:ICR9101:1"
+        }
+
+        test("取り込み: order が受け付けなければ、APERAK(RE)を APR901 の固定の文言だけで送信待ちにする") {
+            val refused = receive(sealedByPartner(orders("ICR9201")))
+
+            submitOrders(FakeOrderApi(refused = setOf("b2b:$PARTNER:ICR9201:1"))).refused.size shouldBe 1
+
+            submission(refused.documentId).single() shouldBe "REFUSED b2b:$PARTNER:ICR9201:1 - 422"
+            val (_, _, ref) = acknowledgements(refused.documentId).single { it.second == "APERAK" }
+            val aperak = open(stored(ref), keyOwner = partner, signer = ours).decodeToString()
+            aperak shouldContain "+9+RE'"
+            aperak shouldContain "ERC+APR901::ZZZ'FTX+AAO+++ORDER NOT ACCEPTED BY SUPPLIER SYSTEM'"
+        }
+
+        test("取り込み: 送り直しの上限を過ぎた注文は送らずに期限切れにし、応答は作らない。期限切れの数がメトリクスの元に出る") {
+            val late = receive(sealedByPartner(orders("ICR9301")))
+            val api = FakeOrderApi()
+
+            submitOrders(api, at = now.plus(Duration.ofHours(13))).expired shouldContain
+                query("SELECT id::text FROM b2b.order_submission WHERE document_id = ?::uuid", late.documentId) { it.getString(1) }.single()
+
+            api.placed.keys.none { it.contains("ICR9301") } shouldBe true
+            submission(late.documentId).single() shouldBe "EXPIRED b2b:$PARTNER:ICR9301:1 - -"
+            acknowledgements(late.documentId).map { it.second } shouldContainExactly listOf("CONTRL")
+            (
+                JdbcOrderSubmissions(
+                    app,
+                    AuditLog(),
+                    java.time.Clock.fixed(now.plus(Duration.ofHours(13)), ZoneOffset.UTC),
+                ).snapshot() as Result.Ok
+            ).value
+                .expired
+                .getValue(PARTNER) shouldBeGreaterThan 0L
         }
 
         test("受け取ったすべての文書(読めない文書を含む)と送った応答が監査に 1 件ずつ記録され、ハッシュチェーンの検証が通る(DoD)") {

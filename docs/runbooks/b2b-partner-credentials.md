@@ -109,5 +109,26 @@ b2b-gateway は、取引先が注文に書いたコード(GLN・取引先の商�
   - 誤りが 1 つでもあれば何も変えず、行の番号・列の名前・理由を表示する(値は表示しない)。直してから取り込み直す。
   - 空のファイル(見出しだけ)は取り込めない。取引先との取引をやめるときは、台帳から取引先を外す。
 - 取り込むたびに表の版が 1 進み、監査に `b2b.codes.import`(運用者・ファイルの SHA-256・版・行の数)が残る。今の版は `b2b.code_table` で確かめる。
-- 受け付けた後の注文は、受け付けの時点の表で社内の値に直してある。表を入れ替えても、送信待ちの注文は変わらない。
+- 受け付けた後の注文は、受け付けの時点の表で社内の値に直してある(要求の本文を固定する。下の「社内への取り込み」)。表を入れ替えても、送信待ちの注文は変わらない。
 - 取り込みのコマンド(`codes import <取引先> <種類> <CSV のファイル>`)は、b2b-gateway の app と一緒に用意する(P12 ⑥)。
+
+## 社内への取り込み
+業務の段階を通った注文は、受け付けの時点で送信待ち(`b2b.order_submission`。`state = PENDING`)になり、b2b-gateway が order の API に送る(ADR-0040 §6)。
+- order が受け付けたら `ACCEPTED`(`order_id` が order の注文の ID)。取引先が肯定の応答を選んでいれば(台帳の `agreement.acknowledgements.positiveAperak`)、APERAK(AP)を送る。
+- order が業務の誤り(400・422)で受け付けなければ `REFUSED`(`refused_status`)。取引先には APERAK(RE)を、固定の文言 `APR901 ORDER NOT ACCEPTED BY SUPPLIER SYSTEM` だけで返す。
+  order が返した理由は取引先に返さない。b2b-gateway のログと order の監査で確かめ、必要なら取引先の連絡先(`contacts` の `business`)に伝える。
+- 送れなかった注文は送信待ちのまま残り、次の回に同じ本文と Idempotency-Key で送り直す(`attempts` と `last_error` に試みた回数と失敗のコード)。
+  - `http_call_unavailable`: order・Gateway・Keycloak の一時的な障害。直れば送られる
+  - `http_call_rejected`(403): `eiaf-b2b-gateway` のスコープ(`sales.order:write`)の設定を確かめる
+  - `idempotency_key_reused`: 同じキーで違う本文を送った(固定した本文を書き換えた・キーの作り方の誤り)。送り直しても直らないので、開発者が調べる
+- **業務の応答の期限**(台帳の `agreement.acknowledgements.aperakDeadline`。受け取った時刻から)が近い・過ぎた送信待ちは、アラート `B2bAperakDeadlineApproaching`(残り 1 時間)・`B2bAperakDeadlinePassed` になる。
+  order の API が動いているか(Gateway 経由の `/sales/v1/orders`)と、上の `last_error` を確かめる。期限を守れないときは、取引先の連絡先(`contacts` の `operations`)に遅れを伝える。
+
+## 送り直しの上限を過ぎた注文
+受け取ってから 12 時間(送り直しの上限。order の Idempotency-Key の保存期間 24 時間より短い)を過ぎても送れなかった注文は、送らずに `EXPIRED` にし、
+アラート `B2bOrderSubmissionExpired` になる。自動では送り直さない(保存期間を過ぎた後に送ると、order に同じ注文が 2 つできうるため)。
+1. `b2b.order_submission` で、期限切れの注文(`order_number`・`idempotency_key`・`last_error`)を確かめる。
+2. order の側で、その注文がすでに登録されていないかを確かめる(顧客と注文の内容。期限切れの前の試みで、登録まで進んでいた場合がある)。
+3. 登録されていなければ、取引先の連絡先(`contacts` の `business`)と相談し、手で登録するか、取引先に同じ注文を新しい交換で送り直してもらう
+   (送り直しの交換は新しい管理番号で届くので、新しい送信待ちになる。同じ注文番号は ORD007 で拒否されるので、取引先には新しい注文番号で送ってもらう)。
+4. 取引先には APERAK を自動では返さない。結果を連絡先に伝える。

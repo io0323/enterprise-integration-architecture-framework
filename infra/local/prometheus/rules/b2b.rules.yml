@@ -1,0 +1,39 @@
+# B2B / EDI Gateway(b2b-gateway。P12)のアラート。対応は docs/runbooks/b2b-partner-credentials.md。単体テストは b2b.test.yml(make alerts-test)。
+#
+# 業務の応答(APERAK)の期限(P12 の承認の条件 1。ADR-0040 §6・ADR-0041 §5)
+# - 受け付けた注文は、order の API が受け付けたら肯定の APERAK(TPA で選んだ取引先)、受け付けなかったら拒否の APERAK を返す。
+#   その期限は TPA の aperakDeadline(受け取った時刻から)。送信待ちの注文があるかぎり、どちらかの応答を返す義務がありうるので、
+#   送信待ちのすべての注文の期限を見る(eia_b2b_order_submission_aperak_deadline_seconds。取引先ごとのいちばん早い期限。UNIX 秒)
+# - 残り 1 時間を切ったら警告(order の API の障害を直す・手で送る時間)、過ぎたら重大(取引先との合意を守れていない)
+# - 送り直しの上限(order の Idempotency-Key の保存期間より短い)を過ぎた注文は、自動では送らない。手の対応が要るので重大
+groups:
+  - name: b2b
+    rules:
+      - alert: B2bAperakDeadlineApproaching
+        expr: |
+          (min by (trading_partner_id) (eia_b2b_order_submission_aperak_deadline_seconds) - time()) < 3600
+          and
+          (min by (trading_partner_id) (eia_b2b_order_submission_aperak_deadline_seconds) - time()) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "取引先 {{ $labels.trading_partner_id }} の業務の応答(APERAK)の期限まで 1 時間を切った注文が、社内への取り込みを待っている"
+          runbook: docs/runbooks/b2b-partner-credentials.md#社内への取り込み
+
+      - alert: B2bAperakDeadlinePassed
+        expr: (min by (trading_partner_id) (eia_b2b_order_submission_aperak_deadline_seconds) - time()) <= 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "取引先 {{ $labels.trading_partner_id }} の業務の応答(APERAK)の期限を過ぎた注文が、社内への取り込みを待っている"
+          runbook: docs/runbooks/b2b-partner-credentials.md#社内への取り込み
+
+      - alert: B2bOrderSubmissionExpired
+        expr: max by (trading_partner_id) (eia_b2b_order_submission_expired) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "取引先 {{ $labels.trading_partner_id }} の注文が、送り直しの上限を過ぎて社内に取り込めなかった(手の対応が要る)"
+          runbook: docs/runbooks/b2b-partner-credentials.md#送り直しの上限を過ぎた注文

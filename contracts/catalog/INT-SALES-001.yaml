@@ -8,6 +8,9 @@ consumers:
   - { owner: team-storefront, system: bff-graphql }
   # 日次の集計(GET /v1/order-summaries/daily/{date}。sales.order:report)を、分析の週次の照合で読む(P08。ADR-0031)
   - { owner: team-analytics, system: batch-etl }
+  # 取引先から受け付けた注文(EDI。INT-B2B-001)を登録する(POST /sales/v1/orders。sales.order:write。Client Credentials のクライアント
+  # eiaf-b2b-gateway)。Idempotency-Key は b2b:{取引先}:{交換の管理番号}:{メッセージの参照番号}(P12。ADR-0040 §6)
+  - { owner: team-integration, system: b2b-gateway }
 contract: contracts/openapi/order-api.v1.yaml
 tier: 1
 dataClassification: confidential

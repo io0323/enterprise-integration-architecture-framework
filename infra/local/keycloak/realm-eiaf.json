@@ -92,6 +92,22 @@
       "fullScopeAllowed": false,
       "defaultClientScopes": ["order-api-audience"],
       "optionalClientScopes": ["sales.order:report"]
+    },
+    {
+      "clientId": "eiaf-b2b-gateway",
+      "name": "B2B / EDI Gateway(b2b-gateway)。取引先から受け付けた注文を order の API で社内に取り込む。注文の登録だけ(ADR-0040 §6)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${EIAF_B2B_GATEWAY_CLIENT_SECRET}",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "fullScopeAllowed": false,
+      "defaultClientScopes": ["order-api-audience"],
+      "optionalClientScopes": ["sales.order:write"]
     }
   ]
 }

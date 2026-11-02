@@ -7,7 +7,7 @@ import kotlin.time.Instant
 
 /**
  * 受け取りの記録と監査(ADR-0040 §5・ADR-0041 §11)。1 つの文書について、受け取りの記録・受け付けた注文・送る応答・監査の記録
- * (`b2b.document.receive`)を、1 つのトランザクションで書く。送り直し([Receipt.duplicate] が Resend)なら、前の記録の応答を送り直す。
+ * (`b2b.document.receive`)と、社内に取り込む注文の送信待ちを、1 つのトランザクションで書く。送り直し([Receipt.duplicate] が Resend)なら、前の記録の応答を送り直す。
  */
 public interface ReceiptRecords {
     /** 記録して、受け取りの記録の ID を返す。 */
@@ -19,6 +19,7 @@ public interface ReceiptRecords {
  *
  * @property refusal 復号の段階で拒否した理由(読めない文書。[opened] と [receipt] は null)
  * @property acknowledgements 送る応答(送り直しのときは空。前の記録の応答を送り直す)
+ * @property submissions 社内に取り込む注文の送信待ち(業務の段階を通った注文。試験の交換・送り直しでは空)
  */
 public class DocumentRecord(
     public val file: ReceivedFile,
@@ -26,6 +27,7 @@ public class DocumentRecord(
     public val opened: OpenedInterchange? = null,
     public val receipt: Receipt? = null,
     public val acknowledgements: List<StoredAcknowledgement> = emptyList(),
+    public val submissions: List<OrderSubmission> = emptyList(),
 )
 
 /** 受け取ったファイル。[fileName] は取引先が付けた名前、[original] は保管した原本(PGP の暗号文)。 */

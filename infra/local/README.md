@@ -100,6 +100,7 @@ Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)�
 | Keycloak client credentials | `eiaf-e2e`(スコープ `sales.order:read` / `sales.order:write` / `sales.order:report`(日次の集計。P08。ADR-0031 §3)、`aud` = `order-api`) | `EIAF_E2E_CLIENT_SECRET`。**`sales.order:report` は P08 ① より前に作ったボリュームには無いので、`make clean` が必要** |
 | Keycloak client credentials(2 つ目) | `eiaf-e2e-b`(`eiaf-e2e` と同じ設定。クライアントごとの Rate Limit・冪等の範囲の確認用。ADR-0023 §5) | `EIAF_E2E_B_CLIENT_SECRET`。**P05 ⑤c より前に作ったボリュームには無いので、`make clean` が必要** |
 | Keycloak client credentials(分析のバッチ) | `eiaf-batch-etl`(スコープ `sales.order:report` だけ。週次の照合で注文の日次の集計を読む。ADR-0031 §6) | `EIAF_BATCH_ETL_CLIENT_SECRET`。**P08 ④ より前に作ったボリュームには無いので、`make clean` が必要** |
+| Keycloak client credentials(B2B / EDI Gateway) | `eiaf-b2b-gateway`(スコープ `sales.order:write` だけ。取引先から受け付けた注文を order の API で登録する。ADR-0040 §6) | `EIAF_B2B_GATEWAY_CLIENT_SECRET`。**P12 ⑤b より前に作ったボリュームには無いので、`make clean` が必要** |
 | Grafana | `admin` | `GRAFANA_ADMIN_PASSWORD` |
 | MQTT(デバイス) | `{tenant}/{deviceId}`(`mosquitto/devices.txt` の各行) | ファイル `secrets/mqtt/device-passwords`(1 行に「ユーザー名 パスワード」)。デバイスを足すときは `docs/runbooks/iot-bridge.md` |
 | MQTT(iot-bridge・監視) | `iot-bridge`(テレメトリの読み取りだけ)・`eiaf-monitor`(`$SYS` の読み取りだけ) | `MQTT_BRIDGE_PASSWORD`・`MQTT_MONITOR_PASSWORD` |
