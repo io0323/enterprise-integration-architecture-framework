@@ -17,8 +17,10 @@ import io.eia.b2bgateway.domain.edifact.CharacterSet
 import io.eia.b2bgateway.domain.edifact.Latin1
 import io.eia.b2bgateway.domain.order.BusinessRule
 import io.eia.b2bgateway.domain.order.CodeResolution
+import io.eia.b2bgateway.domain.order.InternalCustomer
 import io.eia.b2bgateway.domain.order.InternalItem
 import io.eia.b2bgateway.domain.order.ItemCode
+import io.eia.b2bgateway.domain.order.ShippingAddress
 import io.eia.b2bgateway.domain.receipt.DuplicateCheck
 import io.eia.b2bgateway.domain.receipt.InterchangeKey
 import io.eia.b2bgateway.domain.receipt.PreviousReceipt
@@ -128,7 +130,11 @@ private val AGREEMENT =
     )
 
 private val RESOLUTION =
-    CodeResolution(buyers = mapOf("B" to "cust-1"), items = mapOf(ItemCode.Gtin("G1") to InternalItem("prod-1", "SKU-1")))
+    CodeResolution(
+        buyers = mapOf("B" to InternalCustomer("cust-1", ShippingAddress("JP", "100-0001", null, "Chiyoda", "1-1", null))),
+        items =
+            mapOf(ItemCode.Gtin("G1") to InternalItem("prod-1", "SKU-1")),
+    )
 
 private class Fakes(
     var agreement: PartnerAgreement? = AGREEMENT,
