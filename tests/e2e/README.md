@@ -22,3 +22,9 @@ make e2e                                            # ./gradlew :tests:e2e:e2eTe
   CI は linuxX64、手元の Mac は macosArm64)をデバイスとして動かす。デバイスのパスワードは `make env` が作る
   `infra/local/secrets/mqtt/device-passwords` から読み、環境変数でシミュレータに渡す。シミュレータではできない操作(他のデバイスの
   トピックへの書き込み・同じメッセージの再送)は、同じ SDK の MQTT の部分(`shared/integration-sdk/mqtt`)で送る。
+- B2B / EDI(`B2bGatewayE2E`。P12)は、取引先 partner01 の側として、GnuPG(`make pgp-keys` と同じイメージ `eiaf-gnupg:local`)で
+  署名・暗号化した受注の文書を、ホストの `sftp`(`infra/local/secrets/sftp-b2b` の鍵。ホスト鍵は known_hosts に固定)で sftp-b2b に置き、
+  届いた応答(CONTRL・APERAK)を取り出して復号・署名の検証をする。受け付け(order の API に取り込んで肯定の APERAK)・業務・スキーマ・構文・
+  復号のそれぞれの拒否で、応答・運用の通知(`B2bDocumentRejected`)・監査を確かめ、最後に `make audit-verify SERVICE=b2b-gateway` を通す。
+  受け付けのために、運用者のコマンド(`make b2b-codes` と同じ)で partner01 の対応表(buyers・items)を **E2E 専用の値で丸ごと入れ替える**。
+  値は `make verify PROFILE=b2b` が使う買い手・商品と別なので、E2E の後に verify を動かしても結果は変わらない。

@@ -294,9 +294,10 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           docker system prune --all --force >/dev/null
       # order と cdc(レガシーの CDC と ACL。P06 ⑤。LegacyOrderAclE2E)と saga(注文 Saga の参加者。P07 ⑥。SagaE2E)と
-      # file(ファイル授受。P09 ⑦。FileExchangeE2E)と saas(SaaS 連携。P10 ⑦。SaasE2E)と iot(IoT のテレメトリ。P11 ⑦。IotE2E)。
+      # file(ファイル授受。P09 ⑦。FileExchangeE2E)と b2b(B2B / EDI。P12 ⑧。B2bGatewayE2E)と saas(SaaS 連携。P10 ⑦。SaasE2E)と
+      # iot(IoT のテレメトリ。P11 ⑦。IotE2E)。
       # E2E=1 で tests/e2e/e2e.env(待ち時間を短くする設定と、E2E の追加の Flow)を足す
-      - name: Up (core + order + cdc + saga + batch + file + saas + iot)
+      - name: Up (core + order + cdc + saga + batch + file + b2b + saas + iot)
         id: up
         run: |
           start=$(date +%s)
