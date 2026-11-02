@@ -28,16 +28,32 @@ public data class InternalItem(
     public val sku: String,
 )
 
+/** 届け先の住所(order の API の shippingAddress と同じ項目)。 */
+public data class ShippingAddress(
+    public val countryCode: String,
+    public val postalCode: String,
+    public val region: String?,
+    public val city: String,
+    public val line1: String,
+    public val line2: String?,
+)
+
+/** 社内の顧客(order の API の customerId)と、NAD+DP がないときに使う既定の届け先。 */
+public data class InternalCustomer(
+    public val customerId: String,
+    public val defaultAddress: ShippingAddress,
+)
+
 /**
- * 取引先ごとのコードの対応表を引いた結果(P12 ⑤ で表を作る)。対応がないコードはキーに入らない。
+ * 取引先ごとのコードの対応表([io.eia.b2bgateway.domain.codes.CodeTable])を引いた結果。対応がないコードはキーに入らない。
  *
- * @property buyers 買い手の GLN → 社内の顧客の ID
- * @property deliveryParties 届け先の GLN → 社内の届け先の参照
+ * @property buyers 買い手の GLN → 社内の顧客
+ * @property deliveryParties 届け先の GLN → 届け先の住所
  * @property items 取引先の商品のコード → 社内の商品
  */
 public data class CodeResolution(
-    public val buyers: Map<String, String> = emptyMap(),
-    public val deliveryParties: Map<String, String> = emptyMap(),
+    public val buyers: Map<String, InternalCustomer> = emptyMap(),
+    public val deliveryParties: Map<String, ShippingAddress> = emptyMap(),
     public val items: Map<ItemCode, InternalItem> = emptyMap(),
 )
 

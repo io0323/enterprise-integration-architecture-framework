@@ -5,30 +5,37 @@ package io.eia.b2bgateway.adapters
 import io.eia.b2bgateway.adapters.archive.ArchiveKeyNames
 import io.eia.b2bgateway.adapters.archive.S3OriginalArchive
 import io.eia.b2bgateway.adapters.archive.S3OriginalReader
+import io.eia.b2bgateway.adapters.codes.CsvCodeFile
 import io.eia.b2bgateway.adapters.crypto.PgpDocumentCrypto
 import io.eia.b2bgateway.adapters.inbox.SftpPartnerInbox
 import io.eia.b2bgateway.adapters.outbox.SftpPartnerOutbox
 import io.eia.b2bgateway.adapters.partner.LedgerPartnerAgreements
 import io.eia.b2bgateway.adapters.persistence.B2bGatewaySchema
 import io.eia.b2bgateway.adapters.persistence.JdbcAcknowledgements
+import io.eia.b2bgateway.adapters.persistence.JdbcCodeTables
 import io.eia.b2bgateway.adapters.persistence.JdbcControlReferences
 import io.eia.b2bgateway.adapters.persistence.JdbcReceipts
 import io.eia.b2bgateway.adapters.spec.YamlEdiSpecs
 import io.eia.b2bgateway.application.port.inbound.AcceptedDocument
 import io.eia.b2bgateway.application.port.inbound.DocumentOutcome
+import io.eia.b2bgateway.application.port.inbound.ImportedCodeTable
 import io.eia.b2bgateway.application.port.inbound.IncomingDocument
+import io.eia.b2bgateway.application.port.inbound.InvalidCodeTable
 import io.eia.b2bgateway.application.port.inbound.PollSummary
 import io.eia.b2bgateway.application.port.inbound.SendSummary
 import io.eia.b2bgateway.application.port.outbound.CodeLookup
-import io.eia.b2bgateway.application.port.outbound.CodeMappings
 import io.eia.b2bgateway.application.usecase.AcceptDocumentService
+import io.eia.b2bgateway.application.usecase.ImportCodeTableService
 import io.eia.b2bgateway.application.usecase.PollInboxService
 import io.eia.b2bgateway.application.usecase.ReceiveInterchangeService
 import io.eia.b2bgateway.application.usecase.ReceivingPorts
 import io.eia.b2bgateway.application.usecase.SendAcknowledgementsService
+import io.eia.b2bgateway.domain.codes.CodeKind
 import io.eia.b2bgateway.domain.order.CodeResolution
+import io.eia.b2bgateway.domain.order.InternalCustomer
 import io.eia.b2bgateway.domain.order.InternalItem
 import io.eia.b2bgateway.domain.order.ItemCode
+import io.eia.b2bgateway.domain.order.ShippingAddress
 import io.eia.platform.audit.AuditError
 import io.eia.platform.audit.anchor.AnchorStore
 import io.eia.platform.audit.anchor.AnchorVersion
@@ -137,23 +144,23 @@ private fun orders(
     return ("UNA:+.? '" + segments.joinToString("'", postfix = "'")).encodeToByteArray()
 }
 
-/** 取引先の対応表の代わり(社内への取り込みの表は P12 ⑤)。サンプルの買い手と商品だけを持つ。 */
-private object SampleMappings : CodeMappings {
-    override suspend fun resolve(
-        partnerId: String,
-        lookup: CodeLookup,
-    ): Result<CodeResolution, DomainError> =
-        ok(
-            CodeResolution(
-                buyers = mapOf("4912345000019" to "cust-1"),
-                items =
-                    mapOf(
-                        ItemCode.BuyerPartNumber("ABC-123") to InternalItem("prod-1", "SKU-1"),
-                        ItemCode.Gtin("4901234567900") to InternalItem("prod-2", "SKU-2"),
-                    ),
-            ),
-        )
-}
+// 取引先の対応表(サンプルの買い手・届け先・商品。受け付けのテストの注文が使うコード)
+private val BUYERS_CSV =
+    """
+    gln,customer_id,country_code,postal_code,region,city,line1,line2
+    4912345000019,cust-1,JP,100-0001,Tokyo,Chiyoda,1-1,
+    """.trimIndent()
+private val DELIVERY_PARTIES_CSV =
+    """
+    gln,country_code,postal_code,region,city,line1,line2
+    4912345000026,JP,530-0001,Osaka,Kita,2-2,"Bldg 3, 4F"
+    """.trimIndent()
+private val ITEMS_CSV =
+    """
+    code_type,code,product_id,sku
+    buyer_part_number,ABC-123,prod-1,SKU-1
+    gtin,4901234567900,prod-2,SKU-2
+    """.trimIndent()
 
 /** アンカーのない監査の検証(チェーンと件数だけを確かめる。アンカーの保存は P12 ⑥)。 */
 private object NoAnchors : AnchorStore {
@@ -243,7 +250,7 @@ class AcceptDocumentIT :
             val receive =
                 ReceiveInterchangeService(
                     YamlEdiSpecs(),
-                    ReceivingPorts(agreements, receipts, SampleMappings, receipts, JdbcControlReferences(app)),
+                    ReceivingPorts(agreements, receipts, JdbcCodeTables(app, AuditLog()), receipts, JdbcControlReferences(app)),
                     FixedClock(kotlin.time.Instant.parse(clock.instant().toString())),
                 )
             return AcceptDocumentService(
@@ -359,6 +366,19 @@ class AcceptDocumentIT :
                 }
             }
 
+        /** 運用者のコマンドと同じ道筋(CSV の読み込み → 検査 → 入れ替えと監査)で、対応表を取り込む。 */
+        suspend fun importCodes(
+            kind: CodeKind,
+            csv: String,
+        ): Result<ImportedCodeTable, DomainError> {
+            val ledger = (TradingPartnerLedger.parse(TestLedgers.json(TestLedgers.Partner())) as Result.Ok).value
+            val service = ImportCodeTableService((LedgerPartnerAgreements.of(ledger) as Result.Ok).value, JdbcCodeTables(app, AuditLog()))
+            return when (val file = CsvCodeFile.read(PARTNER, kind, csv.encodeToByteArray(), "ops-1")) {
+                is Result.Ok -> service(file.value)
+                is Result.Err -> file
+            }
+        }
+
         /** 受け取りの記録の監査(action・outcome・原本の SHA-256・段階)。 */
         fun audit(documentId: String): List<String> =
             query(
@@ -419,6 +439,9 @@ class AcceptDocumentIT :
                     .responseChecksumValidation(ResponseChecksumValidation.WHEN_REQUIRED)
                     .build()
             admin.createBucket { it.bucket(BUCKET).objectLockEnabledForBucket(true) }
+            (importCodes(CodeKind.BUYERS, BUYERS_CSV) as Result.Ok).value
+            (importCodes(CodeKind.DELIVERY_PARTIES, DELIVERY_PARTIES_CSV) as Result.Ok).value
+            (importCodes(CodeKind.ITEMS, ITEMS_CSV) as Result.Ok).value
         }
 
         afterSpec {
@@ -639,6 +662,65 @@ class AcceptDocumentIT :
             again.first shouldNotBe before.first
             again.third shouldBe before.third
             sftp.readFile("$ACKNOWLEDGEMENTS/contrl-${again.first}.edi.pgp") shouldBe stored(before.third)
+        }
+
+        test("対応表: 取り込んだ表から、買い手(既定の届け先つき)・届け先・商品を引く。表にないコードは結果に入らない") {
+            val resolution =
+                JdbcCodeTables(app, AuditLog())
+                    .resolve(
+                        PARTNER,
+                        CodeLookup(
+                            buyers = setOf("4912345000019", "4999999999999"),
+                            deliveryParties = setOf("4912345000026"),
+                            items =
+                                setOf(
+                                    ItemCode.BuyerPartNumber("ABC-123"),
+                                    ItemCode.Gtin("4901234567900"),
+                                    ItemCode.Gtin("4999999999999"),
+                                ),
+                        ),
+                    ).shouldBeInstanceOf<Result.Ok<CodeResolution>>()
+                    .value
+
+            resolution shouldBe
+                CodeResolution(
+                    buyers =
+                        mapOf(
+                            "4912345000019" to
+                                InternalCustomer("cust-1", ShippingAddress("JP", "100-0001", "Tokyo", "Chiyoda", "1-1", null)),
+                        ),
+                    deliveryParties = mapOf("4912345000026" to ShippingAddress("JP", "530-0001", "Osaka", "Kita", "2-2", "Bldg 3, 4F")),
+                    items =
+                        mapOf(
+                            ItemCode.BuyerPartNumber("ABC-123") to InternalItem("prod-1", "SKU-1"),
+                            ItemCode.Gtin("4901234567900") to InternalItem("prod-2", "SKU-2"),
+                        ),
+                )
+        }
+
+        test("対応表: 取り込み直すと種類ごとに丸ごと入れ替わり、版が進む。監査にファイルの SHA-256 と版が残る。誤りのあるファイルでは何も変わらない") {
+            val replacement = "code_type,code,product_id,sku\ngtin,4901234567900,prod-2,SKU-2\ngtin,4901234567917,prod-3,SKU-3\n"
+            val before = query("SELECT count(*) FROM b2b.buyer_code") { it.getLong(1) }.single()
+
+            importCodes(CodeKind.ITEMS, replacement) shouldBe ok(ImportedCodeTable(version = 2, rows = 2))
+            val invalid = importCodes(CodeKind.ITEMS, "code_type,code,product_id,sku\nean,1,p,s\n")
+
+            invalid.shouldBeInstanceOf<Result.Err<DomainError>>().error.shouldBeInstanceOf<InvalidCodeTable>()
+            query("SELECT code_type, code FROM b2b.item_code WHERE partner_id = ? ORDER BY code", PARTNER) {
+                "${it.getString(1)}:${it.getString(2)}"
+            } shouldContainExactly listOf("gtin:4901234567900", "gtin:4901234567917")
+            query("SELECT count(*) FROM b2b.buyer_code") { it.getLong(1) }.single() shouldBe before
+            query(
+                "SELECT actor_type, actor_id, target_id, payload_sha256, details->>'version', details->>'rows' FROM audit.audit_log " +
+                    "WHERE action = 'b2b.codes.import' AND target_id = ? ORDER BY seq",
+                "$PARTNER/items",
+            ) { (1..6).joinToString(" ") { i -> it.getString(i) } } shouldContainExactly
+                listOf(
+                    "user ops-1 $PARTNER/items ${sha256(ITEMS_CSV.encodeToByteArray())} 1 2",
+                    "user ops-1 $PARTNER/items ${sha256(replacement.encodeToByteArray())} 2 2",
+                )
+            // 後のテストのために元の表に戻す
+            importCodes(CodeKind.ITEMS, ITEMS_CSV) shouldBe ok(ImportedCodeTable(version = 3, rows = 2))
         }
 
         test("受け取ったすべての文書(読めない文書を含む)と送った応答が監査に 1 件ずつ記録され、ハッシュチェーンの検証が通る(DoD)") {
