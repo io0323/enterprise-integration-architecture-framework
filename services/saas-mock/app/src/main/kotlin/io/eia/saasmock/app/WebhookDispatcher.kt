@@ -128,7 +128,7 @@ class WebhookDispatcher(
                 null
             }
         val attempts = delivery.attempts + 1
-        deliveries[delivery.id] =
+        val result =
             when {
                 status?.isSuccess() == true -> {
                     delivery.copy(state = State.DELIVERED, attempts = attempts, lastStatus = status.value)
@@ -144,6 +144,10 @@ class WebhookDispatcher(
                     delivery.copy(attempts = attempts, lastStatus = status?.value, nextAt = clock.now() + retrySchedule[attempts - 1])
                 }
             }
+        // 送っている間に送り直された([redeliver])なら、その送り直しを消さない(送り直しの PENDING のまま、回数と最後のステータスだけを足す)
+        deliveries.computeIfPresent(delivery.id) { _, current ->
+            if (current === delivery) result else current.copy(attempts = attempts, lastStatus = status?.value ?: current.lastStatus)
+        }
     }
 
     private companion object {

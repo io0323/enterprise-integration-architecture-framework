@@ -176,4 +176,31 @@ class WebhookDispatcherSpec :
             dispatcher.dispatchDue()
             received.map { it.headers.id } shouldBe listOf(second, first)
         }
+
+        test("送っている間に送り直されたら、その送り直しを消さずに、もう一度送る(#175)") {
+            val clock = MutableClock(start)
+            val received = mutableListOf<String?>()
+            lateinit var dispatcher: WebhookDispatcher
+            var id = ""
+            val client =
+                HttpClient(
+                    MockEngine { request ->
+                        received += request.headers[StandardWebhooks.ID]
+                        // 1 回目の応答を返す前に、運用の API が送り直しを頼む
+                        if (received.size == 1) dispatcher.redeliver(id) shouldBe true
+                        respond("", HttpStatusCode.OK)
+                    },
+                )
+            dispatcher = WebhookDispatcher(client, "http://receiver", { listOf(current) }, listOf(1.seconds), clock)
+            id = dispatcher.enqueue("customer.created", customer())
+
+            dispatcher.dispatchDue() shouldBe 1
+            dispatcher.statuses().single() shouldBe
+                WebhookDispatcher.Status(id, "customer.created", "cus_1", 1, WebhookDispatcher.State.PENDING, 1, 200)
+
+            dispatcher.dispatchDue() shouldBe 1
+            received shouldBe listOf(id, id)
+            dispatcher.statuses().single() shouldBe
+                WebhookDispatcher.Status(id, "customer.created", "cus_1", 1, WebhookDispatcher.State.DELIVERED, 2, 200)
+        }
     })
