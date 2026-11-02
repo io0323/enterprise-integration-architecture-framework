@@ -5,7 +5,7 @@
 #   返しているが、運用者が取引先との調整(鍵・製品の設定・対応表)の要否を判断する。読めない文書(decryption)は応答を返せないので、
 #   運用者が取引先の連絡先に知らせる
 # - 受け付けに失敗し続けて処理中に残るファイル(eia_b2b_inbox_stuck)、受け取りのディレクトリを見られない状態、応答を送れない状態、
-#   社内への取り込みの失敗が続く状態は、15 分続いたら警告する(DB・S3・鍵・取引先の SFTP・order の API のどれかの障害)
+#   社内への取り込みの失敗・ファイルを送れない状態は、15 分続いたら警告する(DB・S3・鍵・取引先の SFTP・order の API のどれかの障害)
 #
 # 業務の応答(APERAK)の期限(P12 の承認の条件 1。ADR-0040 §6・ADR-0041 §5)
 # - 受け付けた注文は、order の API が受け付けたら肯定の APERAK(TPA で選んだ取引先)、受け付けなかったら拒否の APERAK を返す。
@@ -88,3 +88,12 @@ groups:
         annotations:
           summary: "受け付けた注文を、order の API に取り込めない状態が続いている"
           runbook: docs/runbooks/b2b-partner-credentials.md#社内への取り込み
+
+      - alert: B2bFileDeliveryFailing
+        expr: sum by (trading_partner_id) (increase(eia_b2b_file_deliveries_total{b2b_outcome="failed"}[5m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "取引先 {{ $labels.trading_partner_id }} にファイル(日次の売上ファイル)を送れない状態が続いている(unknown は受け渡しの場所を読めない・照合の失敗)"
+          runbook: docs/runbooks/b2b-partner-credentials.md#送るファイル

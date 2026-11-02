@@ -3,6 +3,7 @@ package io.eia.b2bgateway.app
 import com.zaxxer.hikari.HikariDataSource
 import io.eia.b2bgateway.adapters.order.SubmissionSnapshot
 import io.eia.b2bgateway.adapters.persistence.JdbcOrderSubmissions
+import io.eia.b2bgateway.application.port.inbound.DeliverFilesUseCase
 import io.eia.b2bgateway.application.port.inbound.PollInboxUseCase
 import io.eia.b2bgateway.application.port.inbound.SendAcknowledgementsUseCase
 import io.eia.b2bgateway.application.port.inbound.SubmitOrdersUseCase
@@ -125,6 +126,7 @@ internal class B2bGatewayServer private constructor(
             runtime: ObservabilityRuntime,
         ) {
             koin.getOrNull<HttpClient>()?.close()
+            koin.getOrNull<HandoffStore>()?.store?.close()
             koin.getOrNull<S3ObjectStore>()?.close()
             koin.get<HikariDataSource>().close()
             koin.close()
@@ -140,14 +142,19 @@ internal class B2bGatewayServer private constructor(
                 val intervals = config.intervals
                 scope.launch {
                     running.set(true)
-                    repeatEvery(intervals.poll) { pollOnce(koin) }
+                    repeatEvery(intervals.poll) { B2bGatewayJobs.pollOnce(koin) }
                 }
-                scope.launch { repeatEvery(intervals.send) { sendOnce(koin) } }
-                scope.launch { repeatEvery(intervals.submit) { submitOnce(koin) } }
-                scope.launch { repeatEvery(intervals.metrics) { refreshSnapshot(koin) } }
+                scope.launch { repeatEvery(intervals.send) { B2bGatewayJobs.sendOnce(koin) } }
+                scope.launch { repeatEvery(intervals.submit) { B2bGatewayJobs.submitOnce(koin) } }
+                scope.launch { repeatEvery(intervals.metrics) { B2bGatewayJobs.refreshSnapshot(koin) } }
+                if (koin.getOrNull<DeliverFilesUseCase>() != null) {
+                    scope.launch { repeatEvery(config.handoff.interval) { B2bGatewayJobs.deliverFilesOnce(koin) } }
+                } else {
+                    logger.info("取引先に送るファイルの受け渡しの場所が設定されていないので、ファイルを送りません({})", B2bGatewayConfig.FILE_S3_ENDPOINT)
+                }
                 val anchorCycle = koin.getOrNull<AnchorCycle>()
                 if (anchorCycle != null) {
-                    scope.launch { repeatEvery(config.anchor.interval) { anchorOnce(anchorCycle, dataSource) } }
+                    scope.launch { repeatEvery(config.anchor.interval) { B2bGatewayJobs.anchorOnce(anchorCycle, dataSource) } }
                 } else {
                     logger.warn("監査のアンカーの保存は無効です({}=false)。末尾の記録の改竄と削除は検出できません", B2bGatewayConfig.ANCHOR_ENABLED)
                 }
@@ -179,108 +186,6 @@ internal class B2bGatewayServer private constructor(
             while (currentCoroutineContext().isActive) {
                 block()
                 delay(interval)
-            }
-        }
-
-        /** 取引先ごとに受け取りのディレクトリを 1 回見回る。 */
-        internal suspend fun pollOnce(koin: Koin) {
-            val poll = koin.get<PollInboxUseCase>()
-            val metrics = koin.get<B2bGatewayMetrics>()
-            koin.get<EdiPartners>().inbound.forEach { partnerId ->
-                when (val summary = poll(partnerId)) {
-                    is Result.Ok -> {
-                        metrics.polled(partnerId, summary.value)
-                        summary.value.failed.forEach { logger.warn("取引先 {} のファイル {} を受け付けられません({})", partnerId, it.name, it.error.code) }
-                    }
-
-                    is Result.Err -> {
-                        metrics.pollFailed(partnerId)
-                        logger.warn("取引先 {} の受け取りのディレクトリを見られません({})", partnerId, summary.error.code)
-                    }
-                }
-            }
-        }
-
-        /** 取引先ごとに送信待ちの応答を 1 回送る。 */
-        internal suspend fun sendOnce(koin: Koin) {
-            val send = koin.get<SendAcknowledgementsUseCase>()
-            val metrics = koin.get<B2bGatewayMetrics>()
-            koin.get<EdiPartners>().acknowledgements.forEach { partnerId ->
-                when (val summary = send(partnerId)) {
-                    is Result.Ok -> {
-                        metrics.sent(partnerId, summary.value)
-                        summary.value.failed.forEach { logger.warn("取引先 {} に応答 {} を送れません({})", partnerId, it.id, it.error.code) }
-                    }
-
-                    is Result.Err -> {
-                        logger.warn("取引先 {} の送信待ちの応答を読めません({})", partnerId, summary.error.code)
-                    }
-                }
-            }
-        }
-
-        /** 受け付けた注文を 1 回送る。 */
-        internal suspend fun submitOnce(koin: Koin) {
-            when (val summary = koin.get<SubmitOrdersUseCase>()()) {
-                is Result.Ok -> {
-                    koin.get<B2bGatewayMetrics>().submitted(summary.value)
-                    summary.value.failed.forEach { logger.warn("注文 {} を社内に取り込めません({})", it.id, it.error.code) }
-                    summary.value.expired.forEach { logger.error("注文 {} は送り直しの上限を過ぎました(手の対応が要ります)", it) }
-                }
-
-                is Result.Err -> {
-                    logger.warn("送信待ちの注文を読めません({})", summary.error.code)
-                }
-            }
-        }
-
-        /** 送信待ちの期限のメトリクスの元を DB から読み直す。 */
-        internal suspend fun refreshSnapshot(koin: Koin) {
-            when (val snapshot = koin.get<JdbcOrderSubmissions>().snapshot()) {
-                is Result.Ok -> koin.get<AtomicReference<SubmissionSnapshot>>().set(snapshot.value)
-                is Result.Err -> logger.warn("送信待ちの期限を読めません({})", snapshot.error.code)
-            }
-        }
-
-        /**
-         * 監査のアンカーの検査と保存(ADR-0017 §5)。改竄の疑いがあれば保存せず ERROR を残す(対応は docs/runbooks/audit-verify.md)。
-         * ストレージや DB に届かなければ次の回でやり直す。成否はメトリクス(AnchorMetrics)で監視する。
-         */
-        @Suppress("TooGenericExceptionCaught") // DB の接続の失敗はどの種類でも次の回にやり直す
-        internal suspend fun anchorOnce(
-            cycle: AnchorCycle,
-            dataSource: HikariDataSource,
-        ) {
-            val result =
-                try {
-                    withContext(Dispatchers.IO) { dataSource.connection.use { cycle.run(it) } }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    logger.warn("監査のアンカーの検査を終えられませんでした(error.type={})", e::class.qualifiedName)
-                    return
-                }
-            when (result) {
-                is Result.Err -> {
-                    logger.warn("監査のアンカーの検査を終えられませんでした。次の回でやり直します(error.code={})", result.error.code)
-                }
-
-                is Result.Ok -> {
-                    when (val outcome = result.value) {
-                        is AnchorOutcome.Published -> {
-                            logger.info("監査のアンカーを保存しました(key={}, seq={})", outcome.anchor.key, outcome.anchor.anchor.seq)
-                        }
-
-                        is AnchorOutcome.Rejected -> {
-                            outcome.findings.forEach { logger.error("監査記録に改竄の疑いがあります({}): {}", it.code, it.describe()) }
-                            logger.error("改竄の疑いがあるため、監査のアンカーを保存しません(対応: docs/runbooks/audit-verify.md)")
-                        }
-
-                        else -> {
-                            logger.info("監査のアンカーの検査を終えました({})", outcome::class.simpleName)
-                        }
-                    }
-                }
             }
         }
 

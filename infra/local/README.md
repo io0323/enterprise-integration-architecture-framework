@@ -174,6 +174,7 @@ curl -s -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token
 - **B2B / EDI Gateway(ADR-0040・ADR-0041)**: `make up PROFILE=b2b` が installDist と開発用の PGP の鍵(`make pgp-keys`。自社 eiaf・取引先 partner01・保管用 archive)の後に、
   `seaweedfs-init`(バケット `eiaf-b2b-originals`(Object Lock)とバケットポリシー)→ `b2b-gateway-migrate`(所有者)→ `b2b-gateway`(アプリのロール)の順に動かす。
   - **P12 ⑥b より前に作ったボリュームには DB `b2b_gateway` とそのロールが無いので、`make clean` が必要**(DB は postgres の初回起動のときだけ作る)。
+  - 取引先に送るファイル(INT-SALES-004)は、受け渡しの場所(`eiaf-file-exchange` の `outbound/sales-daily/`)から b2b-gateway が送る(P12 ⑦。受け渡しの identity `eiaf-b2b-handoff`。⑦b の切り替えまでは file-exchange が直接送る)。
   - S3 の identity は 2 つ: 原本を書く `eiaf-b2b-gateway`(`originals/`・`readable/` の下だけ。削除・Legal Hold・バケットの管理操作はバケットポリシーで拒否)と、
     監査のアンカーを書く `eiaf-audit-b2b-gateway`(`eiaf-audit` の `anchors/b2b-gateway/` の下だけ)。原本の保持期間はローカルだけ `P1D`(`B2B_GATEWAY_ORIGINAL_RETENTION`)。
   - 取引先のコードの対応表は空で始まる。取り込みは `make b2b-codes PARTNER=partner01 KIND=<buyers|delivery-parties|items> FILE=<CSV> OPERATOR=<運用者>`。

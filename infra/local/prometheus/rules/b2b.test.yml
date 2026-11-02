@@ -148,3 +148,22 @@ tests:
       - eval_time: 25m
         alertname: B2bAcknowledgementSendFailing
         exp_alerts: []
+
+  - name: ファイルを送れない状態が 15 分続いたら、取引先ごとに警告する(起動時に 0 で作った系列)
+    interval: 1m
+    input_series:
+      - series: 'eia_b2b_file_deliveries_total{job="b2b-gateway",trading_partner_id="p1",b2b_outcome="failed"}'
+        values: "0+1x30"
+      - series: 'eia_b2b_file_deliveries_total{job="b2b-gateway",trading_partner_id="p2",b2b_outcome="failed"}'
+        values: "0x30"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: B2bFileDeliveryFailing
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: B2bFileDeliveryFailing
+        exp_alerts:
+          - exp_labels: { severity: warning, trading_partner_id: p1 }
+            exp_annotations:
+              summary: "取引先 p1 にファイル(日次の売上ファイル)を送れない状態が続いている(unknown は受け渡しの場所を読めない・照合の失敗)"
+              runbook: docs/runbooks/b2b-partner-credentials.md#送るファイル

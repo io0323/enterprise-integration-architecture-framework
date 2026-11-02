@@ -431,6 +431,69 @@
       ]
     },
     {
+      "id": 16,
+      "type": "timeseries",
+      "title": "取引先へのファイルの送信(1 時間あたり)",
+      "description": "受け渡しの場所(outbound/)の日次の売上ファイルを、取引先に送った数と送れなかった数(B2bFileDeliveryFailing。unknown は受け渡しの場所を読めない・照合の失敗)。ADR-0040 §7。",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "spanNulls": true,
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (trading_partner_id, b2b_outcome) (increase(eia_b2b_file_deliveries_total[1h]))",
+          "legendFormat": "{{trading_partner_id}} {{b2b_outcome}}"
+        }
+      ]
+    },
+    {
       "id": 9,
       "type": "row",
       "title": "取引先の鍵と接続(ADR-0040 §3)",
@@ -439,7 +502,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 18
+        "y": 26
       },
       "panels": []
     },
@@ -456,7 +519,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 19
+        "y": 27
       },
       "fieldConfig": {
         "defaults": {
@@ -518,7 +581,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 19
+        "y": 27
       },
       "fieldConfig": {
         "defaults": {
@@ -581,7 +644,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 19
+        "y": 27
       },
       "fieldConfig": {
         "defaults": {
@@ -649,7 +712,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 27
+        "y": 35
       },
       "panels": []
     },
@@ -666,7 +729,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 28
+        "y": 36
       },
       "fieldConfig": {
         "defaults": {
@@ -738,7 +801,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 28
+        "y": 36
       },
       "fieldConfig": {
         "defaults": {

@@ -23,6 +23,7 @@
 | `B2bOrderSubmissionFailing` | 受け付けた注文を order の API に取り込めない状態が 15 分続いている(下の「社内への取り込み」) | warning |
 | `B2bAperakDeadlineApproaching` / `B2bAperakDeadlinePassed` | 業務の応答の期限まで 1 時間を切った / 過ぎた(下の「社内への取り込み」) | warning / critical |
 | `B2bOrderSubmissionExpired` | 送り直しの上限を過ぎた注文がある(下の「送り直しの上限を過ぎた注文」) | critical |
+| `B2bFileDeliveryFailing` | 取引先にファイルを送れない状態が 15 分続いている(下の「送るファイル」) | warning |
 
 - メトリクスは `eia_trading_partner_credential_expiry_seconds`(期限の UNIX 秒。ラベル `trading_partner_id`・`trading_partner_credential`)。
 - 鍵の種類(`trading_partner_credential`):
@@ -160,3 +161,13 @@ b2b-gateway は、取引先が注文に書いたコード(GLN・取引先の商�
 - b2b-gateway は監査のハッシュチェーンの末尾を、アンカーとして `eiaf-audit` の `anchors/b2b-gateway/` に定期的に保存する(`B2B_GATEWAY_AUDIT_ANCHOR_INTERVAL`。ADR-0017 §5)。
 - 改竄の検査は `make audit-verify SERVICE=b2b-gateway`(終了コード 0 / 1 / 2。`docs/runbooks/audit-verify.md`)。
 - 受け取った文書の原本は `eiaf-b2b-originals` に Object Lock(COMPLIANCE)で置いてある。監査の `payload_sha256` と原本の SHA-256 を照らし合わせれば、原本が受け取ったものと同じことを確かめられる。
+
+## 送るファイル
+日次の売上ファイル(INT-SALES-004)は、受け渡しの場所(バケット `eiaf-file-exchange` の `outbound/sales-daily/`)から、b2b-gateway が台帳でデータセットを受け取る取引先に送る(ADR-0040 §7。P12 ⑦。⑦b の切り替えまでは file-exchange が直接送る)。
+- b2b-gateway は受け渡しの場所を毎回すべて一覧し、ファイルと取引先の組ごとに送信の記録(`b2b.file_delivery`)がないものだけを送る。過去の日付で作り直したファイル(`docs/runbooks/batch-rerun.md`)を後から置いても送る。
+- 取引先の側の名前は `{データファイル}.pgp`(取引先あてに暗号化し、自社の鍵で署名)。送る前に取引先の側に同じ名前があれば、送らずに記録する(`already_present`)。監査は `b2b.file.send`。
+- **送れないとき**(`B2bFileDeliveryFailing`):
+  - 取引先ごと: 取引先の SFTP・鍵・ホスト鍵(上の「期限が切れたとき」)。直れば次の回(`B2B_GATEWAY_DELIVER_INTERVAL`。既定 1 分)に送る。
+  - `unknown`: 受け渡しの場所を読めない(`eiaf-b2b-handoff` の資格情報・S3 の障害)か、データファイルの SHA-256 がマニフェストと違う(`handoff_mismatch`。写しの誤り)。b2b-gateway のログでファイルの名前を確かめ、受け渡しの場所に正しいファイルとマニフェストを置き直す。
+- **取引先が届いていないと言うとき**: `b2b.file_delivery` の `sent_at` と `remote_name` を伝える。送り直すときは、その組の記録を残したまま取引先の側のファイルを消してもらっても送り直さない(記録があるため)。送り直しが必要なら、新しい名前のファイルとして作り直す。
+- 受け渡しの場所の保存期間: 送り終えたファイルは、マニフェストの作成の時刻から `B2B_GATEWAY_OUTBOUND_RETENTION`(既定 14 日)を過ぎたら b2b-gateway が消す。送れていないファイルは消さない。原本(file-exchange が受け取ったファイル)は archive にある。

@@ -1,5 +1,6 @@
 package io.eia.b2bgateway.app
 
+import io.eia.b2bgateway.application.port.inbound.FileDeliverySummary
 import io.eia.b2bgateway.application.port.inbound.PollSummary
 import io.eia.b2bgateway.application.port.inbound.RejectionStage
 import io.eia.b2bgateway.application.port.inbound.SendSummary
@@ -22,6 +23,7 @@ import java.util.concurrent.ConcurrentHashMap
  * | `eia.b2b.inbox.stuck` | gauge | `trading_partner_id`。直近の見回りで、受け付けに失敗して処理中のディレクトリに残ったファイルの数 |
  * | `eia.b2b.acknowledgements` | counter | `trading_partner_id`・`b2b.outcome`(`sent`・`failed`)。応答(CONTRL・APERAK)の送信 |
  * | `eia.b2b.order_submissions` | counter | `b2b.outcome`(`accepted`・`refused`・`expired`・`failed`)。社内への取り込み |
+ * | `eia.b2b.file_deliveries` | counter | `trading_partner_id`・`b2b.outcome`(`sent`・`failed`)。取引先へのファイルの送信(読めない・照合の失敗は `unknown` の取引先) |
  *
  * 属性にファイルの名前・注文番号は入れない(系列が増え続けるため)。
  *
@@ -56,6 +58,12 @@ internal class B2bGatewayMetrics(
             .setUnit("{submission}")
             .setDescription("社内への取り込みの結果の数")
             .build()
+    private val files: LongCounter =
+        meter
+            .counterBuilder("eia.b2b.file_deliveries")
+            .setUnit("{delivery}")
+            .setDescription("取引先へのファイルの送信の数")
+            .build()
     private val rejected: LongCounter =
         meter
             .counterBuilder("eia.b2b.documents.rejected")
@@ -71,6 +79,7 @@ internal class B2bGatewayMetrics(
         }
         partners.acknowledgements.forEach { partner -> acknowledgements.add(0, Attributes.of(PARTNER, partner, OUTCOME, "failed")) }
         submissions.add(0, Attributes.of(OUTCOME, "failed"))
+        (partners.files + UNKNOWN_PARTNER).forEach { partner -> files.add(0, Attributes.of(PARTNER, partner, OUTCOME, "failed")) }
         meter
             .gaugeBuilder("eia.b2b.inbox.stuck")
             .ofLongs()
@@ -126,7 +135,23 @@ internal class B2bGatewayMetrics(
             .forEach { (outcome, count) -> submissions.add(count.toLong(), Attributes.of(OUTCOME, outcome)) }
     }
 
+    fun filesDelivered(summary: FileDeliverySummary) {
+        summary.sent.groupingBy { it.second }.eachCount().forEach { (partner, count) ->
+            files.add(count.toLong(), Attributes.of(PARTNER, partner, OUTCOME, "sent"))
+        }
+        summary.failed.groupingBy { it.partnerId ?: UNKNOWN_PARTNER }.eachCount().forEach { (partner, count) ->
+            files.add(count.toLong(), Attributes.of(PARTNER, partner, OUTCOME, "failed"))
+        }
+    }
+
+    /** 受け渡しの場所を一覧できない(どの取引先にも送れない)。 */
+    fun handoffUnavailable() {
+        files.add(1, Attributes.of(PARTNER, UNKNOWN_PARTNER, OUTCOME, "failed"))
+    }
+
     private companion object {
+        // 取引先を決める前の失敗(受け渡しの場所を読めない・照合の失敗)
+        const val UNKNOWN_PARTNER = "unknown"
         val PARTNER: AttributeKey<String> = AttributeKey.stringKey("trading_partner_id")
         val OUTCOME: AttributeKey<String> = AttributeKey.stringKey("b2b.outcome")
         val REASON: AttributeKey<String> = AttributeKey.stringKey("b2b.reason")

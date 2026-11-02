@@ -28,7 +28,9 @@ public class SeaweedFsContainer(
             "-dir=/data",
             "-ip.bind=0.0.0.0",
             "-master.volumeSizeLimitMB=64",
-            "-volume.max=8",
+            // バケット(コレクション)ごとにボリュームを確保するので、3 つ以上のバケットを使うテスト(b2b-gateway の app)でも足りる数にする
+            // (compose と同じ 32。ボリュームは使うときに作られる)
+            "-volume.max=32",
             "-s3",
             "-s3.port=$S3_PORT",
             "-s3.config=$CONFIG_PATH",

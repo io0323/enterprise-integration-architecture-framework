@@ -54,7 +54,11 @@ public class SftpPartnerOutbox(
             directory(partner, document.destination)
                 ?: return err(UnexpectedError("台帳の取引先 $partnerId に、送り先(${document.destination.name.lowercase()})のディレクトリがありません"))
         val content =
-            if (document.sealed) document.content else crypto.seal(partnerId, document.content).getOrElse { return err(it) }
+            if (document.sealed) {
+                document.content
+            } else {
+                crypto.seal(partnerId, document.content, document.remoteName.removeSuffix(ENCRYPTED_SUFFIX)).getOrElse { return err(it) }
+            }
         val sftp = partner.sftp
         val sender =
             SftpSender(
@@ -88,6 +92,11 @@ public class SftpPartnerOutbox(
                 }
             }
         }
+
+    private companion object {
+        // 暗号文の正式名の拡張子(暗号の中のファイルの名前は、これを除いた名前。ADR-0032 §8 と同じ)
+        const val ENCRYPTED_SUFFIX = ".pgp"
+    }
 
     private fun directory(
         partner: TradingPartner,
