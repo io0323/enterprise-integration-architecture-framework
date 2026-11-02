@@ -60,6 +60,7 @@ include(
     ":services:b2b-gateway:domain",
     ":services:b2b-gateway:application",
     ":services:b2b-gateway:adapters",
+    ":services:b2b-gateway:app",
     ":services:legacy-order-acl:domain",
     ":services:legacy-order-acl:application",
     ":services:legacy-order-acl:adapters",
