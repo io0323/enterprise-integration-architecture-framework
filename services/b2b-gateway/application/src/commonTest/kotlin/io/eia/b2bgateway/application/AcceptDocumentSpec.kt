@@ -3,6 +3,7 @@ package io.eia.b2bgateway.application
 import io.eia.b2bgateway.application.port.inbound.AcceptedDocument
 import io.eia.b2bgateway.application.port.inbound.DocumentOutcome
 import io.eia.b2bgateway.application.port.inbound.IncomingDocument
+import io.eia.b2bgateway.application.port.inbound.OrderDecision
 import io.eia.b2bgateway.application.port.inbound.Receipt
 import io.eia.b2bgateway.application.port.inbound.ReceiveInterchangeUseCase
 import io.eia.b2bgateway.application.port.inbound.ReceivedDocument
@@ -20,6 +21,16 @@ import io.eia.b2bgateway.application.usecase.AcceptDocumentService
 import io.eia.b2bgateway.domain.agreement.PartnerAgreement
 import io.eia.b2bgateway.domain.edifact.CharacterSet
 import io.eia.b2bgateway.domain.edifact.ServiceCharacters
+import io.eia.b2bgateway.domain.order.BusinessRule
+import io.eia.b2bgateway.domain.order.CodeResolution
+import io.eia.b2bgateway.domain.order.InternalCustomer
+import io.eia.b2bgateway.domain.order.InternalItem
+import io.eia.b2bgateway.domain.order.ItemCode
+import io.eia.b2bgateway.domain.order.OrderLine
+import io.eia.b2bgateway.domain.order.OrderRequest
+import io.eia.b2bgateway.domain.order.OrderRequestLine
+import io.eia.b2bgateway.domain.order.PurchaseOrder
+import io.eia.b2bgateway.domain.order.ShippingAddress
 import io.eia.b2bgateway.domain.receipt.DuplicateCheck
 import io.eia.b2bgateway.domain.receipt.PreviousReceipt
 import io.eia.b2bgateway.domain.validation.InterchangeHeader
@@ -33,6 +44,7 @@ import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.err
 import io.eia.shared.kernel.money.Currency
 import io.eia.shared.kernel.ok
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContainExactly
@@ -52,7 +64,26 @@ private fun receipt(
     duplicate: DuplicateCheck = DuplicateCheck.First,
     contrl: String? = "CONTRL",
     aperak: String? = null,
-) = Receipt(AGREEMENT, result, duplicate, emptyList(), contrl?.encodeToByteArray(), aperak?.encodeToByteArray())
+    orders: List<OrderDecision> = emptyList(),
+) = Receipt(AGREEMENT, result, duplicate, orders, contrl?.encodeToByteArray(), aperak?.encodeToByteArray())
+
+private val ADDRESS = ShippingAddress("JP", "100-0001", null, "Chiyoda", "1-1", null)
+private val RESOLUTION =
+    CodeResolution(
+        buyers = mapOf("BUYER" to InternalCustomer("cust-1", ADDRESS)),
+        items = mapOf(ItemCode.Gtin("G1") to InternalItem("prod-1", "SKU-1")),
+    )
+
+private fun decision(
+    reference: String,
+    orderNumber: String,
+    violations: List<BusinessRule> = emptyList(),
+) = OrderDecision(
+    reference,
+    PurchaseOrder(orderNumber, "20261030", null, "BUYER", "R-GLN", null, "JPY", listOf(OrderLine("1", "G1", null, "3", "1200")), "1"),
+    violations,
+    RESOLUTION,
+)
 
 private data object ArchiveDown : DomainError.Retryable {
     override val code: String = "store_down"
@@ -210,5 +241,53 @@ class AcceptDocumentSpec :
 
             fakes.service()(IncomingDocument("partner01", "f", byteArrayOf())) shouldBe err(ArchiveDown)
             fakes.calls shouldContainExactly listOf("storeReceived")
+        }
+        test("業務の段階を通った注文だけを、固定した要求・冪等のキー・期限とともに送信待ちにする(受け付けと同じ記録)") {
+            val fakes =
+                AcceptFakes(
+                    receipt =
+                        receipt(
+                            orders = listOf(decision("1", "PO-1"), decision("2", "PO-2", listOf(BusinessRule.UNKNOWN_ITEM))),
+                        ),
+                )
+
+            fakes.accept()
+
+            val submission =
+                fakes.records
+                    .single()
+                    .submissions
+                    .single()
+            submission.orderNumber shouldBe "PO-1"
+            submission.request shouldBe
+                OrderRequest("b2b:partner01:ICR:1", "cust-1", "JPY", listOf(OrderRequestLine("prod-1", "SKU-1", 3, "1200")), ADDRESS)
+            submission.header shouldBe HEADER
+            submission.positiveAperak shouldBe true
+            submission.aperakDeadline shouldBe NOW + 4.hours
+            submission.retryUntil shouldBe NOW + 12.hours
+        }
+
+        test("試験の交換・送り直しの注文は、社内に取り込まない(送信待ちにしない)") {
+            val testInterchange = InterchangeResult.Checked(HEADER.copy(test = true), emptyList())
+            val test = AcceptFakes(receipt = receipt(testInterchange, orders = listOf(decision("1", "PO-1"))))
+            val resend = AcceptFakes(receipt = receipt(duplicate = DuplicateCheck.Resend(PreviousReceipt("sha", "doc-0")), contrl = null))
+
+            test.accept()
+            resend.accept()
+
+            test.records
+                .single()
+                .submissions
+                .shouldBeEmpty()
+            resend.records
+                .single()
+                .submissions
+                .shouldBeEmpty()
+        }
+
+        test("送り直しの上限は、order の Idempotency-Key の保存期間(24 時間)より短くする") {
+            shouldThrow<IllegalArgumentException> {
+                AcceptDocumentService(AcceptFakes(), AcceptFakes(), AcceptFakes(), AcceptFakes(), FixedClock(NOW), 24.hours)
+            }
         }
     })
