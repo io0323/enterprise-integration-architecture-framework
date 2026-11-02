@@ -15,4 +15,4 @@ dataClassification: internal
 slo: { availability: "99.9", latencyP99: "15m" }
 # 送った応答も原本として保管し、SHA-256 を記録する(Framework 11.1 の「全ドキュメントを原本保管」。ADR-0040)
 audit: { actions: [b2b.ack.send], dataClassification: internal, retention: legal }
-lifecycle: design
+lifecycle: active

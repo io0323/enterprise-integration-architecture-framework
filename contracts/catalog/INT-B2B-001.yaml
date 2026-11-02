@@ -18,4 +18,4 @@ slo: { availability: "99.9", latencyP99: "15m" }
 # b2b.codes.import は、受け付けの業務の検査と社内への取り込みが引く、取引先ごとのコードの対応表の入れ替え(運用者のコマンド。ADR-0040 §6)。
 # b2b.order.submit は、受け付けた注文の社内への取り込み(order の API。INT-SALES-001)の結果
 audit: { actions: [b2b.document.receive, b2b.codes.import, b2b.order.submit], dataClassification: confidential, retention: legal }
-lifecycle: design
+lifecycle: active

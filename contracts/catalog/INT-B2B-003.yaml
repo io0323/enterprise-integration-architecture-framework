@@ -14,4 +14,4 @@ dataClassification: internal
 # latencyP99 は、業務の検査を終えてから APERAK を置き終えるまで(取引先ごとの期限は TPA で決め、近づいたらアラートにする。ADR-0040)
 slo: { availability: "99.9", latencyP99: "1h" }
 audit: { actions: [b2b.ack.send], dataClassification: internal, retention: legal }
-lifecycle: design
+lifecycle: active
