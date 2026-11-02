@@ -69,7 +69,8 @@ class Workspace private constructor(
         baseline: Workspace? = null,
         oasdiff: Path? = OASDIFF,
         today: LocalDate = LocalDate.now(ZoneOffset.UTC),
-    ): CheckResult = ContractCheck(root, baseline?.root, oasdiff, today = today).run()
+        buf: Path? = BUF,
+    ): CheckResult = ContractCheck(root, baseline?.root, oasdiff, today = today, buf = buf).run()
 
     /** [path] に [text] を書く(親ディレクトリがなければ作る)。 */
     fun write(
@@ -83,6 +84,7 @@ class Workspace private constructor(
     companion object {
         val REPOSITORY_ROOT: Path = Path(checkNotNull(System.getProperty("eia.rootDir")) { "eia.rootDir が未設定です" })
         val OASDIFF: Path? = System.getProperty("eia.oasdiff")?.let(::Path)
+        val BUF: Path? = System.getProperty("eia.buf")?.let(::Path)
 
         /** 実際の contracts/ を複製した作業ディレクトリ。 */
         fun ofRepositoryContracts(): Workspace {

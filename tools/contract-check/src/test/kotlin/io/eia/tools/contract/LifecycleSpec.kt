@@ -167,7 +167,8 @@ class LifecycleSpec :
             val markdown = createTempDirectory("lifecycle").resolve("summary.md")
             // CLI は今日(UTC)で判定するので、期限は十分に前にする
             val longAgo = Workspace.ofRepositoryContracts().lifecycle(EVENTS, ACTIVE, deprecated(sunset = "2026-01-31"))
-            runCli(listOf("--root", longAgo.root.toString(), "--markdown", markdown.toString())) shouldBe 0
+            runCli(listOf("--buf", Workspace.BUF.toString(), "--root", longAgo.root.toString(), "--markdown", markdown.toString())) shouldBe
+                0
             markdown.readText() shouldContain "CC-LIFECYCLE-005"
         }
 

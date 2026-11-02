@@ -43,6 +43,12 @@ enum class Rule(
         "9, 16.1",
         "JSON Schema 2020-12 の仕様に合わせて直す",
     ),
+    STRUCT_PROTO(
+        "CC-STRUCT-006",
+        "proto が buf lint(STANDARD)を満たすこと(package の版、ディレクトリとの一致、命名、構文)",
+        "5.1, 15.2, ADR-0042",
+        "buf のメッセージに従って直す。package は io.eia.{domain}.v{n} にし、contracts/proto/io/eia/{domain}/v{n}/ に置く",
+    ),
 
     // --- 命名 ---
     NAMING_TOPIC(
@@ -102,9 +108,9 @@ enum class Rule(
     ),
     NAMING_DOMAIN(
         "CC-NAMING-010",
-        "Topic・API の domain が連携 ID の domain と一致する",
+        "Topic・API・proto の domain が連携 ID の domain と一致する",
         "16.1, ADR-0005",
-        "連携 ID の {DOMAIN} を小文字にした値を Topic の先頭セグメント・servers の末尾に使う",
+        "連携 ID の {DOMAIN} を小文字にした値を Topic の先頭セグメント・servers の末尾・proto の package に使う",
     ),
     NAMING_MQTT_TOPIC(
         "CC-NAMING-011",
@@ -117,6 +123,12 @@ enum class Rule(
         "contracts/devices のファイル名は {message}.v{n}.schema.json",
         "17.3, ADR-0039",
         "ファイル名を {message}.v{n}.schema.json にし、n をスキーマの v の const と一致させる(例 telemetry.v2.schema.json)",
+    ),
+    NAMING_PROTO(
+        "CC-NAMING-013",
+        "proto の置き場所は contracts/proto/io/eia/{domain}/v{n}/{name}.proto で、java_package は io.eia.platform.grpcstubs.{domain}.v{n}",
+        "5.1, 16.1, ADR-0042",
+        "置き場所と java_package を直す。Java のパッケージをサービスと分けるのは、他のサービスが生成したスタブを読めるようにするため",
     ),
 
     // --- API ---
@@ -209,7 +221,7 @@ enum class Rule(
     ),
     CATALOG_UNREGISTERED(
         "CC-CATALOG-006",
-        "OpenAPI / AsyncAPI の契約はカタログに登録されている",
+        "OpenAPI / AsyncAPI / proto の契約はカタログに登録されている",
         "16.1",
         "contracts/catalog/{id}.yaml を追加し、contract にこのファイルを指定する",
     ),
@@ -314,6 +326,12 @@ enum class Rule(
         "取引先は出した版に合わせて EDI の製品を設定しているので、版の中身は変えない。変更は新しい版のファイル({name}.v{n+1}.yaml)で足し、" +
             "取引先ごとの切り替えは取引先の台帳で行う",
     ),
+    COMPAT_PROTO(
+        "CC-COMPAT-006",
+        "proto に main の版からの破壊的変更がない(buf breaking。区分は FILE)",
+        "5.3, 15.3, ADR-0042",
+        "互換な変更(新しい番号の項目・RPC の追加など)にするか、新しい版のパッケージ(io.eia.{domain}.v{n+1})を並行して提供する",
+    ),
 
     EXTERNAL_BREAKING(
         "CC-EXTERNAL-001",
@@ -408,9 +426,9 @@ enum class Rule(
     // --- ツール ---
     TOOL_FAILURE(
         "CC-TOOL-001",
-        "検査ツール(oasdiff)を実行できる",
+        "検査ツール(oasdiff・buf)を実行できる",
         "19",
-        "--oasdiff に oasdiff の実行ファイルを指定する(./gradlew :tools:contract-check:run は自動で取得する)",
+        "--oasdiff と --buf に実行ファイルを指定する(./gradlew :tools:contract-check:run は自動で取得する)",
     ),
 }
 

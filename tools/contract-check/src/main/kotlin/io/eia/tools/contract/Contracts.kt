@@ -79,6 +79,8 @@ data class Contracts(
     // EDI のサブセットの仕様(contracts/files/edi の {name}.v{n}.yaml)と、その形式(edi-spec.v{n}.schema.json。ADR-0041)
     val ediSpecs: List<ContractDocument> = emptyList(),
     val ediSpecSchemas: List<ContractDocument> = emptyList(),
+    // gRPC の契約(contracts/proto の .proto。リポジトリルートからの相対パス。ADR-0042。中身の検査は buf が行う)
+    val protoFiles: List<String> = emptyList(),
     val loadViolations: List<Violation>,
 ) {
     fun relative(file: Path): String = root.relativize(file).invariantSeparatorsPathString
@@ -90,6 +92,7 @@ data class Contracts(
         const val FLOW_SUFFIX = ".flow.yaml"
         const val DEVICES_DIR = "contracts/devices/"
         const val EDI_DIR = "contracts/files/edi/"
+        const val PROTO_DIR = "contracts/proto/"
 
         private val yaml = YAMLMapper.builder().build()
         private val json = JsonMapper.builder().build()
@@ -150,6 +153,7 @@ data class Contracts(
                 deviceFiles = files(contracts.resolve("devices")).map(::relative),
                 ediSpecs = ediSpecFiles(filesDir).mapNotNull(::readTree),
                 ediSpecSchemas = files(filesDir).filter(::isEdiSpecSchema).mapNotNull(::readTree),
+                protoFiles = files(root.resolve(PROTO_DIR)).filter { it.extension == "proto" }.map(::relative),
                 loadViolations = violations,
             )
         }

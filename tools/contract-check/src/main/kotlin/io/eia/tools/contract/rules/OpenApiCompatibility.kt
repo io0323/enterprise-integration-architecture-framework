@@ -6,12 +6,8 @@ import io.eia.tools.contract.Violation
 import tools.jackson.core.JacksonException
 import tools.jackson.databind.json.JsonMapper
 import java.io.IOException
-import java.nio.file.Files
 import java.nio.file.Path
-import java.util.concurrent.TimeUnit
-import kotlin.io.path.deleteIfExists
 import kotlin.io.path.isExecutable
-import kotlin.io.path.readText
 
 /**
  * OpenAPI の破壊的変更検知。oasdiff(`oasdiff breaking --format json`)を外部プロセスで実行する(ADR-0013)。
@@ -50,7 +46,7 @@ class OpenApiCompatibility(
         path: String,
     ): List<Violation> =
         try {
-            val output = run(executable, base, revision)
+            val output = runTool(listOf(executable.toString(), "breaking", base.toString(), revision.toString(), "--format", "json"))
             if (output.exitCode == 0) {
                 parseChanges(output.stdout, path)
             } else {
@@ -75,39 +71,9 @@ class OpenApiCompatibility(
             listOf(Violation(path, Rule.TOOL_FAILURE, "oasdiff の出力を解釈できません: ${e.originalMessage}"))
         }
 
-    private class Output(
-        val exitCode: Int,
-        val stdout: String,
-        val stderr: String,
-    )
-
-    private fun run(
-        executable: Path,
-        base: Path,
-        revision: Path,
-    ): Output {
-        // stderr はファイルに逃がし、stdout と stderr のパイプが両方埋まって止まることを避ける
-        val stderrFile = Files.createTempFile("oasdiff", ".stderr")
-        try {
-            val process =
-                ProcessBuilder(executable.toString(), "breaking", base.toString(), revision.toString(), "--format", "json")
-                    .redirectError(stderrFile.toFile())
-                    .start()
-            val stdout = process.inputStream.bufferedReader().readText()
-            if (!process.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-                process.destroyForcibly()
-                throw IOException("タイムアウト(${TIMEOUT_SECONDS}s)")
-            }
-            return Output(process.exitValue(), stdout, stderrFile.readText())
-        } finally {
-            stderrFile.deleteIfExists()
-        }
-    }
-
     private companion object {
         /** oasdiff の level: 1 = INFO, 2 = WARN, 3 = ERR。破壊的変更は ERR。 */
         const val LEVEL_ERROR = 3
-        const val TIMEOUT_SECONDS = 60L
         const val MAX_STDERR = 500
         val json: JsonMapper = JsonMapper.builder().build()
     }

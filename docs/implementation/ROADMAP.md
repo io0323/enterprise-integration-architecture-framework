@@ -134,7 +134,7 @@
 - **DoD**: 構文・スキーマ・業務のそれぞれのエラーで、正しいエラー応答と運用通知が出る。受信した全ドキュメントが Audit に記録され、ハッシュチェーンの検証が通る。
 
 ## P13 gRPC & GraphQL BFF
-- inventory の在庫照会を gRPC(内部)で公開する。proto は contracts/proto、mTLS 必須(ADR-0008)
+- inventory の在庫照会と shipping の出荷照会を gRPC(内部)で公開する(BFF が出荷も読むため、shipping を加えた。ADR-0042 §1)。proto は contracts/proto、mTLS 必須(ADR-0008)
 - `bff-graphql`: 注文 + 在庫 + 出荷の集約クエリ(クエリ深さ・複雑度の制限)。GraphQL ライブラリは ADR で選ぶ
 - **DoD**: 契約から生成したスタブで通信する。mTLS なしの gRPC 接続を拒否する。GraphQL の過大なクエリを拒否する。
 

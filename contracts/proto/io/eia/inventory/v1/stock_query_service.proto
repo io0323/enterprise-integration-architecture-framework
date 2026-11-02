@@ -1,0 +1,48 @@
+// 在庫の照会(INT-INVENTORY-003。社内専用。ADR-0042)。
+//
+// 接続: mTLS(開発用 CA。ADR-0008)。クライアント証明書のないクライアントは接続できない。
+// 認可: metadata の `authorization: Bearer <JWT>`。スコープ `inventory.stock:read`。
+// 伝搬: metadata の `traceparent` と `x-correlation-id`。
+// 締め切り: 呼び出し側は gRPC の deadline を必ず指定する。
+//
+// 状態コード:
+//   INVALID_ARGUMENT   skus が 0 件・上限を超える・値の形が不正
+//   UNAUTHENTICATED    トークンがない・不正
+//   PERMISSION_DENIED  スコープが足りない・クライアント証明書が許可の一覧にない
+//   DEADLINE_EXCEEDED  deadline の超過
+//   UNAVAILABLE        一時的に処理できない(DB に接続できないなど)
+syntax = "proto3";
+
+package io.eia.inventory.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// 他のサービスが生成したスタブを読めるよう、サービスのパッケージ(io.eia.inventory)とは分ける(ADR-0042 §2)
+option java_multiple_files = true;
+option java_package = "io.eia.platform.grpcstubs.inventory.v1";
+
+// 在庫の照会。読み取りだけで、在庫を変えない(引当は注文 Saga のコマンド。INT-INVENTORY-001)。
+service StockQueryService {
+  // SKU ごとの引当できる数を、まとめて読む。冪等で、再試行してよい。
+  rpc BatchGetStock(BatchGetStockRequest) returns (BatchGetStockResponse);
+}
+
+message BatchGetStockRequest {
+  // 読む SKU。1〜500 件。重複してよい(1 件として扱う)。1 件は 1〜64 文字。
+  repeated string skus = 1;
+}
+
+message BatchGetStockResponse {
+  // 在庫の行がある SKU。順序は決めない。
+  repeated StockLevel levels = 1;
+  // 在庫の行がない SKU。読めなかったこと(エラー)と区別する。
+  repeated string unknown_skus = 2;
+}
+
+message StockLevel {
+  string sku = 1;
+  // 引当できる数(手持ち - 引当済み)。0 以上。読んだ時点の値で、引当を保証しない。
+  int64 available = 2;
+  // この SKU の行を最後に更新した時刻。
+  google.protobuf.Timestamp updated_at = 3;
+}

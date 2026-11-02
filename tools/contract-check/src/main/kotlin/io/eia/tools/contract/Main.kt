@@ -7,13 +7,14 @@ import kotlin.io.path.writeText
 import kotlin.system.exitProcess
 
 private const val USAGE =
-    "usage: contract-check [--root <dir>] [--baseline <dir>] [--oasdiff <path>] [--markdown <file>]"
+    "usage: contract-check [--root <dir>] [--baseline <dir>] [--oasdiff <path>] [--buf <path>] [--markdown <file>]"
 
 /** コマンドライン引数。 */
 data class Options(
     val root: Path = Path("."),
     val baseline: Path? = null,
     val oasdiff: Path? = null,
+    val buf: Path? = null,
     val markdown: Path? = null,
 ) {
     companion object {
@@ -25,6 +26,7 @@ data class Options(
                     "--root" -> options?.copy(root = Path(value))
                     "--baseline" -> options?.copy(baseline = Path(value))
                     "--oasdiff" -> options?.copy(oasdiff = Path(value))
+                    "--buf" -> options?.copy(buf = Path(value))
                     "--markdown" -> options?.copy(markdown = Path(value))
                     else -> null
                 }
@@ -40,7 +42,7 @@ fun runCli(args: List<String>): Int {
         System.err.println(USAGE)
         return 2
     }
-    val result = ContractCheck(options.root, options.baseline, options.oasdiff).run()
+    val result = ContractCheck(options.root, options.baseline, options.oasdiff, buf = options.buf).run()
     print(Report.text(result))
     options.markdown?.let { file ->
         file.createParentDirectories()

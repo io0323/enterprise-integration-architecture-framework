@@ -103,6 +103,63 @@ val oasdiffExecutable: String =
         .asFile.absolutePath
 
 // ---------------------------------------------------------------------------------------------
+// buf(proto の lint と破壊的変更検知。ADR-0042 §3)。oasdiff と同じく、SHA-256 を検証してから使う。
+// 版は libs.versions.toml、チェックサムは下の表で固定する。版を上げるときは両方を更新する。
+// ---------------------------------------------------------------------------------------------
+val bufVersion: String = libs.versions.buf.get()
+
+// https://github.com/bufbuild/buf/releases/download/v1.75.0/sha256.txt(2026-11-02 取得)
+val bufChecksums =
+    mapOf(
+        "Darwin-arm64" to "f71b009ebd8530b12fd85b060c6c245e15d6e5110ccc8da48d8b6fa71e59330b",
+        "Darwin-x86_64" to "ff6d0979143c661d59178a032c57be883b2ac03dc9bf7d00ffca222b0354bd46",
+        "Linux-x86_64" to "fad1e38d6909bbb583a4da81d8c02a01046e2cd663bde7e337dd24277393764b",
+        "Linux-aarch64" to "00eb190aa82df17f393e05b04889cc60a0b13b3259d336e21a87d5f23ab4fd26",
+    )
+
+val bufPlatform: String =
+    run {
+        val os = providers.systemProperty("os.name").get().lowercase()
+        val arch = providers.systemProperty("os.arch").get().lowercase()
+        val isArm = arch == "aarch64" || arch == "arm64"
+        val isX86 = arch == "amd64" || arch == "x86_64"
+        when {
+            os.contains("mac") && isArm -> "Darwin-arm64"
+            os.contains("mac") && isX86 -> "Darwin-x86_64"
+            os.contains("linux") && isX86 -> "Linux-x86_64"
+            os.contains("linux") && isArm -> "Linux-aarch64"
+            else -> "unsupported"
+        }
+    }
+
+val downloadBuf by tasks.registering(DownloadVerified::class) {
+    description = "buf をチェックサムを検証して取得する。"
+    val asset = "buf-$bufPlatform"
+    url.set("https://github.com/bufbuild/buf/releases/download/v$bufVersion/$asset")
+    sha256.set(
+        provider {
+            bufChecksums[bufPlatform]
+                ?: throw GradleException("buf の取得に対応していないプラットフォームです: $bufPlatform")
+        },
+    )
+    destination.set(layout.buildDirectory.file("buf/$asset"))
+}
+
+val installBuf by tasks.registering(Sync::class) {
+    description = "取得した buf を実行できる形で置く。"
+    from(downloadBuf.flatMap { it.destination }) {
+        rename { "buf" }
+        filePermissions { unix("rwxr-xr-x") }
+    }
+    into(layout.buildDirectory.dir("buf/$bufVersion"))
+}
+val bufExecutable: String =
+    layout.buildDirectory
+        .file("buf/$bufVersion/buf")
+        .get()
+        .asFile.absolutePath
+
+// ---------------------------------------------------------------------------------------------
 // 互換性検査の比較元(baseline)。main の contracts/ を git archive で取り出す(ADR-0013)。
 // 比較元のコミットは -Peia.contracts.baseRef で指定する(既定 origin/main)。取り出せなければ baseline なしで実行する。
 // ---------------------------------------------------------------------------------------------
@@ -160,7 +217,7 @@ val extractContractBaseline by tasks.registering(ExtractContractBaseline::class)
 
 tasks.named<JavaExec>("run") {
     description = "契約(contracts/)を検査する。違反があれば失敗する。"
-    dependsOn(installOasdiff, extractContractBaseline)
+    dependsOn(installOasdiff, installBuf, extractContractBaseline)
     workingDir = rootDir
     val reportFile = layout.buildDirectory.file("reports/contract-check/summary.md")
     args(
@@ -173,13 +230,15 @@ tasks.named<JavaExec>("run") {
             .asFile.absolutePath,
         "--oasdiff",
         oasdiffExecutable,
+        "--buf",
+        bufExecutable,
         "--markdown",
         reportFile.get().asFile.absolutePath,
     )
 }
 
 tasks.test {
-    dependsOn(installOasdiff)
+    dependsOn(installOasdiff, installBuf)
     // 実際の contracts/ を検査するテストがあるため、contracts/ を入力として宣言する
     inputs
         .dir(rootProject.layout.projectDirectory.dir("contracts"))
@@ -188,4 +247,5 @@ tasks.test {
     inputs.file(rootProject.layout.projectDirectory.file("tools/contract-check/README.md")).withPathSensitivity(PathSensitivity.RELATIVE)
     systemProperty("eia.rootDir", rootDir.absolutePath)
     systemProperty("eia.oasdiff", oasdiffExecutable)
+    systemProperty("eia.buf", bufExecutable)
 }

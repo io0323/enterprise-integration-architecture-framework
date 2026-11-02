@@ -48,7 +48,7 @@ class ReportSpec :
         test("CLI: 違反がなければ 0、あれば 1、引数が不正なら 2 を返し、Markdown を書き出す") {
             val clean = Workspace.ofRepositoryContracts()
             val markdown = createTempDirectory("report").resolve("out/summary.md")
-            runCli(listOf("--root", clean.root.toString(), "--markdown", markdown.toString())) shouldBe 0
+            runCli(listOf("--root", clean.root.toString(), "--buf", Workspace.BUF.toString(), "--markdown", markdown.toString())) shouldBe 0
             markdown.readText() shouldContain "違反はありません"
 
             val broken = Workspace.ofRepositoryContracts().replace("contracts/catalog/INT-SALES-001.yaml", "tier: 1\n", "")
@@ -57,7 +57,7 @@ class ReportSpec :
 
             val baseline = Workspace.ofRepositoryContracts()
             val args = listOf("--root", clean.root.toString(), "--baseline", baseline.root.toString())
-            runCli(args + listOf("--oasdiff", Workspace.OASDIFF.toString())) shouldBe 0
+            runCli(args + listOf("--oasdiff", Workspace.OASDIFF.toString(), "--buf", Workspace.BUF.toString())) shouldBe 0
             runCli(listOf("--root")) shouldBe 2
             runCli(listOf("--unknown", "x")) shouldBe 2
             Report.markdown(Workspace.ofRepositoryContracts().check()) shouldNotContain "| ファイル |"

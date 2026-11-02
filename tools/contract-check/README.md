@@ -1,6 +1,6 @@
 # contract-check
 
-`contracts/` の契約(OpenAPI / AsyncAPI / Avro / ファイル仕様 / 連携カタログ)を検査する CLI(ROADMAP P02、ADR-0012・ADR-0013・ADR-0014)。
+`contracts/` の契約(OpenAPI / AsyncAPI / Avro / proto / ファイル仕様 / 連携カタログ)を検査する CLI(ROADMAP P02、ADR-0012・ADR-0013・ADR-0014・ADR-0042)。
 違反が 1 件でもあれば終了コード 1 を返す。
 
 ## 使い方
@@ -13,7 +13,7 @@ make contract-check                                                  # 上と同
 
 `run` タスクは次を自動で行う。
 
-1. oasdiff を GitHub Releases から取得し、`build.gradle.kts` に固定した SHA-256 で検証する(`libs.versions.toml` の `oasdiff`)。
+1. oasdiff と buf を GitHub Releases から取得し、`build.gradle.kts` に固定した SHA-256 で検証する(`libs.versions.toml` の `oasdiff`・`buf`)。
 2. 比較元のコミット(既定 `origin/main`)の `contracts/` を `git archive` で `build/contracts-baseline/` に取り出す。
    取り出せないとき(初回・shallow clone など)は、互換性検査(`CC-COMPAT-*`)を省略したことを出力に明記して実行する。
 3. 結果を標準出力と `build/reports/contract-check/summary.md`(GitHub Actions の Step Summary 用)に書く。
@@ -25,6 +25,7 @@ CLI を直接使う場合の引数:
 | `--root <dir>` | 検査するリポジトリのルート(`contracts/` を含むディレクトリ)。既定 `.` |
 | `--baseline <dir>` | 比較元のルート(`contracts/` を含むディレクトリ)。省略すると互換性検査をしない |
 | `--oasdiff <path>` | oasdiff の実行ファイル。比較元に同じ OpenAPI があるのに見つからなければ `CC-TOOL-001` |
+| `--buf <path>` | buf の実行ファイル。proto があるのに見つからなければ `CC-TOOL-001` |
 | `--markdown <file>` | Markdown の結果(5 項目の表)を書き出す |
 
 ## 出力
@@ -50,6 +51,7 @@ ID は `CC-{区分}-{連番}`。定義は `src/main/kotlin/io/eia/tools/contract
 | `CC-STRUCT-003` | AsyncAPI 3.0 の公式 JSON Schema に適合すること | 6.3, 15.2 | AsyncAPI 3.0 の仕様に合わせて記述を直す |
 | `CC-STRUCT-004` | Avro スキーマとして読めること | 6.3 | Avro 1.12 の仕様に合わせて直す(default の型、名前の参照順など) |
 | `CC-STRUCT-005` | JSON Schema(manifest・カタログ・ファイルの仕様・EDI の仕様・デバイスの形式)がメタスキーマに適合すること | 9, 16.1 | JSON Schema 2020-12 の仕様に合わせて直す |
+| `CC-STRUCT-006` | proto が buf lint(STANDARD)を満たすこと(package の版、ディレクトリとの一致、命名、構文) | 5.1, 15.2, ADR-0042 | buf のメッセージに従って直す。package は io.eia.{domain}.v{n} にし、contracts/proto/io/eia/{domain}/v{n}/ に置く |
 | `CC-NAMING-001` | Topic は {domain}.{entity}.{event}.v{n} | 6.2, 16.1 | 小文字・kebab-case の 4 セグメントに直す(例 sales.order.created.v1)。DLQ は {topic}.dlq |
 | `CC-NAMING-002` | Command Topic の event セグメントは cmd-{command} | 6.2, ADR-0006 | event セグメントを cmd-{command}(kebab-case)にする(例 inventory.stock.cmd-reserve.v1) |
 | `CC-NAMING-003` | OpenAPI の servers[*].url は /{domain} で終わる | 5.2, ADR-0005 | servers には Gateway 公開 URL を /{domain} まで書く(例 http://localhost:19080/sales) |
@@ -59,9 +61,10 @@ ID は `CC-{区分}-{連番}`。定義は `src/main/kotlin/io/eia/tools/contract
 | `CC-NAMING-007` | Consumer Group は {service}.{purpose} | 6.4 | 小文字・kebab-case の 2 セグメントにする(例 inventory.reservation) |
 | `CC-NAMING-008` | Avro の namespace は io.eia.events.{domain}、record は PascalCase、ファイル名は {Record}.avsc | 6.3, INTEGRATION_STANDARDS §1 | contracts/avro/{domain}/{Record}.avsc に置き、namespace と名前を合わせる(共通型は io.eia.events.common) |
 | `CC-NAMING-009` | OpenAPI / AsyncAPI のファイル名は {name}.v{n}.yaml で、info.version のメジャーと n が一致する | 5.3, 16.1 | ファイル名を {name}.v{n}.yaml にし、破壊的変更は新しいファイル(v{n+1})で行う |
-| `CC-NAMING-010` | Topic・API の domain が連携 ID の domain と一致する | 16.1, ADR-0005 | 連携 ID の {DOMAIN} を小文字にした値を Topic の先頭セグメント・servers の末尾に使う |
+| `CC-NAMING-010` | Topic・API・proto の domain が連携 ID の domain と一致する | 16.1, ADR-0005 | 連携 ID の {DOMAIN} を小文字にした値を Topic の先頭セグメント・servers の末尾・proto の package に使う |
 | `CC-NAMING-011` | MQTT のトピックは devices/{tenant}/{deviceId}/{channel} | 17.3, INTEGRATION_STANDARDS §1, ADR-0039 | address を devices/{tenant}/{deviceId}/{channel}(channel は小文字・kebab-case)にする。ACL はこの形でデバイスごとに書く |
 | `CC-NAMING-012` | contracts/devices のファイル名は {message}.v{n}.schema.json | 17.3, ADR-0039 | ファイル名を {message}.v{n}.schema.json にし、n をスキーマの v の const と一致させる(例 telemetry.v2.schema.json) |
+| `CC-NAMING-013` | proto の置き場所は contracts/proto/io/eia/{domain}/v{n}/{name}.proto で、java_package は io.eia.platform.grpcstubs.{domain}.v{n} | 5.1, 16.1, ADR-0042 | 置き場所と java_package を直す。Java のパッケージをサービスと分けるのは、他のサービスが生成したスタブを読めるようにするため |
 | `CC-API-001` | POST は Idempotency-Key ヘッダが必須 | 5.4 | POST の parameters に Idempotency-Key(in: header、required: true)を追加する |
 | `CC-API-002` | 全 operation に 429 + Retry-After の応答がある | 5.6 | responses に 429 を追加し、headers に Retry-After を定義する |
 | `CC-API-003` | 全 operation に security が定義されている(匿名アクセスを許さない) | 12 | operation かトップレベルに security(OAuth2 のスコープ)を定義する。空の要件 {} は使わない |
@@ -75,7 +78,7 @@ ID は `CC-{区分}-{連番}`。定義は `src/main/kotlin/io/eia/tools/contract
 | `CC-CATALOG-003` | 連携 ID が重複しない | 16.1 | 未使用の連番を割り当てる |
 | `CC-CATALOG-004` | カタログの channels と AsyncAPI の channel が一致する | 16.1 | AsyncAPI の channels[*].address をすべて catalog の channels に列挙する(過不足なし) |
 | `CC-CATALOG-005` | event / cdc の consumer は group(Consumer Group)を持つ | 6.4 | consumers[*].group に {service}.{purpose} を書く |
-| `CC-CATALOG-006` | OpenAPI / AsyncAPI の契約はカタログに登録されている | 16.1 | contracts/catalog/{id}.yaml を追加し、contract にこのファイルを指定する |
+| `CC-CATALOG-006` | OpenAPI / AsyncAPI / proto の契約はカタログに登録されている | 16.1 | contracts/catalog/{id}.yaml を追加し、contract にこのファイルを指定する |
 | `CC-CATALOG-007` | 外部の契約(contracts/external)を使う連携は external(ベンダーと出典)を書く | 16.1, ADR-0035 | external: { vendor: <ベンダー>, source: <仕様の出典> } を書く。owner は連携に責任を持つ社内のチーム |
 | `CC-COMMAND-001` | Command Topic の購読者は受信サービスの 1 Consumer Group({service}.command)だけ | 6.2, ADR-0006 | 購読を 1 つにする。複数の系が知るべき事実なら Domain Event として別トピックで発行する |
 | `CC-COMMAND-002` | Command Topic は pattern: queue、pattern: queue は Command Topic のみ | 6.7, ADR-0006 | cmd- トピックを含む連携は pattern: queue にし、イベントトピックとは別の連携として登録する |
@@ -91,6 +94,7 @@ ID は `CC-{区分}-{連番}`。定義は `src/main/kotlin/io/eia/tools/contract
 | `CC-COMPAT-003` | ファイルの仕様が main の版に対して互換(列の削除・型や必須性の変更・並べ替え・enum の変更・形式の変更がない) | 9, 15.3 | 足してよいのは、末尾の任意(nullable: true)の列と、新しい形式だけ。ほかの変更は新しい版のファイル({system}_{dataset}.v{n+1}.yaml)で行う |
 | `CC-COMPAT-004` | デバイスの形式のスキーマ(contracts/devices)を main の版から変えていない・消していない(説明の文だけは変えてよい) | 15.3, 17.3, ADR-0039 | 出したデバイスの形式は変えない(古いファームウェアのデバイスが送り続ける)。変更は新しい版のファイル({message}.v{n+1}.schema.json)で足す。版をやめるときは ADR-0039 §4 の手順で例外を承認してもらう |
 | `CC-COMPAT-005` | EDI のサブセットの仕様(contracts/files/edi)を main の版から変えていない(説明の文だけは変えてよい) | 11.1, 15.3, ADR-0041 | 取引先は出した版に合わせて EDI の製品を設定しているので、版の中身は変えない。変更は新しい版のファイル({name}.v{n+1}.yaml)で足し、取引先ごとの切り替えは取引先の台帳で行う |
+| `CC-COMPAT-006` | proto に main の版からの破壊的変更がない(buf breaking。区分は FILE) | 5.3, 15.3, ADR-0042 | 互換な変更(新しい番号の項目・RPC の追加など)にするか、新しい版のパッケージ(io.eia.{domain}.v{n+1})を並行して提供する |
 | `CC-EXTERNAL-001` | 外部の契約(contracts/external)の破壊的変更(警告。ジョブは失敗させない) | 10.4, 16.1, ADR-0035 | ベンダーの変更に合わせて、取り込みの側(Connector・Flow の定義)を直す。カタログの external.source に変更の出典を書く |
 | `CC-WAIVER-001` | 互換性検査の例外リストの形式が正しい | 16.1, ADR-0013 | 各例外に rule(CC-COMPAT-*)・file・contains・reason・issue・expires(YYYY-MM-DD)を書く |
 | `CC-WAIVER-002` | 期限切れの互換性検査の例外が残っていない | 16.1, ADR-0013 | 例外が不要になっていれば削除する。まだ必要なら理由を Issue に残して expires を延ばす |
@@ -104,7 +108,7 @@ ID は `CC-{区分}-{連番}`。定義は `src/main/kotlin/io/eia/tools/contract
 | `CC-FLOW-002` | Flow の定義が参照する連携・トピック・対応表が存在する | 10.2, 16.1, ADR-0036 | integration と connector にカタログの ID を、topic と deliver にカタログの channels のトピックを書く。deliver は integration の channels、connector は external の連携、lookup の table は tables にあるものにする |
 | `CC-CANON-001` | Canonical Model(Kotlin)と Avro スキーマの項目が一致する | 15.1, ADR-0012 | ADR-0012 の変換規則に従って、項目名・必須性・型を Canonical Model と揃える |
 | `CC-CANON-002` | Canonical Model に対応づけた Avro の型が存在する | 15.1, ADR-0012 | CanonicalBindings の対応表か、contracts/avro の型名を直す |
-| `CC-TOOL-001` | 検査ツール(oasdiff)を実行できる | 19 | --oasdiff に oasdiff の実行ファイルを指定する(./gradlew :tools:contract-check:run は自動で取得する) |
+| `CC-TOOL-001` | 検査ツール(oasdiff・buf)を実行できる | 19 | --oasdiff と --buf に実行ファイルを指定する(./gradlew :tools:contract-check:run は自動で取得する) |
 
 ## Webhook の受け口・外部の契約・Flow の定義(ADR-0035・ADR-0036)
 
@@ -118,6 +122,13 @@ ID は `CC-{区分}-{連番}`。定義は `src/main/kotlin/io/eia/tools/contract
 - 仕様の中の参照(並びのセグメントの定義・グループの最初のセグメント・修飾子・UNH の S009 と `message`・UNB の S001 と `syntax`・応答の仕様・業務の規則のコードの一意)は `CC-EDI-002` で検査する。
 - カタログの単位は「文書の種類 × 向き」(`style: edi`。`CC-EDI-003`)。取引先ごとの参加は、カタログではなく取引先の台帳(TPA)で持つ。
 - 取引先は出した版に合わせて EDI の製品を設定するので、**出した版の中身は変えない**(`CC-COMPAT-005`。説明の文 `description` とデータ要素・コードの名前 `name` だけは直してよい)。変更は新しい版のファイルで足す。
+
+## gRPC の契約(ADR-0042)
+
+- `contracts/proto/io/eia/{domain}/v{n}/{name}.proto` に置く。package は `io.eia.{domain}.v{n}`、`java_package` は `io.eia.platform.grpcstubs.{domain}.v{n}`(`CC-NAMING-013`)。
+- 規則の設定は `contracts/proto/buf.yaml`。lint は STANDARD(`CC-STRUCT-006`)、破壊的変更の検査は FILE(`CC-COMPAT-006`)。依存(`deps`)を書かないので、外部のレジストリには接続しない。
+- proto は 1 ファイルごとにカタログの `contract` に登録する(`CC-CATALOG-006`)。互換性の違反の許可(設計中の連携・例外)も、このファイルの単位で判定する。
+- 比較元に proto がなければ `CC-COMPAT-006` は省略する(すべて新規)。proto があるのに buf を実行できなければ、`CC-TOOL-001` で失敗させる(黙って省略しない)。
 
 ## MQTT の契約とデバイスの形式(ADR-0039)
 

@@ -1,0 +1,10 @@
+# proto の lint と破壊的変更の検査(buf。ADR-0042 §3)。依存(deps)は書かない。外部の BSR に接続せず、手元だけで検査するため。
+# 検査は contract-check が実行する(CC-STRUCT-006・CC-COMPAT-006)。
+version: v2
+lint:
+  use:
+    - STANDARD
+breaking:
+  use:
+    # 最も厳しい区分。生成コードの互換(項目名・パッケージ・Java のパッケージの変更も)を守る。社内の利用者もスタブで動くため
+    - FILE
