@@ -161,7 +161,7 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "sum by (trading_partner_id, b2b_stage) (increase(eia_b2b_documents_total{b2b_stage!=\"none\"}[1h]))",
+          "expr": "sum by (trading_partner_id, b2b_stage) (increase(eia_b2b_documents_rejected_total[1h]))",
           "legendFormat": "{{trading_partner_id}} {{b2b_stage}}"
         }
       ]

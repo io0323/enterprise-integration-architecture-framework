@@ -22,6 +22,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.logback.classic)
 
+    testImplementation(libs.opentelemetry.sdk.testing)
     testImplementation(project(":platform:test-support"))
 
     // 統合テスト: PostgreSQL・S3 互換ストレージ・SFTP と、order の API と Keycloak の代わり(Ktor のサーバ)で、コマンドと常駐の全体を確かめる

@@ -1,7 +1,7 @@
 # B2B / EDI Gateway(b2b-gateway。P12)のアラート。対応は docs/runbooks/b2b-partner-credentials.md。単体テストは b2b.test.yml(make alerts-test)。
 #
 # 受け取りと応答(P12 ⑥b。ROADMAP P12 の DoD「構文・スキーマ・業務のどのエラーでも、正しいエラー応答と運用通知が出る」)
-# - 拒否した文書(eia_b2b_documents_total の b2b_stage が none 以外)は、取引先と段階ごとに警告する。取引先には CONTRL・APERAK で
+# - 拒否した文書(eia_b2b_documents_rejected_total。取引先と段階ごとに起動時に 0 で作る)は、取引先と段階ごとに警告する。取引先には CONTRL・APERAK で
 #   返しているが、運用者が取引先との調整(鍵・製品の設定・対応表)の要否を判断する。読めない文書(decryption)は応答を返せないので、
 #   運用者が取引先の連絡先に知らせる
 # - 受け付けに失敗し続けて処理中に残るファイル(eia_b2b_inbox_stuck)、受け取りのディレクトリを見られない状態、応答を送れない状態、
@@ -46,7 +46,7 @@ groups:
           runbook: docs/runbooks/b2b-partner-credentials.md#送り直しの上限を過ぎた注文
 
       - alert: B2bDocumentRejected
-        expr: sum by (trading_partner_id, b2b_stage) (increase(eia_b2b_documents_total{b2b_stage!="none"}[15m])) > 0
+        expr: sum by (trading_partner_id, b2b_stage) (increase(eia_b2b_documents_rejected_total[15m])) > 0
         labels:
           severity: warning
         annotations:
