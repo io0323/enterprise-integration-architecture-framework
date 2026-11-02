@@ -1328,16 +1328,21 @@ verify_saga() {
 # 取り込み・置換・遅れたデータ・照合の中身は統合テスト(BatchEtlIT・BatchEtlAppIT)と E2E(P08 ⑥)で確かめる
 verify_batch() {
   current="batch"
-  local yesterday day_before
-  yesterday="$(TZ=Asia/Tokyo date -v-1d +%F 2>/dev/null || TZ=Asia/Tokyo date -d yesterday +%F)"
-  day_before="$(TZ=Asia/Tokyo date -v-2d +%F 2>/dev/null || TZ=Asia/Tokyo date -d '2 days ago' +%F)"
+  local yesterday scheduled day_before
+  # 日本時間の [時間] 前の日付(BSD の date と GNU の date の両方)
+  jst_day_hours_ago() { TZ=Asia/Tokyo date -v-"$1"H +%F 2>/dev/null || TZ=Asia/Tokyo date -d "$1 hours ago" +%F; }
+  yesterday="$(jst_day_hours_ago 24)"
+  # serve は起動すると、直近の起動の時刻(01:00 JST)の分 = その前日の分を実行する(ADR-0030 §4)。
+  # 直近の 01:00 JST の前日は「今から 25 時間前の日付」(00:00〜01:00 JST に動かすと、暦の前日ではなく前々日になる)
+  scheduled="$(jst_day_hours_ago 25)"
+  day_before="$(jst_day_hours_ago 49)"
   batch_sql() { "${compose[@]}" exec -T postgres psql -U postgres -d batch_etl -tAc "$1"; }
   run_status() { batch_sql "select status from batch.batch_run where dag_id = 'batch-etl.order-daily' and partition_key = '$1'"; }
 
-  # serve は起動すると、直近の起動の時刻(01:00 JST)の分 = 前日の分を実行する(ADR-0030 §4)
-  check "batch-etl: 起動すると前日($yesterday)の日次の DAG を実行して成功する" retry 24 5 equals SUCCEEDED run_status "$yesterday"
-  check "batch-etl: 前日のパーティションを作った(mart.partition_build)" \
-    equals 1 batch_sql "select count(*) from mart.partition_build where business_date = '$yesterday'"
+  check "batch-etl: 起動すると直近の 01:00 JST の分($scheduled)の日次の DAG を実行して成功する" \
+    retry 24 5 equals SUCCEEDED run_status "$scheduled"
+  check "batch-etl: その日のパーティションを作った(mart.partition_build)" \
+    equals 1 batch_sql "select count(*) from mart.partition_build where business_date = '$scheduled'"
   # 運用者の実行(Runbook)。同じイメージ・同じ環境で 1 回だけ動かす
   check "batch-etl: run $day_before(運用者の実行)が終了コード 0 で終わる" \
     "${compose[@]}" run --rm --no-deps batch-etl run "$day_before"
