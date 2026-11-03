@@ -10,4 +10,4 @@ contract: contracts/proto/io/eia/shipping/v1/shipment_query_service.proto
 tier: 2
 dataClassification: confidential
 slo: { availability: "99.9", latencyP99: "200ms" }
-lifecycle: design
+lifecycle: active
