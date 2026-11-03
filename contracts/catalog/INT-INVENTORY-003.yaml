@@ -10,4 +10,4 @@ contract: contracts/proto/io/eia/inventory/v1/stock_query_service.proto
 tier: 2
 dataClassification: internal
 slo: { availability: "99.9", latencyP99: "200ms" }
-lifecycle: design
+lifecycle: active

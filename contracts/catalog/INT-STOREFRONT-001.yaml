@@ -11,4 +11,4 @@ tier: 2
 # 届け先の住所(個人情報)を返すことがある。スコープ sales.order:read-address を持つ呼び出しだけ
 dataClassification: confidential
 slo: { availability: "99.9", latencyP99: "1s" }
-lifecycle: design
+lifecycle: active
