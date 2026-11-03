@@ -44,6 +44,30 @@ class ExposedOrderRepositoryIT :
             repository.findById(OrderId.parse("ord-none").ok()).ok() shouldBe null
         }
 
+        test("まとめて読む: 明細を含めて読み戻し、ない注文は含めない。空なら読まない") {
+            val db = environment.newDatabase()
+            val repository = ExposedOrderRepository(db.database)
+            val first = order(id = "ord-batch-1")
+            val second = order(id = "ord-batch-2")
+            repository.insert(first).ok()
+            repository.insert(second).ok()
+
+            val read = repository.findByIds(setOf(first.id, second.id, OrderId.parse("ord-none").ok())).ok()
+
+            read.associateBy { it.id } shouldBe mapOf(first.id to first, second.id to second)
+            read.first { it.id == first.id }.lines.map { it.lineNumber } shouldBe first.lines.map { it.lineNumber }
+            repository.findByIds(emptySet()).ok() shouldBe emptyList()
+        }
+
+        test("まとめて読む: 保存された値が不正なら UnexpectedError") {
+            val db = environment.newDatabase()
+            val repository = ExposedOrderRepository(db.database)
+            repository.insert(order()).ok()
+            db.superuser { it.createStatement().use { s -> s.execute("UPDATE order_lines SET sku = '' WHERE line_number = 2") } }
+
+            repository.findByIds(setOf(order().id)).error() shouldBeEqual UnexpectedError("保存された注文の値が不正です(sku)")
+        }
+
         listOf(
             Triple("通貨を解決できない", "UPDATE orders SET currency = 'XXX'", "currency"),
             Triple("顧客 ID が不正", "UPDATE orders SET customer_id = ' '", "customer_id"),

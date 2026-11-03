@@ -21,6 +21,7 @@ import io.eia.order.adapters.out.saga.SagaSchemas
 import io.eia.order.adapters.out.saga.UuidV7SagaIds
 import io.eia.order.application.port.inbound.GetDailyOrderSummaryUseCase
 import io.eia.order.application.port.inbound.GetOrderUseCase
+import io.eia.order.application.port.inbound.GetOrdersUseCase
 import io.eia.order.application.port.inbound.HandleSagaReplyUseCase
 import io.eia.order.application.port.inbound.PlaceOrderUseCase
 import io.eia.order.application.port.inbound.TimeoutSagasUseCase
@@ -34,6 +35,7 @@ import io.eia.order.application.port.outbound.SagaStore
 import io.eia.order.application.port.outbound.TransactionRunner
 import io.eia.order.application.usecase.GetDailyOrderSummaryService
 import io.eia.order.application.usecase.GetOrderService
+import io.eia.order.application.usecase.GetOrdersService
 import io.eia.order.application.usecase.HandleSagaReplyService
 import io.eia.order.application.usecase.PlaceOrderService
 import io.eia.order.application.usecase.SagaCoordinator
@@ -116,12 +118,13 @@ internal fun orderModule(
         sagaBeans(config, runtime)
         single<PlaceOrderUseCase> { PlaceOrderService(get(), get(), get(), Clock.System, get(), get(), get()) }
         single<GetOrderUseCase> { GetOrderService(get()) }
+        single<GetOrdersUseCase> { GetOrdersService(get()) }
         // 日次の集計(分析の週次の照合用。ADR-0031 §3)
         single<GetDailyOrderSummaryUseCase> { GetDailyOrderSummaryService(ExposedOrderSummaries(get())) }
         single<IdempotencyStore> { PostgresIdempotencyStore(get()) }
         single { IdempotencyHandler(get(), IdempotencyConfig(lease = config.idempotencyLease)) }
         single<TransactionBoundary> { ExposedTransactionBoundary(get()) }
-        single { OrderApi(get(), get(), get(), get()) }
+        single { OrderApi(get(), get(), get(), get(), get()) }
         single {
             JwtVerifier(
                 JwtVerifierConfig(

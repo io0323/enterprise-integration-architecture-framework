@@ -39,6 +39,7 @@ public const val SCOPE_WRITE: String = "sales.order:write"
  *   トランザクションにする。本文の構造が不正なら 400、値域・業務整合の違反は 422(項目のパスは契約と同じ)。201 の `Location` は
  *   相対参照 `orders/{id}`。
  * - `GET /v1/orders/{orderId}`(`sales.order:read`): ないときと、ID の形式が不正なとき(存在しえない)は 404。
+ * - `GET /v1/orders?ids=`(`sales.order:read`): まとめて読む。ない ID と形式が不正な ID は `notFound` に返す。`ids` がない・上限を超えるときは 422。
  */
 public fun Route.orderRoutes(api: OrderApi) {
     requireScopes(SCOPE_WRITE) {
@@ -46,6 +47,7 @@ public fun Route.orderRoutes(api: OrderApi) {
     }
     requireScopes(SCOPE_READ) {
         get("/v1/orders/{orderId}") { call.getOrder(api) }
+        get("/v1/orders") { call.getOrders(api) }
     }
 }
 
@@ -133,3 +135,18 @@ private suspend fun ApplicationCall.getOrder(api: OrderApi) {
         }
     }
 }
+
+private suspend fun ApplicationCall.getOrders(api: OrderApi) {
+    when (val found = api.getOrders(request.queryParameters.getAll(IDS).orEmpty())) {
+        is Result.Ok -> {
+            val dto = OrderBatchDto(found.value.orders.map(OrderDtoMapper::toDto), found.value.notFound)
+            respondText(json.encodeToString(OrderBatchDto.serializer(), dto), ContentType.Application.Json)
+        }
+
+        is Result.Err -> {
+            respondError(found.error)
+        }
+    }
+}
+
+private const val IDS = "ids"

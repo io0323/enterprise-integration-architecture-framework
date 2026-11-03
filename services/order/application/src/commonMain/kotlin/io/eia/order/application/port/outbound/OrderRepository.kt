@@ -18,6 +18,9 @@ public interface OrderRepository {
     /** 注文を読む。なければ `null`。 */
     public suspend fun findById(id: OrderId): Result<Order?, DomainError>
 
+    /** [ids] の注文を、まとめて読む(明細を含む)。ない注文は結果に含めない。順序は決めない。[ids] が空なら空。 */
+    public suspend fun findByIds(ids: Set<OrderId>): Result<List<Order>, DomainError>
+
     /**
      * 読んだ版([Order.version])のまま保存されていれば更新し、版を 1 増やした注文を返す。
      * 別の更新が先に確定していれば [OrderVersionConflict](呼び出し側は読み直して遷移表で判定し直す)。

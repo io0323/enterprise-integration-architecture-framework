@@ -40,6 +40,7 @@ import kotlin.time.toKotlinInstant
  * - 金額は最小通貨単位と通貨コードで保存し、読むときに [currencies] で通貨を戻す(ADR-0011)。
  * - 保存した値が domain の規則を満たさなければ(保存された値の破損)、[UnexpectedError] にする。理由には値を入れない。
  */
+@Suppress("TooManyFunctions") // Port の操作と、表ごとの読み書き
 public class ExposedOrderRepository internal constructor(
     private val session: JdbcSession,
     private val currencies: CurrencyResolver,
@@ -63,6 +64,20 @@ public class ExposedOrderRepository internal constructor(
             val row = readOrder(connection, id)
             if (row == null) ok(null) else restore(row, readLines(connection, id))
         }
+
+    override suspend fun findByIds(ids: Set<OrderId>): Result<List<Order>, DomainError> {
+        if (ids.isEmpty()) return ok(emptyList())
+        return session.run { connection ->
+            val values = ids.map { it.value }
+            val rows = readOrders(connection, values)
+            val lines = readLinesOf(connection, values)
+            try {
+                ok(rows.map { it.toOrder(currencies, lines[it.id].orEmpty()) })
+            } catch (e: InvalidStoredValue) {
+                err(UnexpectedError("保存された注文の値が不正です(${e.field})"))
+            }
+        }
+    }
 
     override suspend fun update(order: Order): Result<Order, DomainError> =
         session.run { connection ->
@@ -137,6 +152,29 @@ public class ExposedOrderRepository internal constructor(
         connection.prepareStatement(SELECT_LINES).use { statement ->
             statement.setString(1, id.value)
             statement.executeQuery().use { rs -> generateSequence { if (rs.next()) LineRow.read(rs) else null }.toList() }
+        }
+
+    private fun readOrders(
+        connection: Connection,
+        ids: List<String>,
+    ): List<OrderRow> =
+        connection.prepareStatement(SELECT_ORDERS).use { statement ->
+            statement.setArray(1, connection.createArrayOf("varchar", ids.toTypedArray()))
+            statement.executeQuery().use { rs -> generateSequence { if (rs.next()) OrderRow.read(rs) else null }.toList() }
+        }
+
+    /** 注文の ID ごとの明細。1 回の問い合わせで読む(注文の数だけ問い合わせない)。 */
+    private fun readLinesOf(
+        connection: Connection,
+        ids: List<String>,
+    ): Map<String, List<LineRow>> =
+        connection.prepareStatement(SELECT_LINES_OF).use { statement ->
+            statement.setArray(1, connection.createArrayOf("varchar", ids.toTypedArray()))
+            statement.executeQuery().use { rs ->
+                generateSequence { if (rs.next()) rs.getString("order_id") to LineRow.read(rs) else null }
+                    .toList()
+                    .groupBy({ it.first }, { it.second })
+            }
         }
 
     private fun exists(
@@ -254,6 +292,12 @@ public class ExposedOrderRepository internal constructor(
         const val SELECT_LINES =
             "SELECT line_number, product_id, sku, quantity, unit_price_minor, line_amount_minor FROM order_lines " +
                 "WHERE order_id = ? ORDER BY line_number"
+        const val SELECT_ORDERS =
+            "SELECT id, customer_id, status, ordered_at, currency, total_amount_minor, ship_country_code, ship_postal_code, " +
+                "ship_region, ship_city, ship_line1, ship_line2, version FROM orders WHERE id = ANY(?)"
+        const val SELECT_LINES_OF =
+            "SELECT order_id, line_number, product_id, sku, quantity, unit_price_minor, line_amount_minor FROM order_lines " +
+                "WHERE order_id = ANY(?) ORDER BY order_id, line_number"
         const val UPDATE_STATUS = "UPDATE orders SET status = ?, version = version + 1, updated_at = now() WHERE id = ? AND version = ?"
         const val EXISTS = "SELECT 1 FROM orders WHERE id = ?"
 

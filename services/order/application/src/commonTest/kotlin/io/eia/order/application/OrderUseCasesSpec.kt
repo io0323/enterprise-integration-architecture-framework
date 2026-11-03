@@ -1,9 +1,11 @@
 package io.eia.order.application
 
+import io.eia.order.application.port.inbound.GetOrdersUseCase
 import io.eia.order.application.port.inbound.PlaceOrderCommand
 import io.eia.order.application.port.inbound.RequestedBy
 import io.eia.order.application.port.outbound.OrderVersionConflict
 import io.eia.order.application.usecase.GetOrderService
+import io.eia.order.application.usecase.GetOrdersService
 import io.eia.order.application.usecase.PlaceOrderService
 import io.eia.order.application.usecase.SagaCoordinator
 import io.eia.order.application.usecase.SagaTimeouts
@@ -69,6 +71,7 @@ private class Fixture {
     val coordinator = SagaCoordinator(sagas, repository, commands, events, SequentialSagaIds())
     val place = PlaceOrderService(repository, transaction, ids, FixedClock(NOW), audit, events, coordinator)
     val get = GetOrderService(repository)
+    val getMany = GetOrdersService(repository)
 }
 
 class OrderUseCasesSpec :
@@ -182,6 +185,40 @@ class OrderUseCasesSpec :
 
                 f.place(command()).error().shouldBeInstanceOf<ConflictError>()
                 f.repository.orders.size shouldBe 1
+            }
+        }
+
+        context("GetOrdersUseCase") {
+            test("指定した順に返し、ない ID と形式が不正な ID は notFound に返す。重複は 1 件") {
+                val f = Fixture()
+                val first = f.place(command()).ok()
+                val second = f.place(command()).ok()
+
+                val batch =
+                    f.getMany(listOf(second.id.value, "ord-none", first.id.value, second.id.value, "x".repeat(65))).ok()
+
+                batch.orders shouldBe listOf(second, first)
+                batch.notFound shouldBe listOf("ord-none", "x".repeat(65))
+            }
+
+            test("0 件と、上限を超える件数は ValidationError で、読まない") {
+                val f = Fixture()
+                f.repository.failWith = UnavailableError("読まないはず")
+                listOf(emptyList(), List(GetOrdersUseCase.MAX_IDS + 1) { "ord-$it" }).forEach { ids ->
+                    f.getMany(ids).error().shouldBeInstanceOf<ValidationError>()
+                }
+            }
+
+            test("重複を除いて上限ちょうどなら通す") {
+                val ids = List(GetOrdersUseCase.MAX_IDS) { "ord-$it" }
+                Fixture().getMany(ids + ids).ok().notFound shouldBe ids
+            }
+
+            test("読み込みに失敗したら、見つからないことにせず、そのエラーを返す") {
+                val f = Fixture()
+                val unavailable = UnavailableError("DB に接続できません")
+                f.repository.failWith = unavailable
+                f.getMany(listOf("ord-1")).error() shouldBeEqual unavailable
             }
         }
 

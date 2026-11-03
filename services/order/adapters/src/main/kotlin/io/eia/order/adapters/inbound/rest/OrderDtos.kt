@@ -58,3 +58,10 @@ internal data class OrderDto(
     val totalAmount: MoneyDto,
     val shippingAddress: AddressDto,
 )
+
+/** `OrderBatch`。 */
+@Serializable
+internal data class OrderBatchDto(
+    val orders: List<OrderDto>,
+    val notFound: List<String>,
+)
