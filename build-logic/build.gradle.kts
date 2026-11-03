@@ -10,6 +10,7 @@ dependencies {
     implementation(libs.gradle.detekt)
     implementation(libs.gradle.ktlint)
     implementation(libs.gradle.kover)
+    implementation(libs.gradle.protobuf)
 
     // convention plugin のテスト(#31)。TestKit で、実際の plugin を当てた小さなビルドを動かす
     testImplementation(gradleTestKit())

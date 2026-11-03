@@ -58,3 +58,23 @@ make verify PROFILE=order  # mTLS なしの接続を拒否すること・ゲー�
 
 ## 本番では
 開発用 CA と、このスクリプトは使わない。証明書の発行・配布・ローテーションは、Service Mesh か証明書の自動ローテーションの基盤で行う(ADR-0008)。
+
+## gRPC の接続が証明書のエラーで失敗するとき
+アラート `GrpcClientCertificateFailure`(呼び出し側)と `GrpcClientCertificateRejected`(受ける側)の対応(ADR-0042 §8)。
+
+証明書のエラーは再試行されず、Circuit Breaker も開かない。**直すまで、その依存先への呼び出しは失敗し続ける。**
+
+| `reason` | 意味 | 確かめること |
+|---|---|---|
+| `expired` | どちらかの証明書の期限切れ | 下の `make certs` で作り直す |
+| `untrusted` | 相手の証明書を信頼する CA で検証できない | CA を作り直した後に、片方のサービスだけが古い証明書で動いていないか |
+| `hostname_mismatch` | サーバ証明書の SAN に接続先がない | `gen-dev-certs.sh` の SAN と、呼び出し側の接続先の名前 |
+| `rejected_by_peer` | 相手が自分のクライアント証明書を拒否した | クライアント証明書の設定があるか、相手と同じ CA のものか |
+| `client_not_allowed`(受ける側) | SAN が許可の一覧にない | 受ける側の `{PREFIX}_TLS_ALLOWED_CLIENTS` と、クライアント証明書の SAN |
+
+```bash
+make certs                  # 確かめて、必要なら作り直す
+make up PROFILE=<profile>   # 証明書は起動時にしか読まないので、コンテナを作り直す
+```
+
+本番では、証明書の自動ローテーションの基盤の状態を先に確かめる(ADR-0008)。

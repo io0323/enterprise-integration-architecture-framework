@@ -29,6 +29,8 @@ include(
     ":platform:audit",
     ":platform:batch",
     ":platform:file-transfer",
+    ":platform:grpc",
+    ":platform:grpc-stubs",
     ":platform:inbox",
     ":platform:messaging-kafka",
     ":platform:observability",

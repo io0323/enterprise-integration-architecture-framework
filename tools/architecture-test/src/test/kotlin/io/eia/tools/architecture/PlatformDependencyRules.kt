@@ -29,6 +29,8 @@ internal object PlatformDependencyRules {
      * - file-transfer → security: S3 の資格情報を SecretProvider から取る(ADR-0032 §1・ADR-0019 §6)
      * - security → api: 401 / 403 / 503 を Problem Details で返す(ADR-0019 §5・ADR-0022 §2)
      * - api → observability: Problem Details の correlationId(ADR-0022 §2)
+     * - grpc → security: mTLS の鍵と証明書(ServerTls)・SAN の確認・JWT の検証の結果・トークンの取得(ADR-0042 §5)
+     * - grpc → observability: span の親と Correlation ID(ObservabilityContext。ADR-0042 §6)
      * - messaging-kafka → schema-registry: 書き込みのスキーマ ID(起動時に解決したもの)と受信時の書き手のスキーマ(ADR-0025 §3)
      * - messaging-kafka → observability: PRODUCER の span と Correlation ID(ADR-0025 §4・ADR-0018 §2)
      * - outbox → messaging-kafka: 記録のトピック・ヘッダ・ペイロード(EventTopic・EventMetadata・AvroEventSerializer。ADR-0007)
@@ -42,6 +44,7 @@ internal object PlatformDependencyRules {
             "audit" to setOf("security", "observability"),
             "batch" to setOf("file-transfer", "observability"),
             "file-transfer" to setOf("security"),
+            "grpc" to setOf("security", "observability"),
             "messaging-kafka" to setOf("schema-registry", "observability"),
             "outbox" to setOf("messaging-kafka", "observability"),
             "security" to setOf("api"),

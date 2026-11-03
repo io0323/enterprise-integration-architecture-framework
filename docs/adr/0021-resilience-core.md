@@ -76,6 +76,7 @@ Circuit Breaker とリトライバジェット(§8)は、1 回の試行の結果
 | 呼び出し元の締め切りで打ち切った `DeadlineExceeded`(`source = CALLER`) | 数えない | 依存先の状態ではなく、呼び出し元の残り時間を表す(§12) |
 | NonRetryable なエラー(4xx・業務エラー・契約違反) | 成功 | 依存先は応答している。呼び出し側の誤りで遮断すると、ほかの正しい呼び出しまで止まる |
 | `ResilienceRejection` | 数えない | 手元の判断で、依存先の状態を表さない |
+| `UncountedFailure` の印を付けたエラー | 数えない | 依存先の状態を表さない(例: 証明書の設定の誤りで接続できない。ADR-0042 §8)。Half-Open の枠は返す |
 | 例外・キャンセル | 数えない | 呼び出しは `Result` で失敗を返す約束(境界の例外は `catching` で変換する)。例外は約束の外なので、依存先の失敗とみなさない。Half-Open の枠は返す |
 
 呼び出し([block])の中で別の `Resilience` を使っていて、その `ResilienceRejection`(内側の依存先の遮断など)がそのまま返ってきた場合も、外側では数えず、リトライもしない。外側の依存先の状態ではないため。外側で別の扱いにしたいときは、呼び出しの中で別のエラーに写す。
@@ -237,3 +238,4 @@ Framework 13.1 のタイムバジェットは、入口に配分した時間を�
 - 2026-09-30: §12(呼び出し元の締め切りの引き継ぎ。`CallDeadline`)を追記した(P05 ①。Issue #48)。§11 と Consequences の「引き継がない」を改めた。呼び出し元の締め切りで打ち切った試行は Circuit Breaker とリトライバジェットに数えず(`DeadlineExceeded.source`)、メトリクスの `kind=caller_deadline` で数える(§1・§2・§3・§7 に反映した)。
 - 2026-10-01: P05 ⑥a で、`eia.resilience.timeouts{kind=caller_deadline}` を RED のダッシュボードのパネルにした(Prometheus では `eia_resilience_timeouts_total`)。急増したときのアラートの候補とし、しきい値は P14 で SLO と合わせて決める。
 - 2026-10-23: §3 の `HttpCallClassifier`・`HttpCallError`・`RetryAfter` を、`platform/reliability` から KMP の `shared/integration-sdk/http`(`io.eia.shared.sdk.http`)に移した(P11 ②a。ADR-0037 §2)。分類の規則は変えていない。`platform/reliability` は `ResilienceMetrics` だけになった。
+- 2026-11-03: §3 に `UncountedFailure` を足した(P13 ②。ADR-0042 §8)。証明書のエラーのように、NonRetryable だが依存先が応答したわけではないエラーを、Half-Open を閉じる「成功」に数えないため。

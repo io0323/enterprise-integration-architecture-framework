@@ -97,6 +97,12 @@ class ArchitectureSpec :
             ArchitectureRules.resilienceOnlyThroughMetrics(codeBase).assertNone()
         }
 
+        test("gRPC は platform/grpc と services の adapters・app だけで使い、チャネルとサーバは platform/grpc だけで作り、リフレクションは使わない(ADR-0042 §5)") {
+            ArchitectureRules.grpcOnlyInAllowedModules(codeBase).assertNone()
+            ArchitectureRules.grpcBuildersOnlyInPlatform(codeBase).assertNone()
+            ArchitectureRules.grpcReflectionForbidden(codeBase).assertNone()
+        }
+
         test("統合テストの Kafka は KafkaBrokerContainer で立てる(#170)") {
             ArchitectureRules.kafkaContainerOnlyThroughTestSupport(codeBase).assertNone()
         }

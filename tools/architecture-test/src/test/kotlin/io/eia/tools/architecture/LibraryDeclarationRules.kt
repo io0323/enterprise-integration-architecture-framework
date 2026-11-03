@@ -49,6 +49,14 @@ internal object LibraryDeclarationRules {
             "services/iot-bridge/adapters だけ。ADR-0038 §3",
         )
 
+    private val GRPC =
+        Library(
+            "gRPC の依存の宣言",
+            listOf("libs.grpc.", "libs.protobuf.", "\"io.grpc:", "\"com.google.protobuf:"),
+            listOf(Regex("""^platform/grpc/"""), Regex("""^platform/grpc-stubs/""")),
+            "platform/grpc と platform/grpc-stubs だけ。ADR-0042 §5",
+        )
+
     private val HADOOP_MARKERS = listOf("libs.hadoop.", "\"org.apache.hadoop:")
     private val HADOOP_RUNTIME_CHECKED = listOf(Regex("""^platform/"""), Regex("""^services/"""))
 
@@ -60,6 +68,7 @@ internal object LibraryDeclarationRules {
                     outsideAllowed(PARQUET, path, declaration),
                     outsideAllowed(TRANSFER_SECURITY, path, declaration),
                     outsideAllowed(HIVEMQ, path, declaration),
+                    outsideAllowed(GRPC, path, declaration),
                     hadoopAtRuntime(path, configuration, declaration),
                 )
             }

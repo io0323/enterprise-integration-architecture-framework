@@ -137,6 +137,21 @@ class ArchitectureRulesSpec :
                     listOf("UsesKafka.kt", "UsesAvro4kQualified.kt", "UsesAvro.kt", "UsesApicurio.kt", "UsesFrameworks.kt")
             }
 
+            test("gRPC を許可したモジュールの外の本番コードで使う") {
+                ArchitectureRules.grpcOnlyInAllowedModules(violations).fileNames() shouldContainExactlyInAnyOrder
+                    listOf("UsesGrpc.kt", "UsesGrpcQualified.kt")
+            }
+
+            test("サービスが gRPC のチャネルやサーバを直接作る") {
+                ArchitectureRules.grpcBuildersOnlyInPlatform(violations).fileNames() shouldContainExactlyInAnyOrder
+                    listOf("BuildsGrpcChannel.kt", "BuildsGrpcServer.kt")
+            }
+
+            test("gRPC のリフレクションを使う(許可したモジュールでも)") {
+                ArchitectureRules.grpcReflectionForbidden(violations).fileNames() shouldContainExactlyInAnyOrder
+                    listOf("UsesGrpcReflection.kt")
+            }
+
             test("AWS SDK を platform/file-transfer と audit のアンカー以外の本番コードで使う") {
                 ArchitectureRules.awsSdkOnlyInAllowedModules(violations).fileNames() shouldContainExactlyInAnyOrder
                     listOf("UsesAwsSdk.kt", "UsesAwsSdkOutsideAnchor.kt")
@@ -160,6 +175,7 @@ class ArchitectureRulesSpec :
                         "platform/reliability/build.gradle.kts" to "Parquet・Hadoop の依存の宣言",
                         "platform/reliability/build.gradle.kts" to "SFTP・PGP の依存の宣言",
                         "platform/reliability/build.gradle.kts" to "HiveMQ MQTT Client の依存の宣言",
+                        "platform/reliability/build.gradle.kts" to "gRPC の依存の宣言",
                         "platform/file-transfer/build.gradle.kts" to "Hadoop は compileOnly だけ",
                     )
             }
@@ -223,6 +239,9 @@ class ArchitectureRulesSpec :
                 ArchitectureRules.kafkaContainerOnlyThroughTestSupport(compliant).shouldBeEmpty()
                 ArchitectureRules.messagingLibrariesOnlyInAllowedModules(compliant).shouldBeEmpty()
                 ArchitectureRules.awsSdkOnlyInAllowedModules(compliant).shouldBeEmpty()
+                ArchitectureRules.grpcOnlyInAllowedModules(compliant).shouldBeEmpty()
+                ArchitectureRules.grpcBuildersOnlyInPlatform(compliant).shouldBeEmpty()
+                ArchitectureRules.grpcReflectionForbidden(compliant).shouldBeEmpty()
                 ArchitectureRules.parquetOnlyInFileTransfer(compliant).shouldBeEmpty()
                 ArchitectureRules.transferSecurityOnlyInFileTransfer(compliant).shouldBeEmpty()
                 LibraryDeclarationRules.violations(compliant).shouldBeEmpty()
