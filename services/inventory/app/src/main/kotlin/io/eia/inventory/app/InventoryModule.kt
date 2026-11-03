@@ -3,12 +3,15 @@ package io.eia.inventory.app
 import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import io.eia.inventory.adapters.inbound.InventoryCommandHandlers
+import io.eia.inventory.adapters.inbound.grpc.StockQueryGrpcService
 import io.eia.inventory.adapters.out.outbox.InventoryEventSchemas
 import io.eia.inventory.adapters.out.outbox.OutboxInventoryReplies
 import io.eia.inventory.adapters.out.persistence.ExposedTransactionRunner
 import io.eia.inventory.adapters.out.persistence.InboxProcessedCommands
 import io.eia.inventory.adapters.out.persistence.JdbcReservationStore
 import io.eia.inventory.adapters.out.persistence.JdbcStockLedger
+import io.eia.inventory.adapters.out.persistence.JdbcStockQueries
+import io.eia.inventory.application.port.inbound.GetStockLevelsUseCase
 import io.eia.inventory.application.port.inbound.PurgeExpiredRecordsUseCase
 import io.eia.inventory.application.port.inbound.ReleaseStockUseCase
 import io.eia.inventory.application.port.inbound.ReserveStockUseCase
@@ -16,7 +19,9 @@ import io.eia.inventory.application.port.outbound.InventoryReplies
 import io.eia.inventory.application.port.outbound.ProcessedCommands
 import io.eia.inventory.application.port.outbound.ReservationStore
 import io.eia.inventory.application.port.outbound.StockLedger
+import io.eia.inventory.application.port.outbound.StockQueries
 import io.eia.inventory.application.port.outbound.TransactionRunner
+import io.eia.inventory.application.usecase.GetStockLevelsService
 import io.eia.inventory.application.usecase.PurgeExpiredRecordsService
 import io.eia.inventory.application.usecase.ReleaseStockService
 import io.eia.inventory.application.usecase.ReserveStockService
@@ -32,6 +37,8 @@ import io.eia.platform.schemaregistry.ApicurioRegistryClient
 import io.eia.platform.schemaregistry.SchemaIdBook
 import io.eia.platform.schemaregistry.SchemaRegistryConfig
 import io.eia.platform.schemaregistry.WriterSchemas
+import io.eia.platform.security.jwt.JwtVerifier
+import io.eia.platform.security.jwt.JwtVerifierConfig
 import io.eia.platform.security.secret.Secret
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
@@ -39,6 +46,7 @@ import org.apache.kafka.clients.consumer.KafkaConsumer
 import org.apache.kafka.clients.producer.KafkaProducer
 import org.apache.kafka.clients.producer.Producer
 import org.jetbrains.exposed.v1.jdbc.Database
+import org.koin.core.module.Module
 import org.koin.dsl.module
 
 /**
@@ -84,6 +92,7 @@ internal fun inventoryModule(
     single<ReleaseStockUseCase> { ReleaseStockService(get(), get(), get(), get(), get()) }
     single<PurgeExpiredRecordsUseCase> { PurgeExpiredRecordsService(get(), get(), config.retention) }
     single { InventoryCommandHandlers(get(), get()) }
+    stockQueryDefinitions(config, runtime)
     // DLQ だけに使う(返事は Outbox で発行する)
     single<Producer<ByteArray, ByteArray>> {
         KafkaProducer(KafkaProducerSettings(serve.bootstrapServers, clientId = "inventory-service").toProperties())
@@ -100,6 +109,28 @@ internal fun inventoryModule(
         } else {
             EventConsumer(consumer, InventoryCommandHandlers.GROUP_ID, subscriptions, deadLetters, runtime, committer = committer)
         }
+    }
+}
+
+/** 在庫の照会の gRPC(ADR-0042)。 */
+private fun Module.stockQueryDefinitions(
+    config: InventoryConfig,
+    runtime: ObservabilityRuntime,
+) {
+    single<StockQueries> { JdbcStockQueries(get()) }
+    single<GetStockLevelsUseCase> { GetStockLevelsService(get()) }
+    single { StockQueryGrpcService(get()) }
+    single {
+        JwtVerifier(
+            JwtVerifierConfig(
+                issuer = requireNotNull(config.grpc.issuer) { "OIDC_ISSUER が必要です" },
+                audience = config.grpc.audience,
+                jwksUri = requireNotNull(config.grpc.jwksUri) { "OIDC_JWKS_URI が必要です" },
+                // 呼び出し元のクライアントが分からないトークンは受け付けない
+                requireClientId = true,
+            ),
+            meter = runtime.meter,
+        )
     }
 }
 

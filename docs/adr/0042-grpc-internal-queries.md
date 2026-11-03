@@ -92,7 +92,7 @@ Konsist で強制する。
 **サーバ**(`GrpcServerInterceptor`・`grpcResponse`)
 - 呼び出し元の deadline と、サーバの上限(既定 3 秒)の短い方を `CallDeadline` で置く。deadline のない呼び出しにも上限を適用する。
 - `grpcResponse` が残り時間で打ち切り、`DEADLINE_EXCEEDED` を返す。呼び出し元が切れたときは gRPC の取り消しでコルーチンが止まる。
-- 待ち状態の JDBC はコルーチンの打ち切りでは止まらないので、DB は `statement_timeout` で切る(ADR-0024 §3)。inventory と shipping の設定は P13 ③・④ で足す。
+- 待ち状態の JDBC はコルーチンの打ち切りでは止まらないので、DB は `statement_timeout` で切る(ADR-0024 §3)。inventory の設定は P13 ③ で足した(`newTransaction`)。shipping は P13 ④ で足す。
 
 **伝搬**: `traceparent` は `EiaTraceContextPropagator`(`shared/resilience` の `TraceParent` を使う)で、Correlation ID は `x-correlation-id` で metadata に入れる。受ける側で値がない・不正なら Correlation ID を採番する。社内の mTLS で確かめた相手だけが接続するので、受け取った `traceparent` は信頼する(Gateway が外部の値を捨てるのとは違う。ADR-0023 §4)。
 
@@ -174,3 +174,4 @@ grpc-java は TLS のハンドシェイクの失敗をすべて `UNAVAILABLE` �
 - サービスが増えるたびに、証明書の SAN(`gen-dev-certs.sh`)と許可の一覧の設定が要る。
 
 ## 改訂履歴
+- 2026-11-03: P13 ③ で inventory-service に実装した(gRPC のポート 9443。スコープ `inventory.stock:read`、`aud` `inventory-grpc`、許可の一覧は設定で必須)。

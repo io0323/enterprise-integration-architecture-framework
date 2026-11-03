@@ -5,6 +5,7 @@ import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.ValidationError
 import io.eia.shared.kernel.err
 import io.eia.shared.kernel.ok
+import kotlin.time.Instant
 
 /** 識別子(Saga ID・注文 ID・SKU)の長さの上限(DB の列と同じ)。 */
 public const val MAX_IDENTIFIER_LENGTH: Int = 64
@@ -109,3 +110,9 @@ public fun validateIds(
         }
     return if (violations.isEmpty()) ok(Unit) else err(ValidationError(violations))
 }
+
+/** 読み取りのための在庫の値(在庫の照会。ADR-0042 §4)。[updatedAt] はこの SKU の行を最後に更新した時刻。 */
+public data class StockSnapshot(
+    public val level: StockLevel,
+    public val updatedAt: Instant,
+)

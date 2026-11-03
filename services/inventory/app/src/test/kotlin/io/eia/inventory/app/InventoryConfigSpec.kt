@@ -7,7 +7,9 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 
 private fun <T> Result<T, *>.ok(): T =
     when (this) {
@@ -28,7 +30,16 @@ class InventoryConfigSpec :
             config.retention shouldBe SettledRetention.DEFAULT
             config.purgeInterval shouldBe 1.hours
             (config.forServe() as Result.Err).error.violations.map { it.field } shouldBe
-                listOf(InventoryConfig.KAFKA_BOOTSTRAP, InventoryConfig.SCHEMA_REGISTRY_URL)
+                listOf(
+                    InventoryConfig.KAFKA_BOOTSTRAP,
+                    InventoryConfig.SCHEMA_REGISTRY_URL,
+                    InventoryConfig.GRPC_TLS.allowedClients,
+                    InventoryConfig.OIDC_ISSUER,
+                    InventoryConfig.OIDC_JWKS_URI,
+                )
+            config.grpc.port shouldBe 9443
+            config.grpc.audience shouldBe "inventory-grpc"
+            config.grpc.maxBudget shouldBe 3.seconds
         }
 
         test("値を読む(期間は ISO 8601 と Kotlin の表記)") {
@@ -42,8 +53,16 @@ class InventoryConfigSpec :
                                 "INVENTORY_HEALTH_PORT" to "0",
                                 "INVENTORY_SETTLED_RETENTION" to "P45D",
                                 "INVENTORY_PURGE_INTERVAL" to "10m",
+                                "INVENTORY_GRPC_PORT" to "0",
+                                "INVENTORY_GRPC_TLS_ALLOWED_CLIENTS" to "bff-graphql, other",
+                                "INVENTORY_GRPC_MAX_BUDGET" to "500ms",
+                                "OIDC_ISSUER" to "http://issuer",
+                                "OIDC_JWKS_URI" to "http://issuer/jwks",
                             ),
                     ).ok()
+            config.grpc.port shouldBe 0
+            config.grpc.allowedClients shouldBe setOf("bff-graphql", "other")
+            config.grpc.maxBudget shouldBe 500.milliseconds
             config.healthPort shouldBe 0
             config.retention.value shouldBe 45.days
             config.purgeInterval shouldBe 10.minutes

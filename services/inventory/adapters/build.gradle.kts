@@ -11,6 +11,9 @@ dependencies {
     implementation(project(":platform:outbox"))
     implementation(project(":platform:inbox"))
     implementation(project(":platform:observability"))
+    // 在庫の照会の gRPC(INT-INVENTORY-003。ADR-0042)。生成したスタブの型は app の配線でも見える
+    api(project(":platform:grpc"))
+    api(project(":platform:grpc-stubs"))
     // 永続化: Exposed はトランザクションの管理に使い、ロックの意味が重要な SQL は PreparedStatement で書く(MODULE_DESIGN §3)
     api(libs.exposed.core)
     api(libs.exposed.jdbc)
