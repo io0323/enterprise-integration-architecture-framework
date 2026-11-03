@@ -37,9 +37,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -49,7 +47,6 @@ import org.slf4j.LoggerFactory
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
-import kotlin.time.Duration
 
 /**
  * b2b-gateway の常駐のプロセス(ADR-0040)。次の 4 つを、それぞれの間隔で繰り返す。
@@ -142,19 +139,23 @@ internal class B2bGatewayServer private constructor(
                 val intervals = config.intervals
                 scope.launch {
                     running.set(true)
-                    repeatEvery(intervals.poll) { B2bGatewayJobs.pollOnce(koin) }
+                    B2bGatewayJobs.repeatEvery("poll", intervals.poll) { B2bGatewayJobs.pollOnce(koin) }
                 }
-                scope.launch { repeatEvery(intervals.send) { B2bGatewayJobs.sendOnce(koin) } }
-                scope.launch { repeatEvery(intervals.submit) { B2bGatewayJobs.submitOnce(koin) } }
-                scope.launch { repeatEvery(intervals.metrics) { B2bGatewayJobs.refreshSnapshot(koin) } }
+                scope.launch { B2bGatewayJobs.repeatEvery("send", intervals.send) { B2bGatewayJobs.sendOnce(koin) } }
+                scope.launch { B2bGatewayJobs.repeatEvery("submit", intervals.submit) { B2bGatewayJobs.submitOnce(koin) } }
+                scope.launch { B2bGatewayJobs.repeatEvery("metrics", intervals.metrics) { B2bGatewayJobs.refreshSnapshot(koin) } }
                 if (koin.getOrNull<DeliverFilesUseCase>() != null) {
-                    scope.launch { repeatEvery(config.handoff.interval) { B2bGatewayJobs.deliverFilesOnce(koin) } }
+                    scope.launch {
+                        B2bGatewayJobs.repeatEvery("deliver-files", config.handoff.interval) { B2bGatewayJobs.deliverFilesOnce(koin) }
+                    }
                 } else {
                     logger.info("取引先に送るファイルの受け渡しの場所が設定されていないので、ファイルを送りません({})", B2bGatewayConfig.FILE_S3_ENDPOINT)
                 }
                 val anchorCycle = koin.getOrNull<AnchorCycle>()
                 if (anchorCycle != null) {
-                    scope.launch { repeatEvery(config.anchor.interval) { B2bGatewayJobs.anchorOnce(anchorCycle, dataSource) } }
+                    scope.launch {
+                        B2bGatewayJobs.repeatEvery("anchor", config.anchor.interval) { B2bGatewayJobs.anchorOnce(anchorCycle, dataSource) }
+                    }
                 } else {
                     logger.warn("監査のアンカーの保存は無効です({}=false)。末尾の記録の改竄と削除は検出できません", B2bGatewayConfig.ANCHOR_ENABLED)
                 }
@@ -178,16 +179,6 @@ internal class B2bGatewayServer private constructor(
                 logger.info("b2b-gateway を起動しました(取引先 {} 件)", koin.get<EdiPartners>().inbound.size)
                 B2bGatewayServer(server, koin, runtime, scope)
             }
-
-        private suspend fun repeatEvery(
-            interval: Duration,
-            block: suspend () -> Unit,
-        ) {
-            while (currentCoroutineContext().isActive) {
-                block()
-                delay(interval)
-            }
-        }
 
         @Suppress("TooGenericExceptionCaught") // 接続の失敗はどの種類でも DOWN にする
         private fun databaseReachable(dataSource: HikariDataSource): Boolean =

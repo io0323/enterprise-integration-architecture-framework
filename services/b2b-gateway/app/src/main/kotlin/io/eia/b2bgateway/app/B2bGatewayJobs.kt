@@ -12,10 +12,14 @@ import io.eia.platform.audit.anchor.AnchorOutcome
 import io.eia.shared.kernel.Result
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import org.koin.core.Koin
 import org.slf4j.LoggerFactory
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.time.Duration
 
 /**
  * b2b-gateway の常駐のプロセス([B2bGatewayServer])が繰り返す仕事。1 回分を実行し、結果をログとメトリクスに出す
@@ -24,12 +28,45 @@ import java.util.concurrent.atomic.AtomicReference
 internal object B2bGatewayJobs {
     private val logger = LoggerFactory.getLogger(B2bGatewayJobs::class.java)
 
+    /**
+     * [block] を [interval] ごとに繰り返す。想定していない例外でも止めずに次の回へ進む(ループが止まっても health は UP のままで、外から気づけないため)。
+     * ログには例外の種類だけを残す(メッセージに取引先のデータが入るかもしれない)。
+     */
+    @Suppress("TooGenericExceptionCaught") // どの例外でも繰り返しを止めない
+    internal suspend fun repeatEvery(
+        job: String,
+        interval: Duration,
+        block: suspend () -> Unit,
+    ) {
+        while (currentCoroutineContext().isActive) {
+            try {
+                block()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logger.error("繰り返しの仕事 {} が想定していない例外で失敗しました。次の回にやり直します(error.type={})", job, e::class.qualifiedName)
+            }
+            delay(interval)
+        }
+    }
+
     /** 取引先ごとに受け取りのディレクトリを 1 回見回る。 */
+    @Suppress("TooGenericExceptionCaught") // どの例外でも、ほかの取引先の見回りを止めない
     internal suspend fun pollOnce(koin: Koin) {
         val poll = koin.get<PollInboxUseCase>()
         val metrics = koin.get<B2bGatewayMetrics>()
         koin.get<EdiPartners>().inbound.forEach { partnerId ->
-            when (val summary = poll(partnerId)) {
+            val summary =
+                try {
+                    poll(partnerId)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    metrics.pollCrashed(partnerId)
+                    logger.error("取引先 {} の見回りが想定していない例外で失敗しました(error.type={})", partnerId, e::class.qualifiedName)
+                    return@forEach
+                }
+            when (summary) {
                 is Result.Ok -> {
                     metrics.polled(partnerId, summary.value)
                     summary.value.failed.forEach { logger.warn("取引先 {} のファイル {} を受け付けられません({})", partnerId, it.name, it.error.code) }

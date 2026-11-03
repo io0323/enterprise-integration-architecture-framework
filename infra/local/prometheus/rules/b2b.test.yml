@@ -102,6 +102,8 @@ tests:
         values: "1x30"
       - series: 'eia_b2b_inbox_failures_total{job="b2b-gateway",trading_partner_id="p1",b2b_reason="list"}'
         values: "0+1x30"
+      - series: 'eia_b2b_inbox_failures_total{job="b2b-gateway",trading_partner_id="p2",b2b_reason="crash"}'
+        values: "0+1x30"
       - series: 'eia_b2b_acknowledgements_total{job="b2b-gateway",trading_partner_id="p1",b2b_outcome="failed"}'
         values: "0+1x30"
       - series: 'eia_b2b_order_submissions_total{job="b2b-gateway",b2b_outcome="failed"}'
@@ -116,6 +118,16 @@ tests:
           - exp_labels: { severity: warning, trading_partner_id: p1 }
             exp_annotations:
               summary: "取引先 p1 のファイルが、受け付けに失敗して処理中のディレクトリに残っている"
+              runbook: docs/runbooks/b2b-partner-credentials.md#受け取りのディレクトリ
+      - eval_time: 10m
+        alertname: B2bInboxPollCrashing
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: B2bInboxPollCrashing
+        exp_alerts:
+          - exp_labels: { severity: warning, trading_partner_id: p2 }
+            exp_annotations:
+              summary: "取引先 p2 の見回りが想定していない例外で失敗し続けている(その取引先の文書を受け付けられない)"
               runbook: docs/runbooks/b2b-partner-credentials.md#受け取りのディレクトリ
       - eval_time: 25m
         alertname: B2bInboxUnavailable

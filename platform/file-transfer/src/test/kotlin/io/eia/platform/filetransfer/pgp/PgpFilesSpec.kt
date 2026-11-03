@@ -20,7 +20,12 @@ import org.bouncycastle.openpgp.operator.jcajce.JcePublicKeyKeyEncryptionMethodG
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.Date
+import kotlin.io.path.exists
 import kotlin.random.Random
+
+private const val RANDOM_INPUT_SEED = 20261103
+private const val RANDOM_INPUTS = 5_000
+private const val RANDOM_INPUT_BYTES = 512
 
 class PgpFilesSpec :
     FunSpec({
@@ -121,6 +126,21 @@ class PgpFilesSpec :
 
             decrypt(file("not pgp at all".toByteArray())).first.shouldBeInstanceOf<PgpVerification.Rejected>()
             decrypt(file(ByteArray(0))).first.shouldBeInstanceOf<PgpVerification.Rejected>()
+        }
+
+        test("Bouncy Castle が非検査例外で知らせる壊れたパケット(未対応の版の公開鍵)も、例外を外に出さず不合格") {
+            // 旧形式のパケットの見出し(公開鍵・長さ 1 バイト)+ 長さ + 未対応の版(193)。CI の E2E で受信のループを止めた入力の形
+            val packet = byteArrayOf(0x98.toByte(), 4, 0xC1.toByte(), 0, 0, 0)
+            decrypt(file(packet)).first shouldBe PgpVerification.Rejected(PgpRejection.MALFORMED)
+        }
+
+        test("でたらめなバイト列は、どの形でも例外を外に出さず不合格(本文も残さない)") {
+            val random = Random(RANDOM_INPUT_SEED)
+            repeat(RANDOM_INPUTS) {
+                val (verification, target) = decrypt(file(random.nextBytes(RANDOM_INPUT_BYTES)))
+                verification.shouldBeInstanceOf<PgpVerification.Rejected>()
+                target.exists() shouldBe false
+            }
         }
 
         test("署名のない暗号文・改竄の検知(MDC)のない古い形式は不合格") {

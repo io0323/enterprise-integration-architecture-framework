@@ -71,6 +71,15 @@ groups:
           summary: "取引先 {{ $labels.trading_partner_id }} の受け取りのディレクトリを見られない(取引先の SFTP・鍵・ホスト鍵)"
           runbook: docs/runbooks/b2b-partner-credentials.md#期限が切れたとき
 
+      - alert: B2bInboxPollCrashing
+        expr: sum by (trading_partner_id) (increase(eia_b2b_inbox_failures_total{b2b_reason="crash"}[5m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "取引先 {{ $labels.trading_partner_id }} の見回りが想定していない例外で失敗し続けている(その取引先の文書を受け付けられない)"
+          runbook: docs/runbooks/b2b-partner-credentials.md#受け取りのディレクトリ
+
       - alert: B2bAcknowledgementSendFailing
         expr: sum by (trading_partner_id) (increase(eia_b2b_acknowledgements_total{b2b_outcome="failed"}[5m])) > 0
         for: 15m
