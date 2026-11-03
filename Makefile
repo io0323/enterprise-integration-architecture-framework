@@ -4,7 +4,7 @@ GRADLE := ./gradlew
 .PHONY: help setup build check arch-test contract-check schemas alerts-test integration-test format env not-root certs pgp-keys order-dist legacy-dist saga-dist batch-dist file-dist b2b-dist saas-dist iot-dist up down logs ps verify stats clean e2e audit-verify legacy-simulate dlq-replay batch-etl file-exchange b2b-codes iot-reprocess-dlq
 
 # ローカル基盤(infra/local。ADR-0016)
-# PROFILE: core / cdc / iot / file / b2b / chaos / order / saga / batch / saas。core は常に含まれる(積み上げ方式)。空白区切りで複数指定できる。
+# PROFILE: core / cdc / iot / file / b2b / chaos / order / saga / batch / saas / bff。core は常に含まれる(積み上げ方式)。空白区切りで複数指定できる。
 PROFILE ?= core
 INFRA := infra/local
 # E2E=1: E2E 用の設定(tests/e2e/e2e.env。待ち時間を短くする)を足して起動する(例: make up PROFILE="order cdc saga batch file b2b saas iot" E2E=1)
@@ -18,7 +18,7 @@ EIAF_UID := $(shell id -u)
 EIAF_GID := $(shell id -g)
 export EIAF_UID EIAF_GID
 # 開発用の証明書(infra/local/certs)を読むコンテナ。証明書を作り直したら(certs/.renewed)、make up で作り直す
-CERT_CONSUMERS := order-service apisix webhook-receiver inventory-service shipping-service
+CERT_CONSUMERS := order-service apisix webhook-receiver inventory-service shipping-service bff-graphql
 
 help: ## コマンド一覧
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -93,10 +93,13 @@ saas-dist: ## SaaS 連携(saas-mock・webhook-receiver・integration-flow)と sc
 b2b-dist: ## B2B / EDI Gateway(b2b-gateway)のイメージの中身(installDist)を作る(ADR-0040)
 	$(GRADLE) :services:b2b-gateway:app:installDist
 
+bff-dist: ## 画面のための集約(bff-graphql)のイメージの中身(installDist)を作る(ADR-0043)
+	$(GRADLE) :services:bff-graphql:app:installDist
+
 iot-dist: ## IoT の橋渡し(iot-bridge)と schema-publish のイメージの中身(installDist)を作る(ADR-0039)
 	$(GRADLE) :services:iot-bridge:app:installDist :tools:schema-publish:installDist
 
-up: not-root env certs $(if $(filter order,$(PROFILE)),order-dist) $(if $(filter cdc,$(PROFILE)),legacy-dist) $(if $(filter saga,$(PROFILE)),saga-dist) $(if $(filter batch,$(PROFILE)),batch-dist) $(if $(filter file,$(PROFILE)),file-dist) $(if $(filter b2b,$(PROFILE)),b2b-dist pgp-keys) $(if $(filter saas,$(PROFILE)),saas-dist) $(if $(filter iot,$(PROFILE)),iot-dist) ## ローカル基盤を起動し、全コンテナが healthy になるまで待つ(例: make up PROFILE=cdc)
+up: not-root env certs $(if $(filter order,$(PROFILE)),order-dist) $(if $(filter cdc,$(PROFILE)),legacy-dist) $(if $(filter saga,$(PROFILE)),saga-dist) $(if $(filter bff,$(PROFILE)),bff-dist) $(if $(filter batch,$(PROFILE)),batch-dist) $(if $(filter file,$(PROFILE)),file-dist) $(if $(filter b2b,$(PROFILE)),b2b-dist pgp-keys) $(if $(filter saas,$(PROFILE)),saas-dist) $(if $(filter iot,$(PROFILE)),iot-dist) ## ローカル基盤を起動し、全コンテナが healthy になるまで待つ(例: make up PROFILE=cdc)
 	@if [ -f $(INFRA)/certs/.renewed ]; then \
 		$(COMPOSE) --profile '*' rm --stop --force $(CERT_CONSUMERS) >/dev/null 2>&1 || true; \
 		rm -f $(INFRA)/certs/.renewed; \

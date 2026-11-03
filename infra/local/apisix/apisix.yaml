@@ -45,17 +45,24 @@ routes:
               anyOf:
                 - {const: order-api}
                 - {type: array, contains: {const: order-api}}
-      # ADR-0023 §5(独自のコード 2): 検証したトークンの azp を X-Eiaf-Client-Id に入れ、Rate Limit のキーにする。
+      # ADR-0023 §5(独自のコード 2): 検証したトークンの azp を X-Eiaf-Client-Id に入れ、Rate Limit のキーにする。azp から枠を引いて
+      # eiaf_rate_limit に入れる(limit-count の count)。枠の値はコードに書かず、compose の環境変数から読む(ADR-0043 §9)。
+      # 一覧にない azp は既定の枠で数える。既定の枠が正の整数であることは compose の apisix の entrypoint が起動の前に確かめるので、変数は空にならない。
       # openid-connect(優先度 2599)の後、limit-count(1002)の前に動かす。外部から来た X-Eiaf-Client-Id は proxy-rewrite が
       # 先に(rewrite のフェーズで)消すので、ここで入れた値だけが使われる。X-Userinfo は上流に送らない。
-      serverless-pre-function:
+      serverless-pre-function: &client-quota
         _meta:
           priority: 2000
         phase: access
         functions:
           - |
+            local core = require("apisix.core")
+            local default_quota = tonumber("${{EIAF_RATE_LIMIT_DEFAULT}}")
+            local quotas = {}
+            for client, quota in string.gmatch("${{EIAF_RATE_LIMIT_CLIENTS}}", "([^,=]+)=([1-9]%d*)") do
+              quotas[client] = tonumber(quota)
+            end
             return function(conf, ctx)
-              local core = require("apisix.core")
               local info = core.request.header(ctx, "X-Userinfo")
               core.request.set_header(ctx, "X-Userinfo", nil)
               local decoded = info and ngx.decode_base64(info)
@@ -65,16 +72,17 @@ routes:
                 return 401, {type = "https://eiaf.example/problems/unauthorized", title = "Unauthorized", status = 401}
               end
               core.request.set_header(ctx, "X-Eiaf-Client-Id", azp)
+              ctx.var.eiaf_rate_limit = quotas[azp] or default_quota
             end
       # クライアント(azp)ごとの Rate Limit(Framework 5.4)。超えたら 429 + Retry-After(Problem Details)
-      limit-count:
+      limit-count: &client-rate-limit
         _meta:
           error_response:
             type: https://eiaf.example/problems/rate-limited
             title: Too many requests
             status: 429
             detail: The rate limit was exceeded.
-        count: 60
+        count: "$eiaf_rate_limit"
         time_window: 60
         key_type: var
         key: http_x_eiaf_client_id
@@ -87,7 +95,7 @@ routes:
           remove: [X-Eiaf-Client-Id]
       # ADR-0023 §5(独自のコード 3): ゲートウェイ自身が返した 401 / 429 を application/problem+json にし、429 には
       # Retry-After(整数の秒。RFC 9110 §10.2.3。limit-count の X-RateLimit-Reset を切り上げる)を付ける。上流の応答は変えない
-      serverless-post-function:
+      serverless-post-function: &gateway-problem-headers
         phase: header_filter
         functions:
           - |
@@ -115,6 +123,57 @@ routes:
       nodes:
         "order-service:8443": 1
       # mTLS のクライアント証明書(SAN apisix。order-service の許可の一覧。ADR-0024 §6)
+      tls:
+        client_cert: "${{GATEWAY_CLIENT_CERT}}"
+        client_key: "${{GATEWAY_CLIENT_KEY}}"
+
+  # 画面のための集約(INT-STOREFRONT-001。ADR-0043)。公開パス /storefront/v1/... → bff-graphql の /v1/...(ADR-0005)。
+  # スコープは項目ごとに bff-graphql が確かめる(ADR-0043 §7)。複雑度の枠も bff-graphql が持つ(ADR-0043 §9)
+  - id: storefront-graphql
+    uri: /storefront/v1/*
+    plugins:
+      openid-connect:
+        _meta:
+          error_response:
+            type: https://eiaf.example/problems/unauthorized
+            title: Unauthorized
+            status: 401
+        client_id: bff-graphql
+        client_secret: not-used-bearer-only
+        discovery: http://keycloak:8080/realms/eiaf/.well-known/openid-configuration
+        bearer_only: true
+        use_jwks: true
+        realm: eiaf
+        set_userinfo_header: true
+        claim_validator:
+          issuer:
+            valid_issuers: ["http://localhost:19180/realms/eiaf"]
+        claim_schema:
+          type: object
+          required: [aud, azp]
+          properties:
+            azp: {type: string, minLength: 1}
+            aud:
+              anyOf:
+                - {const: bff-graphql}
+                - {type: array, contains: {const: bff-graphql}}
+      serverless-pre-function: *client-quota
+      limit-count: *client-rate-limit
+      proxy-rewrite:
+        regex_uri: ["^/storefront(/v[0-9]+/.*)", "$1"]
+        headers:
+          remove: [X-Eiaf-Client-Id]
+      serverless-post-function: *gateway-problem-headers
+    upstream:
+      type: roundrobin
+      scheme: https
+      pass_host: node
+      # 読み取りだけだが、下流を二重に呼ばせない。リトライは BFF が下流ごとに行う
+      retries: 0
+      # 上流のタイムアウトはリクエストの予算(5 秒)より長くする(ADR-0043 §6)
+      timeout: {connect: 2, send: 15, read: 15}
+      nodes:
+        "bff-graphql:8443": 1
       tls:
         client_cert: "${{GATEWAY_CLIENT_CERT}}"
         client_key: "${{GATEWAY_CLIENT_KEY}}"

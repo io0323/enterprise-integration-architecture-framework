@@ -46,6 +46,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.net.InetSocketAddress
 import java.net.URI
+import java.net.URLDecoder
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
@@ -274,8 +275,15 @@ class BffAppIT :
                 .getValue("status")
                 .jsonPrimitive.content shouldBe "SHIPPED"
             orderCalls.size shouldBe 1
-            requestedScopes.toSet().map { it.substringAfter("scope=").substringBefore('&').replace("%3A", ":") }.toSet() shouldBe
-                setOf("sales.order:read", "inventory.stock:read", "shipping.shipment:read")
+            requestedScopes
+                .map { URLDecoder.decode(it.substringAfter("scope=").substringBefore('&'), Charsets.UTF_8) }
+                .map { it.split(' ').toSet() }
+                .toSet() shouldBe
+                setOf(
+                    setOf("sales.order:read", "order-api-audience"),
+                    setOf("inventory.stock:read", "inventory-grpc-audience"),
+                    setOf("shipping.shipment:read", "shipping-grpc-audience"),
+                )
         }
 
         test("トークンがない・aud が違う・azp がないトークンは 401(mTLS の Gateway からでも)") {

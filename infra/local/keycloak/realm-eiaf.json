@@ -75,6 +75,31 @@
       ]
     },
     {
+      "name": "sales.order:read-address",
+      "description": "注文の届け先の住所を BFF から読む(個人情報。ADR-0043 §7)",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "true", "display.on.consent.screen": "false" }
+    },
+    {
+      "name": "bff-graphql-audience",
+      "description": "aud に bff-graphql を入れる(画面のための集約を呼ぶクライアント。CLAUDE.md §5: JWT は aud を検証する)",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "false", "display.on.consent.screen": "false" },
+      "protocolMappers": [
+        {
+          "name": "audience-bff-graphql",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "bff-graphql",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
       "name": "order-api-audience",
       "description": "aud に order-api を入れる(CLAUDE.md §5: JWT は aud を検証する)",
       "protocol": "openid-connect",
@@ -109,7 +134,7 @@
       "implicitFlowEnabled": false,
       "fullScopeAllowed": false,
       "defaultClientScopes": ["order-api-audience"],
-      "optionalClientScopes": ["sales.order:read", "sales.order:write", "sales.order:report", "inventory.stock:read", "inventory-grpc-audience", "shipping.shipment:read", "shipping-grpc-audience"]
+      "optionalClientScopes": ["sales.order:read", "sales.order:write", "sales.order:report", "inventory.stock:read", "inventory-grpc-audience", "shipping.shipment:read", "shipping-grpc-audience", "sales.order:read-address", "bff-graphql-audience"]
     },
     {
       "clientId": "eiaf-e2e-b",
@@ -158,6 +183,22 @@
       "fullScopeAllowed": false,
       "defaultClientScopes": ["order-api-audience"],
       "optionalClientScopes": ["sales.order:write"]
+    },
+    {
+      "clientId": "eiaf-bff-graphql",
+      "name": "画面のための集約(bff-graphql)。注文・在庫・出荷を読むだけ。書き込みのスコープを持たない(confused deputy の緩和。ADR-0043 §7)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${EIAF_BFF_GRAPHQL_CLIENT_SECRET}",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "fullScopeAllowed": false,
+      "defaultClientScopes": [],
+      "optionalClientScopes": ["sales.order:read", "order-api-audience", "inventory.stock:read", "inventory-grpc-audience", "shipping.shipment:read", "shipping-grpc-audience"]
     }
   ]
 }
