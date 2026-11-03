@@ -52,6 +52,8 @@ class Workspace private constructor(
         return this
     }
 
+    fun read(path: String): String = root.resolve(path).readText()
+
     fun delete(path: String): Workspace {
         root.resolve(path).deleteExisting()
         return this

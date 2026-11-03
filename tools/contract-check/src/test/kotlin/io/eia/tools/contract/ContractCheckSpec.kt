@@ -31,6 +31,8 @@ private const val PROTO_STOCK = "contracts/proto/io/eia/inventory/v1/stock_query
 private const val PROTO_SHIPMENT = "contracts/proto/io/eia/shipping/v1/shipment_query_service.proto"
 private const val CATALOG_PROTO_STOCK = "contracts/catalog/INT-INVENTORY-003.yaml"
 private const val CATALOG_PROTO_SHIPMENT = "contracts/catalog/INT-SHIPPING-003.yaml"
+private const val SDL = "contracts/graphql/storefront.v1.graphqls"
+private const val CATALOG_SDL = "contracts/catalog/INT-STOREFRONT-001.yaml"
 private const val REFUND_FIELD = """{ "name": "refundAmount", "type": "long" },"""
 
 /**
@@ -346,6 +348,51 @@ private val cases =
             replace(CATALOG_PROTO_STOCK, PROTO_STOCK, PROTO_SHIPMENT)
                 .replace(CATALOG_PROTO_SHIPMENT, PROTO_SHIPMENT, PROTO_STOCK)
         },
+        Case("GraphQL: 構文の誤り", setOf("CC-STRUCT-007")) {
+            replace(SDL, "type OrderBatch {", "type OrderBatch")
+        },
+        Case("GraphQL: ない型を参照する", setOf("CC-STRUCT-007")) {
+            replace(SDL, "  totalAmount: Money!", "  totalAmount: Moneyy!")
+        },
+        Case("GraphQL: ファイル名の形が違う", setOf("CC-NAMING-014")) {
+            rename(SDL, "contracts/graphql/storefront_v1.graphqls")
+                .replace(CATALOG_SDL, SDL, "contracts/graphql/storefront_v1.graphqls")
+        },
+        Case("GraphQL: domain が連携 ID と違う", setOf("CC-NAMING-010")) {
+            rename(SDL, "contracts/graphql/sales.v1.graphqls")
+                .replace(CATALOG_SDL, SDL, "contracts/graphql/sales.v1.graphqls")
+        },
+        Case("GraphQL: カタログに登録していない", setOf("CC-CATALOG-006")) {
+            write("contracts/graphql/other.v1.graphqls", Workspace.ofRepositoryContracts().read(SDL))
+        },
+        Case("GraphQL: Mutation を置く(BFF は読み取りだけ)", setOf("CC-GRAPHQL-001")) {
+            replace(SDL, "scalar DateTime", "scalar DateTime\n\ntype Mutation {\n  cancel(id: ID!): Boolean\n}")
+        },
+        Case("GraphQL: Query の項目に @requiresScope がない", setOf("CC-GRAPHQL-002")) {
+            replace(SDL, "order(id: ID!): Order @requiresScope(scope: \"sales.order:read\")", "order(id: ID!): Order")
+        },
+        Case("GraphQL: スコープの形が違う", setOf("CC-GRAPHQL-002")) {
+            replace(SDL, "@requiresScope(scope: \"inventory.stock:read\")", "@requiresScope(scope: \"stock\")")
+        },
+        Case("GraphQL: @queryLimits がない", setOf("CC-GRAPHQL-003")) {
+            replace(
+                SDL,
+                "schema @queryLimits(maxDepth: 8, maxAliases: 10, maxComplexity: 200, maxTokens: 2000, maxBodyBytes: 16384) {",
+                "schema {",
+            )
+        },
+        Case("GraphQL: リストの引数に @maxItems がない", setOf("CC-GRAPHQL-003")) {
+            replace(SDL, " @maxItems(value: 20, upstreamOperation: \"batchGetOrders\", upstreamParameter: \"ids\")", "")
+        },
+        Case("GraphQL: @maxItems が下流の REST の上限を超える(承認時の条件 3)", setOf("CC-GRAPHQL-003")) {
+            replace(SDL, "@maxItems(value: 20,", "@maxItems(value: 21,")
+        },
+        Case("GraphQL: REST の上限を下げると、SDL の @maxItems が超える", setOf("CC-GRAPHQL-003")) {
+            replace(OPENAPI, "maxItems: 20", "maxItems: 10")
+        },
+        Case("GraphQL: 下流の操作がない", setOf("CC-GRAPHQL-003")) {
+            replace(SDL, "upstreamOperation: \"batchGetOrders\"", "upstreamOperation: \"noSuchOperation\"")
+        },
         Case("OpenAPI: 必須パラメータの追加", setOf("CC-COMPAT-002"), withBaseline = true) {
             replace(
                 OPENAPI,
@@ -592,6 +639,60 @@ class ContractCheckSpec :
                 val result = Workspace.ofRepositoryContracts().check(baseline)
 
                 result.ruleIds.filter { it.startsWith("CC-COMPAT-") }.shouldBeEmpty()
+            }
+        }
+
+        context("GraphQL の破壊的変更(CC-COMPAT-007)") {
+            // 状態はリポジトリの値に頼らず明示する(E2E の後に active になる)
+            fun active() = Workspace.ofRepositoryContracts().setLifecycle(CATALOG_SDL, "lifecycle: active")
+
+            listOf(
+                "項目の削除" to ("  orderedAt: DateTime!\n" to ""),
+                "項目の型の変更" to ("  orderedAt: DateTime!" to "  orderedAt: Long!"),
+                "null にならない項目を null にできるようにする" to ("  orderedAt: DateTime!" to "  orderedAt: DateTime"),
+                "リストの要素を null にできるようにする" to ("  lines: [OrderLine!]!" to "  lines: [OrderLine]!"),
+                "enum の値の削除" to ("  CONFIRMED\n" to ""),
+                "必須の引数の追加" to ("order(id: ID!)" to "order(id: ID!, tenant: String!)"),
+                "引数の削除" to ("order(id: ID!)" to "order"),
+                "引数の型の変更" to ("order(id: ID!)" to "order(id: String!)"),
+                "@maxItems を下げる(SchemaDiff には見えない)" to ("@maxItems(value: 20," to "@maxItems(value: 10,"),
+                "@queryLimits を下げる(SchemaDiff には見えない)" to ("maxDepth: 8" to "maxDepth: 4"),
+                "項目のスコープを変える(SchemaDiff には見えない)" to
+                    ("@requiresScope(scope: \"sales.order:read-address\")" to "@requiresScope(scope: \"sales.order:read-pii\")"),
+                "項目にスコープを足す(SchemaDiff には見えない)" to
+                    ("  customerId: ID!" to "  customerId: ID! @requiresScope(scope: \"sales.order:read-customer\")"),
+            ).forEach { (name, change) ->
+                test("違反: $name") {
+                    val result = active().replace(SDL, change.first, change.second).check(active())
+
+                    withClue(result.violations.joinToString("\n")) { result.ruleIds shouldBe setOf("CC-COMPAT-007") }
+                }
+            }
+
+            listOf(
+                "項目の追加" to ("  orderedAt: DateTime!\n" to "  orderedAt: DateTime!\n  note: String\n"),
+                "null にできる項目を null にならないようにする" to ("  line2: String\n" to "  line2: String!\n"),
+                "任意の引数の追加" to ("order(id: ID!)" to "order(id: ID!, tenant: String)"),
+                "enum の値の追加(一覧にない値は UNKNOWN になる)" to ("  CONFIRMED\n" to "  CONFIRMED\n  RETURNED\n"),
+                "上限を上げる" to ("maxDepth: 8" to "maxDepth: 9"),
+                "説明の文の変更" to ("\"見つかった注文。指定した順。\"" to "\"見つかった注文(指定した順)。\""),
+            ).forEach { (name, change) ->
+                test("通す: $name") {
+                    active()
+                        .replace(SDL, change.first, change.second)
+                        .check(active())
+                        .violations
+                        .shouldBeEmpty()
+                }
+            }
+
+            test("設計中の連携だけが使う SDL の破壊的変更は許可し、記録する") {
+                fun design() = Workspace.ofRepositoryContracts().setLifecycle(CATALOG_SDL, "lifecycle: design")
+
+                val result = design().replace(SDL, "  orderedAt: DateTime!\n", "").check(design())
+
+                result.violations.shouldBeEmpty()
+                result.designAllowed.map { it.rule.id }.toSet() shouldBe setOf("CC-COMPAT-007")
             }
         }
 

@@ -102,3 +102,4 @@ INTEGRATION_STANDARDS §5 のカタログに次の項目を追加し、`contract
 - 2026-10-20: ファイルの削除・改名が互換性検査の対象外になる制約を、ADR-0034 のライフサイクルの検査(`CC-LIFECYCLE-*`)で補った(#22。P09 ⑧a)。
 - 2026-10-21: §6 に active・deprecated の連携の契約への例外の条件(`CC-WAIVER-003`)を足し、§7「互換性の検査と連携の状態の連動」を足した(#22。P09 ⑧b)。
 - 2026-11-02: proto の破壊的変更の検査を足した(`CC-COMPAT-006`)。ツールは buf で、取得は §3 の oasdiff と同じ扱い(版と SHA-256 の固定)にした。理由は ADR-0042 §3。
+- 2026-11-03: GraphQL の SDL の破壊的変更の検査を足した(`CC-COMPAT-007`)。ツールは graphql-java の `SchemaDiff` で、外部の CLI は増やさない。理由は ADR-0043 §3。

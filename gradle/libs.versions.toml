@@ -77,6 +77,8 @@ apicurio-registry = "3.3.3"
 # P11 ⑤b iot-bridge の MQTT の購読(手動の ack。ADR-0038 §3。確認日: 2026-10-25)。使ってよいのは services/iot-bridge/adapters だけ(Konsist)
 hivemq-mqtt-client = "1.4.1"
 
+# P13 ⑥ GraphQL(確認日: 2026-11-03。ADR-0043)
+graphql-java = "26.1"
 # P13 ② gRPC(確認日: 2026-11-03。ADR-0042)。Netty は Ktor の Netty と版がぶつからないよう、grpc-netty-shaded(内包)を使う
 grpc = "1.85.1"
 grpc-kotlin = "1.5.0"
@@ -84,6 +86,7 @@ protobuf = "4.36.2"
 protobuf-gradle = "0.10.0"
 
 [libraries]
+graphql-java = { module = "com.graphql-java:graphql-java", version.ref = "graphql-java" }
 gradle-protobuf = { module = "com.google.protobuf:protobuf-gradle-plugin", version.ref = "protobuf-gradle" }
 protobuf-protoc = { module = "com.google.protobuf:protoc", version.ref = "protobuf" }
 protobuf-java = { module = "com.google.protobuf:protobuf-java", version.ref = "protobuf" }

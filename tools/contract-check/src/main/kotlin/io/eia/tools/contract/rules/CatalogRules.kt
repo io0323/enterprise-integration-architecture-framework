@@ -101,7 +101,13 @@ class CatalogRules(
                 ?.takeIf { domain != null && it != domain }
                 ?.let { listOf(Violation(catalog.path, Rule.NAMING_DOMAIN, "$contract の domain '$it' が連携 ID の domain '$domain' と異なります")) }
                 .orEmpty()
-        return missing + channels + serverDomains + protoDomain
+        val graphqlDomain =
+            Naming
+                .graphqlFileDomain(contract)
+                ?.takeIf { domain != null && it != domain }
+                ?.let { listOf(Violation(catalog.path, Rule.NAMING_DOMAIN, "$contract の domain '$it' が連携 ID の domain '$domain' と異なります")) }
+                .orEmpty()
+        return missing + channels + serverDomains + protoDomain + graphqlDomain
     }
 
     private fun checkChannels(
@@ -157,8 +163,10 @@ class CatalogRules(
 
     private fun checkUnregisteredContracts(): List<Violation> {
         val registered = contracts.catalogs.mapNotNull { it.entry.contract }.toSet()
-        return ((contracts.openApis + contracts.asyncApis + contracts.externalOpenApis).map { it.path } + contracts.protoFiles)
-            .filter { it !in registered }
+        return (
+            (contracts.openApis + contracts.asyncApis + contracts.externalOpenApis).map { it.path } + contracts.protoFiles +
+                contracts.graphqlFiles
+        ).filter { it !in registered }
             .map { Violation(it, Rule.CATALOG_UNREGISTERED, "この契約を contract に指定したカタログがありません") }
     }
 

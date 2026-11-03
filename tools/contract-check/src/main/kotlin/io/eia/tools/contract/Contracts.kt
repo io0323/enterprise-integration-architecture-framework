@@ -81,6 +81,8 @@ data class Contracts(
     val ediSpecSchemas: List<ContractDocument> = emptyList(),
     // gRPC の契約(contracts/proto の .proto。リポジトリルートからの相対パス。ADR-0042。中身の検査は buf が行う)
     val protoFiles: List<String> = emptyList(),
+    // GraphQL の契約(contracts/graphql の .graphqls。リポジトリルートからの相対パス。ADR-0043)
+    val graphqlFiles: List<String> = emptyList(),
     val loadViolations: List<Violation>,
 ) {
     fun relative(file: Path): String = root.relativize(file).invariantSeparatorsPathString
@@ -154,6 +156,7 @@ data class Contracts(
                 ediSpecs = ediSpecFiles(filesDir).mapNotNull(::readTree),
                 ediSpecSchemas = files(filesDir).filter(::isEdiSpecSchema).mapNotNull(::readTree),
                 protoFiles = files(root.resolve(PROTO_DIR)).filter { it.extension == "proto" }.map(::relative),
+                graphqlFiles = files(contracts.resolve("graphql")).filter { it.extension == "graphqls" }.map(::relative),
                 loadViolations = violations,
             )
         }

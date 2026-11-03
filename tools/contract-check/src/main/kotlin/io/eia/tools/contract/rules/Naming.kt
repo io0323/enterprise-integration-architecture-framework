@@ -25,6 +25,7 @@ object Naming {
     private val FILE_PATTERNS = listOf(FILE_SPEC, MANIFEST_SCHEMA, FILE_SPEC_SCHEMA, EDI_SPEC_SCHEMA, EDI_SPEC)
     private val FILES_README = setOf("README.md")
     private val MQTT_TOPIC = Regex("^devices/\\{tenant\\}/\\{deviceId\\}/$SEGMENT$")
+    private val GRAPHQL_FILE = Regex("^contracts/graphql/($SEGMENT)\\.v[1-9][0-9]*\\.graphqls$")
     private val PROTO_FILE = Regex("^contracts/proto/io/eia/([a-z][a-z0-9]*)/v([1-9][0-9]*)/[a-z][a-z0-9_]*\\.proto$")
     private val DEVICE_PAYLOAD = Regex("^($SEGMENT)\\.v([1-9][0-9]*)\\.schema\\.json$")
 
@@ -115,6 +116,9 @@ object Naming {
         } else {
             Rule.NAMING_MQTT_TOPIC to "'$topic' は devices/{tenant}/{deviceId}/{channel}(channel は小文字・kebab-case)ではありません"
         }
+
+    /** GraphQL の契約のファイル名の domain。形が違えば null(ADR-0043 §2)。 */
+    fun graphqlFileDomain(path: String): String? = GRAPHQL_FILE.find(path)?.groupValues?.get(1)
 
     /** proto の置き場所(リポジトリルートからの相対パス)。形が違えば null(ADR-0042 §2)。 */
     fun protoLocation(path: String): ProtoLocation? =
