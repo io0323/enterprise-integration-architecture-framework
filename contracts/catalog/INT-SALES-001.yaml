@@ -5,6 +5,7 @@ style: rest
 pattern: request-reply
 provider: { owner: team-order, system: order-service }
 consumers:
+  # 画面のための集約(GET /sales/v1/orders?ids=。sales.order:read だけ。P13。ADR-0043)
   - { owner: team-storefront, system: bff-graphql }
   # 日次の集計(GET /v1/order-summaries/daily/{date}。sales.order:report)を、分析の週次の照合で読む(P08。ADR-0031)
   - { owner: team-analytics, system: batch-etl }

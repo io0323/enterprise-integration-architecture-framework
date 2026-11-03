@@ -20,6 +20,58 @@ tags:
   - name: summaries
 paths:
   /v1/orders:
+    get:
+      tags: [orders]
+      operationId: batchGetOrders
+      summary: 注文をまとめて取得する
+      description: |
+        指定した ID の注文を、指定した順に返す(BFF の N+1 を避けるため。P13 ⑤。ADR-0042 §1)。読み取りのスコープで、1 回に 20 件まで。
+        - 同じ ID は 1 件として扱う。
+        - ない注文と、形式が不正な ID(存在しえない)は `notFound` に返す。ほかの注文は返す(1 件の `GET /v1/orders/{orderId}` の 404 に当たる)。
+        - `ids` がない・20 件を超えるときは 422(`validation-failed`)。
+      security:
+        - oauth2: [sales.order:read]
+      parameters:
+        - name: ids
+          in: query
+          required: true
+          style: form
+          explode: true
+          description: 注文の ID(`ids=a&ids=b`)
+          schema:
+            type: array
+            minItems: 1
+            maxItems: 20
+            items:
+              type: string
+              minLength: 1
+              maxLength: 64
+        - $ref: "#/components/parameters/Traceparent"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: 見つかった注文と、見つからなかった ID
+          headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/CorrelationId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderBatch"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/UnprocessableContent"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
     post:
       tags: [orders]
       operationId: placeOrder
@@ -475,3 +527,17 @@ components:
           $ref: "#/components/schemas/Money"
         shippingAddress:
           $ref: "#/components/schemas/Address"
+    OrderBatch:
+      type: object
+      required: [orders, notFound]
+      properties:
+        orders:
+          type: array
+          description: 見つかった注文。指定した順
+          items:
+            $ref: "#/components/schemas/Order"
+        notFound:
+          type: array
+          description: 見つからなかった ID。読めなかったこと(5xx)とは区別する
+          items:
+            type: string
