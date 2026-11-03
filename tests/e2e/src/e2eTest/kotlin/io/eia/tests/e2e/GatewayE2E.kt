@@ -40,7 +40,7 @@ import javax.net.ssl.TrustManagerFactory
 private const val MAX_REQUESTS = 80
 
 /** 開発用 CA を信頼し、[clientCert] があればクライアント証明書として出す [SSLContext]。 */
-private fun sslContext(clientCert: String? = null): SSLContext {
+internal fun sslContext(clientCert: String? = null): SSLContext {
     val factory = CertificateFactory.getInstance("X.509")
 
     fun certificate(name: String) = Files.newInputStream(certs.resolve(name)).use { factory.generateCertificate(it) as X509Certificate }

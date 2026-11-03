@@ -163,6 +163,8 @@ Gateway の枠はリクエストの数しか見ないので、重いクエリを
 - 上流のタイムアウトは 15 秒で、リクエストの予算(5 秒)より長い。Gateway では再送しない。
 - BFF は Gateway の証明書(SAN `apisix`)だけを受け入れる(mTLS)。
 
+- **トレースは BFF → Gateway で分かれる。** Gateway は受信した `traceparent` を捨てる(ADR-0023 §4)ので、BFF が Gateway 経由で order を呼ぶと新しいトレースになる。Gateway → BFF → 在庫・出荷が 1 つ、BFF → Gateway → order がもう 1 つで、両方を `X-Correlation-Id` でたどる(`BffE2E` で確かめる)。社内のクライアントの `traceparent` だけを通すには Gateway での判別が要るので、ここでは変えない。
+
 #### Gateway のクライアントごとの枠
 BFF は 1 つのクライアントとして `/sales/v1/orders` を呼ぶ。全クライアント共通の 60 件 / 60 秒のままだと、画面の全利用者の合計が約 1 件 / 秒に制限されるので、枠を分ける。
 
@@ -222,3 +224,4 @@ DataLoader で、注文の取得は GraphQL のリクエスト 1 件につき or
 - 2026-11-03: P13 ⑦b で下流のクライアントを実装した(`HttpOrderQueries`、`GrpcStockQueries`、`GrpcShipmentQueries`)。§4 に組み込みの Instrumentation の実測の結果を足した。
 - 2026-11-03: P13 ⑧a で `app` と複雑度の枠(§9)を足した。§4 にクエリ全体の注文の ID の上限を足した(別名で並べると下流の上限を超えて失敗していた)。
 - 2026-11-03: P13 ⑧b で Gateway のルートとクライアントごとの枠、アラート、ダッシュボードを足した(§9)。
+- 2026-11-03: P13 ⑨ で E2E(`BffE2E`)を足し、トレースが BFF → Gateway で分かれることを §9 に書いた。

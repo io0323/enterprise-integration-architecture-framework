@@ -5,7 +5,7 @@
 サービスのコードには依存しない(ブラックボックス)。
 
 ```bash
-make up PROFILE="order cdc saga batch file b2b saas iot" E2E=1   # E2E 用の設定(e2e.env。待ち時間を短くする)を足して起動する
+make up PROFILE="order cdc saga batch file b2b saas iot bff" E2E=1   # E2E 用の設定(e2e.env。待ち時間を短くする)を足して起動する
 make e2e                                            # ./gradlew :tests:e2e:e2eTest(秘密情報は infra/local/.env から渡す)
 ```
 
@@ -22,6 +22,7 @@ make e2e                                            # ./gradlew :tests:e2e:e2eTe
   CI は linuxX64、手元の Mac は macosArm64)をデバイスとして動かす。デバイスのパスワードは `make env` が作る
   `infra/local/secrets/mqtt/device-passwords` から読み、環境変数でシミュレータに渡す。シミュレータではできない操作(他のデバイスの
   トピックへの書き込み・同じメッセージの再送)は、同じ SDK の MQTT の部分(`shared/integration-sdk/mqtt`)で送る。
+- GraphQL BFF(`BffE2E`。P13)は、Gateway 経由のクエリの結果と、在庫・出荷のコンテナの停止(部分応答)で確かめる。mTLS の拒否は gRPC のポートに直接つないで確かめる。
 - B2B / EDI(`B2bGatewayE2E`。P12)は、取引先 partner01 の側として、GnuPG(`make pgp-keys` と同じイメージ `eiaf-gnupg:local`)で
   署名・暗号化した受注の文書を、ホストの `sftp`(`infra/local/secrets/sftp-b2b` の鍵。ホスト鍵は known_hosts に固定)で sftp-b2b に置き、
   届いた応答(CONTRL・APERAK)を取り出して復号・署名の検証をする。受け付け(order の API に取り込んで肯定の APERAK)・業務・スキーマ・構文・

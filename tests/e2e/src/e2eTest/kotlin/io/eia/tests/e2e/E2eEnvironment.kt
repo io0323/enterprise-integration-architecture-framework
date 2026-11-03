@@ -77,22 +77,25 @@ internal object E2eEnvironment {
      * client-credentials のトークンの取得。SDK(shared/integration-sdk/http)の [ClientCredentialsTokenProvider] をクライアントごとに 1 つ使い回す
      * (期限(realm の 5 分)の 30 秒前に取り直す。E2E 全体は 5 分を超えるため、期限の切れたトークンで 401 にならないように。#120・#14)。
      */
-    private val tokenProviders = ConcurrentHashMap<Client, ClientCredentialsTokenProvider>()
+    private val tokenProviders = ConcurrentHashMap<Pair<Client, Set<String>>, ClientCredentialsTokenProvider>()
     private val tokenHttp = KtorHttpClient(defaultEngine())
 
-    /** `sales.order:read` / `sales.order:write` のスコープのアクセストークン。 */
-    fun token(client: Client = Client.A): String {
+    /** [scopes](既定は `sales.order:read` / `sales.order:write`)のアクセストークン。 */
+    fun token(
+        client: Client = Client.A,
+        scopes: Set<String> = setOf("sales.order:read", "sales.order:write"),
+    ): String {
         val provider =
-            tokenProviders.computeIfAbsent(client) {
+            tokenProviders.computeIfAbsent(client to scopes) {
                 ClientCredentialsTokenProvider(
                     config =
                         ClientCredentialsConfig(
                             tokenEndpoint = Url("$KEYCLOAK/realms/eiaf/protocol/openid-connect/token"),
-                            clientId = it.id,
-                            scopes = setOf("sales.order:read", "sales.order:write"),
+                            clientId = client.id,
+                            scopes = scopes,
                         ),
                     httpClient = tokenHttp,
-                    secrets = { ok(ClientSecret(secret(it.secretVariable))) },
+                    secrets = { ok(ClientSecret(secret(client.secretVariable))) },
                 )
             }
         return when (val result = runBlocking { provider.token() }) {
