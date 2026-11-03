@@ -4,6 +4,7 @@ import io.eia.inventory.domain.ReleaseOutcome
 import io.eia.inventory.domain.Reservation
 import io.eia.inventory.domain.ReserveReply
 import io.eia.inventory.domain.StockLevel
+import io.eia.inventory.domain.StockSnapshot
 import io.eia.shared.kernel.DomainError
 import io.eia.shared.kernel.Result
 import kotlin.time.Duration
@@ -56,6 +57,12 @@ public interface StockLedger {
 
     /** SKU ごとに引当の数を [deltas] だけ変える(正は引当、負は解放)。在庫は負にならない(DB の制約でも守る)。 */
     public suspend fun adjustReserved(deltas: Map<String, Long>): Result<Unit, DomainError>
+}
+
+/** 在庫の照会(読み取りだけ。ロックを取らない。ADR-0042 §4)。 */
+public interface StockQueries {
+    /** [skus] の在庫を読む。台帳にない SKU は結果に含めない。読み取りごとに独立したトランザクションで読む。 */
+    public suspend fun find(skus: Set<String>): Result<List<StockSnapshot>, DomainError>
 }
 
 /** 返事のイベント(INT-INVENTORY-002)。adapters が Outbox で書く。トランザクションの中で呼ぶ。 */

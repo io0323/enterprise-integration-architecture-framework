@@ -2,13 +2,17 @@ package io.eia.inventory.app
 
 import io.eia.inventory.domain.SettledRetention
 import io.eia.platform.security.secret.SecretName
+import io.eia.platform.security.tls.TlsFiles
+import io.eia.platform.security.tls.TlsVariables
 import io.eia.shared.kernel.FieldViolation
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.ValidationError
 import io.eia.shared.kernel.err
 import io.eia.shared.kernel.ok
+import java.net.URI
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * inventory-service の設定(環境変数)。パスワードは値ではなく名前([SecretName])だけを持ち、`SecretProvider` から読む。
@@ -23,6 +27,12 @@ import kotlin.time.Duration.Companion.hours
  * | `INVENTORY_KAFKA_BOOTSTRAP` | なし(serve では必須) | serve(例 `kafka:9092`) |
  * | `INVENTORY_SCHEMA_REGISTRY_URL` | なし(serve では必須) | serve(例 `http://apicurio:8080/apis/registry/v3`) |
  * | `INVENTORY_HEALTH_PORT` | 8081 | serve(`/health/live` と `/health/ready` だけ。平文。コンテナの外に公開しない) |
+ * | `INVENTORY_GRPC_PORT` | 9443 | serve(在庫の照会の gRPC。mTLS だけで受ける。ADR-0042 §5) |
+ * | `INVENTORY_GRPC_TLS_CERT_FILE` / `INVENTORY_GRPC_TLS_KEY_FILE` / `INVENTORY_GRPC_TLS_CLIENT_CA_FILE` | なし(serve では必須) | serve |
+ * | `INVENTORY_GRPC_TLS_ALLOWED_CLIENTS` | なし(serve では必須) | serve(クライアント証明書の SAN の DNS 名。カンマ区切り) |
+ * | `INVENTORY_GRPC_AUDIENCE` | `inventory-grpc` | serve(トークンの `aud`) |
+ * | `INVENTORY_GRPC_MAX_BUDGET` | 3s | serve(1 回の照会の上限。呼び出し元の deadline がない・これより長いときに使う) |
+ * | `OIDC_ISSUER` / `OIDC_JWKS_URI` | なし(serve では必須) | serve(トークンの検証。ADR-0019) |
  * | `INVENTORY_SETTLED_RETENTION` | 30d | serve(終わった引当の記録と「取消済み」の印の保持期間。14 日より短くはできない。ADR-0029 §5) |
  * | `INVENTORY_PURGE_INTERVAL` | 1h | serve(保持期間を過ぎた記録の削除の間隔) |
  *
@@ -38,6 +48,7 @@ internal data class InventoryConfig(
     val healthPort: Int,
     val retention: SettledRetention,
     val purgeInterval: Duration,
+    val grpc: GrpcSettings,
 ) {
     companion object {
         val OWNER_PASSWORD = SecretName("INVENTORY_DB_PASSWORD")
@@ -45,8 +56,13 @@ internal data class InventoryConfig(
         const val KAFKA_BOOTSTRAP = "INVENTORY_KAFKA_BOOTSTRAP"
         const val SCHEMA_REGISTRY_URL = "INVENTORY_SCHEMA_REGISTRY_URL"
         const val RETENTION = "INVENTORY_SETTLED_RETENTION"
+        val GRPC_TLS = TlsVariables("INVENTORY_GRPC")
+        const val OIDC_ISSUER = "OIDC_ISSUER"
+        const val OIDC_JWKS_URI = "OIDC_JWKS_URI"
         private const val DEFAULT_HEALTH_PORT = 8081
         private val DEFAULT_PURGE_INTERVAL = 1.hours
+        private const val DEFAULT_GRPC_PORT = 9443
+        private val DEFAULT_GRPC_MAX_BUDGET = 3.seconds
 
         fun fromEnvironment(env: Map<String, String>): Result<InventoryConfig, ValidationError> {
             val reader = EnvReader(env)
@@ -61,6 +77,18 @@ internal data class InventoryConfig(
                     healthPort = reader.port("INVENTORY_HEALTH_PORT", DEFAULT_HEALTH_PORT),
                     retention = reader.retention(RETENTION),
                     purgeInterval = reader.duration("INVENTORY_PURGE_INTERVAL") ?: DEFAULT_PURGE_INTERVAL,
+                    grpc =
+                        GrpcSettings(
+                            port = reader.port("INVENTORY_GRPC_PORT", DEFAULT_GRPC_PORT),
+                            tls = GRPC_TLS.files(env),
+                            // 既定を持たない: 許可するクライアントは配備ごとに明示する
+                            allowedClients =
+                                if (reader.optional(GRPC_TLS.allowedClients) == null) emptySet() else GRPC_TLS.allowedClients(env),
+                            audience = reader.optional("INVENTORY_GRPC_AUDIENCE") ?: "inventory-grpc",
+                            maxBudget = reader.duration("INVENTORY_GRPC_MAX_BUDGET") ?: DEFAULT_GRPC_MAX_BUDGET,
+                            issuer = reader.optional(OIDC_ISSUER),
+                            jwksUri = reader.optional(OIDC_JWKS_URI)?.let(URI::create),
+                        ),
                 )
             return if (reader.violations.isEmpty()) ok(config) else err(ValidationError(reader.violations))
         }
@@ -72,6 +100,9 @@ internal data class InventoryConfig(
             buildList {
                 if (bootstrapServers == null) add(FieldViolation(KAFKA_BOOTSTRAP, "serve では必須です"))
                 if (schemaRegistryUrl == null) add(FieldViolation(SCHEMA_REGISTRY_URL, "serve では必須です"))
+                if (grpc.allowedClients.isEmpty()) add(FieldViolation(GRPC_TLS.allowedClients, "serve では必須です"))
+                if (grpc.issuer == null) add(FieldViolation(OIDC_ISSUER, "serve では必須です"))
+                if (grpc.jwksUri == null) add(FieldViolation(OIDC_JWKS_URI, "serve では必須です"))
             }
         return if (violations.isEmpty()) {
             ok(
@@ -82,6 +113,17 @@ internal data class InventoryConfig(
         }
     }
 }
+
+/** 在庫の照会の gRPC の設定(ADR-0042)。TLS のファイルの有無は起動時に `ServerTls.load` が確かめる。 */
+internal data class GrpcSettings(
+    val port: Int,
+    val tls: TlsFiles,
+    val allowedClients: Set<String>,
+    val audience: String,
+    val maxBudget: Duration,
+    val issuer: String?,
+    val jwksUri: URI?,
+)
 
 internal data class ServeSettings(
     val bootstrapServers: String,

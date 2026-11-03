@@ -19,6 +19,8 @@ leaves=(
   "order-service:order-service,localhost"
   "apisix:apisix"
   "webhook-receiver:webhook-receiver,localhost"
+  "inventory-service:inventory-service,localhost"
+  "bff-graphql:bff-graphql"
 )
 
 if [[ "$(id -u)" == 0 ]]; then

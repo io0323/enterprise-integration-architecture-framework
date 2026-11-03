@@ -83,6 +83,7 @@ Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)�
 | 19433 | `toxiproxy:19433` | PostgreSQL(Toxiproxy 経由) | chaos | 障害注入用 |
 | 19443 | `order-service:8443` | order-service | order | API(`/v1/...`)。**mTLS だけ**(クライアント証明書は開発用 CA の署名で、SAN が `apisix`)。mTLS なしの接続を拒否することの検査と調査用。ヘルスチェック(8081。平文)は公開しない |
 | 19444 | `webhook-receiver:8443` | webhook-receiver | saas | Webhook の受け口(`/v1/webhooks/crm`)。**mTLS だけ**(SAN `apisix`)。mTLS なしの接続を拒否することの検査用。送り手は Gateway の `/sales/v1/webhooks/crm` に送る |
+| 19445 | `inventory-service:9443` | inventory-service | saga | 在庫の照会の gRPC。**mTLS だけ**(クライアント証明書は SAN `bff-graphql` だけ。ADR-0042 §5) |
 | 19474 | `toxiproxy:8474` | Toxiproxy | chaos | 管理 API(toxic の追加・削除) |
 | 19883 | `mosquitto:1883` | Mosquitto | iot | MQTT(匿名接続は不可。デバイスごとの資格情報と ACL。ADR-0039 §3) |
 

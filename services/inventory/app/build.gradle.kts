@@ -26,6 +26,8 @@ dependencies {
     // 統合テスト: PostgreSQL → inventory → Outbox → Debezium(compose と同じイメージ・コネクタの設定)→ Kafka の全体(ADR-0029)
     integrationTestImplementation(project(":platform:test-support"))
     integrationTestImplementation(libs.testcontainers.kafka)
+    // テストのアクセストークンと JWKS(gRPC の照会の全体の確認)
+    integrationTestImplementation(libs.nimbus.jose.jwt)
     integrationTestImplementation(libs.testcontainers.postgresql)
     integrationTestImplementation(libs.kotlinx.serialization.json)
     integrationTestImplementation(libs.kotlinx.coroutines.core)

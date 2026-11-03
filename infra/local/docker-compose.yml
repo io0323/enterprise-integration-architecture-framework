@@ -296,10 +296,12 @@ services:
 
   # コマンド(inventory.stock.cmd-*)を読み、返事を Outbox に書く。返事は Debezium(コネクタ inventory-outbox)が発行する。
   # 返事のスキーマを schema-publish が登録し、DLQ のトピックを kafka-topics が作ってから起動する。アプリのロールのパスワードだけを渡す
+  # 在庫の照会を gRPC で受ける(mTLS だけ。INT-INVENTORY-003。ADR-0042)。証明書の鍵を読むので、ホストの利用者の uid で動かす(ADR-0024 §7)
   inventory-service:
     build: *inventory-build
     profiles: [saga]
     command: ["serve"]
+    user: "${EIAF_UID:-65532}:${EIAF_GID:-65532}"
     depends_on:
       inventory-migrate:
         condition: service_completed_successfully
@@ -314,9 +316,23 @@ services:
       INVENTORY_APP_DB_PASSWORD: ${INVENTORY_APP_DB_PASSWORD:?make env を実行してください}
       INVENTORY_KAFKA_BOOTSTRAP: kafka:9092
       INVENTORY_SCHEMA_REGISTRY_URL: http://apicurio:8080/apis/registry/v3
+      INVENTORY_GRPC_TLS_CERT_FILE: /certs/inventory-service.crt
+      INVENTORY_GRPC_TLS_KEY_FILE: /certs/inventory-service.key
+      INVENTORY_GRPC_TLS_CLIENT_CA_FILE: /certs/ca.crt
+      INVENTORY_GRPC_TLS_ALLOWED_CLIENTS: bff-graphql
+      # iss はトークンに入っている値(ホストから見た URL)、JWKS はコンテナから届く URL(ADR-0019)
+      OIDC_ISSUER: http://localhost:19180/realms/eiaf
+      OIDC_JWKS_URI: http://keycloak:8080/realms/eiaf/protocol/openid-connect/certs
       OTEL_SERVICE_NAME: inventory-service
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    ports:
+      # mTLS なしの接続を拒否することの検査用(ADR-0042 §5)
+      - 127.0.0.1:19445:9443
     volumes:
+      # CA の鍵(ca.key)は渡さない
+      - ./certs/ca.crt:/certs/ca.crt:ro
+      - ./certs/inventory-service.crt:/certs/inventory-service.crt:ro
+      - ./certs/inventory-service.key:/certs/inventory-service.key:ro
       - *probe-volume
     # 開発機で core + order + saga を同時に動かすため、order-service(384m)より小さくする(P07 の計画)
     mem_limit: 256m
