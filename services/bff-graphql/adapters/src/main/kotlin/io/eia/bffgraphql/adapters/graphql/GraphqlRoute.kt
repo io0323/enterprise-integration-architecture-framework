@@ -1,5 +1,8 @@
 package io.eia.bffgraphql.adapters.graphql
 
+import io.eia.platform.api.problem.Problem
+import io.eia.platform.api.problem.ProblemType
+import io.eia.platform.api.problem.respondProblem
 import io.eia.platform.security.ktor.verifiedToken
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
@@ -33,6 +36,7 @@ import kotlinx.serialization.json.longOrNull
  *
  * - POST だけ。1 つのクエリだけ受け付ける(複数の操作をまとめた配列は受け付けない)。本文の大きさは `@queryLimits` の `maxBodyBytes` まで。
  * - **状態コード**: 実行できなかった(本文・構文・検証の誤り、上限の超過)は 400。実行したら、項目のエラーがあっても 200(部分応答。ADR-0043 §6)。
+ *   複雑度の枠が足りなければ 429 + `Retry-After` + Problem Details `rate-limited`(ADR-0043 §9)。
  * - 応答には、クエリの内容を残さない。
  */
 public fun Route.storefrontGraphql(engine: StorefrontGraphql) {
@@ -69,6 +73,7 @@ private suspend fun ApplicationCall.execute(engine: StorefrontGraphql) {
             request.variables?.let(GraphqlJson::decodeObject).orEmpty(),
             token,
         )
+    RateLimited.retryAfter(result)?.let { wait -> return respondProblem(Problem(ProblemType.RATE_LIMITED, retryAfter = wait)) }
     val status = if (result.isDataPresent) HttpStatusCode.OK else HttpStatusCode.BadRequest
     respondText(GraphqlJson.encode(result.toSpecification()).toString(), ContentType.Application.Json, status)
 }

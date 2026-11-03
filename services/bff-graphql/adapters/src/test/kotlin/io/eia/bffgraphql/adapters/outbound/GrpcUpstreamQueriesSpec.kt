@@ -1,6 +1,7 @@
 package io.eia.bffgraphql.adapters.outbound
 
 import com.google.protobuf.Timestamp
+import io.eia.bffgraphql.adapters.graphql.ComplexityRateLimiter
 import io.eia.bffgraphql.adapters.graphql.GraphqlMetrics
 import io.eia.bffgraphql.adapters.graphql.StorefrontGraphql
 import io.eia.bffgraphql.application.model.AddressView
@@ -251,6 +252,7 @@ class GrpcUpstreamQueriesSpec :
                     LoadStockLevelsService(GrpcStockQueries(untrusted, client("inventory"), resilience("inventory"))),
                     LoadShipmentsService(GrpcShipmentQueries(trusted, client("shipping"), resilience("shipping"))),
                     GraphqlMetrics(OpenTelemetry.noop().getMeter("test")),
+                    ComplexityRateLimiter(1_000_000, 1_000_000),
                 )
             val token =
                 VerifiedToken(

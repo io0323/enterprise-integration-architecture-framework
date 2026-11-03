@@ -26,6 +26,7 @@ public class StorefrontGraphql(
     stock: LoadStockLevelsUseCase,
     shipments: LoadShipmentsUseCase,
     private val metrics: GraphqlMetrics,
+    rateLimiter: ComplexityRateLimiter,
     budget: UpstreamBudget = UpstreamBudget(),
     private val introspectionEnabled: Boolean = false,
 ) {
@@ -35,6 +36,10 @@ public class StorefrontGraphql(
     /** クエリの上限(SDL の `@queryLimits`)。 */
     public val limits: QueryLimits get() = storefront.policy.limits
 
+    init {
+        require(rateLimiter.capacity >= limits.maxComplexity) { "バケットの大きさは、1 回のクエリの複雑度の上限(${limits.maxComplexity})以上にしてください" }
+    }
+
     private val parserOptions =
         ParserOptions
             .getDefaultOperationParserOptions()
@@ -43,7 +48,7 @@ public class StorefrontGraphql(
     private val graphql =
         GraphQL
             .newGraphQL(storefront.schema)
-            .instrumentation(QueryLimitInstrumentation(storefront.policy, metrics::recordRejected))
+            .instrumentation(QueryLimitInstrumentation(storefront.policy, rateLimiter, metrics::recordRejected))
             .defaultDataFetcherExceptionHandler(DataFetcherErrors)
             .build()
 

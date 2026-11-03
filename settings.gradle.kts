@@ -61,6 +61,7 @@ include(
     ":services:iot-bridge:app",
     ":services:bff-graphql:application",
     ":services:bff-graphql:adapters",
+    ":services:bff-graphql:app",
     ":services:b2b-gateway:domain",
     ":services:b2b-gateway:application",
     ":services:b2b-gateway:adapters",

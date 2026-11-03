@@ -10,6 +10,8 @@ dependencies {
     // 在庫と出荷の照会(ADR-0042)
     api(project(":platform:grpc"))
     implementation(project(":platform:grpc-stubs"))
+    // 複雑度の枠の不足を Problem Details で返す(ADR-0043 §9)
+    implementation(project(":platform:api"))
     implementation(libs.ktor.client.core)
     api(libs.graphql.java)
     api(libs.ktor.server.core)

@@ -45,6 +45,7 @@ public class HttpOrderQueries(
     private val gatewayUrl: URI,
     private val tokens: ClientCredentialsTokenProvider,
     private val resilience: Resilience,
+    private val quota: OrderQuotaMetrics,
     private val classifier: HttpCallClassifier = HttpCallClassifier(),
 ) : OrderQueries {
     override suspend fun find(ids: Set<String>): Result<List<OrderView>, DomainError> =
@@ -58,11 +59,12 @@ public class HttpOrderQueries(
                     val result =
                         classifier.call(
                             send = {
-                                client.get("${gatewayUrl.toString().trimEnd('/')}$PATH") {
-                                    ids.forEach { parameter(IDS, it) }
-                                    header(HttpHeaders.Authorization, token.value.authorizationHeader())
-                                    expectSuccess = false
-                                }
+                                client
+                                    .get("${gatewayUrl.toString().trimEnd('/')}$PATH") {
+                                        ids.forEach { parameter(IDS, it) }
+                                        header(HttpHeaders.Authorization, token.value.authorizationHeader())
+                                        expectSuccess = false
+                                    }.also(quota::observe)
                             },
                             read = ::orders,
                         )

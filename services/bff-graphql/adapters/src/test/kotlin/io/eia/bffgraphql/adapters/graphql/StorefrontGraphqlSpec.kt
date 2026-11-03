@@ -23,9 +23,11 @@ import io.eia.shared.kernel.UnavailableError
 import io.eia.shared.kernel.UnexpectedError
 import io.eia.shared.kernel.err
 import io.eia.shared.kernel.ok
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.comparables.shouldBeLessThan
+import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
@@ -102,6 +104,7 @@ private class FakeUpstream<V>(
 private class Fixture(
     budget: UpstreamBudget = UpstreamBudget(),
     introspection: Boolean = false,
+    rateLimiter: ComplexityRateLimiter = ComplexityRateLimiter(1_000_000, 1_000_000),
 ) {
     val orders =
         FakeUpstream { ids ->
@@ -144,6 +147,7 @@ private class Fixture(
                 },
             ),
             GraphqlMetrics(meter),
+            rateLimiter,
             budget,
             introspection,
         )
@@ -383,6 +387,21 @@ class StorefrontGraphqlSpec :
                 }
             }
 
+            test("別名で並べた注文の ID は、合わせて 20 件まで。超えたら下流を呼ばずに拒否する(下流は 1 回で 20 件まで。承認時の条件 3)") {
+                val fixture = Fixture()
+                val more = List(20) { "\"more-$it\"" }.joinToString(",", "[", "]")
+                testApplication {
+                    storefront(fixture)
+                    val twenty = "a: orders(ids: ${ids(20)}) { notFound }"
+                    shouldBeRejected(fixture, "maxItems", "{ $twenty b: orders(ids: $more) { notFound } }")
+                    shouldBeRejected(fixture, "maxItems", """{ $twenty b: order(id: "other") { id } }""")
+                    // 同じ ID の重複は数えない(DataLoader がまとめる)
+                    query("""{ a: orders(ids: ${ids(20)}) { notFound } b: order(id: "order-0") { id } }""").status shouldBe
+                        HttpStatusCode.OK
+                    fixture.orders.calls.size shouldBe 1
+                }
+            }
+
             test("変数で渡した ids も同じ(実行する前に確かめる)") {
                 val fixture = Fixture()
                 testApplication {
@@ -395,6 +414,41 @@ class StorefrontGraphqlSpec :
                         variables,
                     )
                 }
+            }
+
+            test("複雑度の枠が足りなければ、下流を呼ばずに 429 + Retry-After + Problem Details。枠はクライアントごと") {
+                var now = 0L
+                val limiter = ComplexityRateLimiter(capacity = 200, refillPerSecond = 10) { now }
+                val fixture = Fixture(rateLimiter = limiter)
+                val heavy = """{ orders(ids: ${ids(20)}) { orders { shipment { status } lines { stock { available } } } } }"""
+                testApplication {
+                    storefront(fixture)
+                    query(heavy).status shouldBe HttpStatusCode.OK
+                    val calls = fixture.orders.calls.size
+
+                    val rejected = query(heavy)
+                    rejected.status shouldBe HttpStatusCode.TooManyRequests
+                    rejected.headers[HttpHeaders.ContentType] shouldBe "application/problem+json"
+                    // 複雑度 140 で、残り 60。足りない 80 を 10 / 秒で戻すと 8 秒
+                    rejected.headers[HttpHeaders.RetryAfter] shouldBe "8"
+                    rejected
+                        .json()
+                        .getValue("type")
+                        .jsonPrimitive.content shouldBe "https://eiaf.example/problems/rate-limited"
+                    fixture.orders.calls.size shouldBe calls
+                    fixture.counter("eia.graphql.rejected_queries", "limit") shouldBe mapOf("complexityRate" to 1L)
+
+                    // 戻した分で、また通る
+                    now += 8_000_000_000L
+                    query(heavy).status shouldBe HttpStatusCode.OK
+                }
+                // 別のクライアントの枠は減っていない
+                limiter.acquire("client-b", 200) shouldBe null
+                limiter.acquire("client-a", 200).shouldNotBeNull()
+            }
+
+            test("バケットが 1 回のクエリの上限より小さいと、起動の時点で誤りにする(上限以内のクエリが永久に通らなくなるため)") {
+                shouldThrow<IllegalArgumentException> { Fixture(rateLimiter = ComplexityRateLimiter(199, 10)) }
             }
 
             test("別名の数の上限") {

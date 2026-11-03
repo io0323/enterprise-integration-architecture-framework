@@ -29,6 +29,7 @@ GROUPS: dict[str, list[str]] = {
         "services/inventory/",
         "services/payment/",
         "services/shipping/",
+        "services/bff-graphql/",
         "services/batch-etl/",
         "services/file-exchange/",
         "services/b2b-gateway/",

@@ -26,6 +26,8 @@ import io.ktor.client.request.HttpResponseData
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import io.opentelemetry.sdk.metrics.SdkMeterProvider
+import io.opentelemetry.sdk.testing.exporter.InMemoryMetricReader
 import java.net.URI
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -62,6 +64,13 @@ private class OrderFixture(
                 }
             },
         )
+    val reader: InMemoryMetricReader = InMemoryMetricReader.create()
+    private val meter =
+        SdkMeterProvider
+            .builder()
+            .registerMetricReader(reader)
+            .build()
+            .get("test")
     val queries =
         HttpOrderQueries(
             client,
@@ -84,11 +93,43 @@ private class OrderFixture(
                     retryBudget = null,
                 ),
             ),
+            OrderQuotaMetrics(meter),
         )
 }
 
 class HttpOrderQueriesSpec :
     FunSpec({
+        test("Gateway の枠の使用状況: 枠は応答のヘッダから読み、呼び出しはリトライの 1 回ごとに数える。Gateway の枠を通らない応答は数えない") {
+            val quota = headersOf("X-RateLimit-Limit" to listOf("600"), HttpHeaders.ContentType to listOf("application/json"))
+            val fixture =
+                OrderFixture(
+                    { respond("{}", HttpStatusCode.ServiceUnavailable, quota) },
+                    { respond("""{"orders":[],"notFound":[]}""", HttpStatusCode.OK, quota) },
+                )
+
+            fixture.queries.find(setOf("a")).shouldBeInstanceOf<Result.Ok<List<OrderView>>>()
+
+            val metrics = fixture.reader.collectAllMetrics()
+            metrics
+                .single { it.name == "eia.bff.order_quota.calls" }
+                .longSumData.points
+                .single()
+                .value shouldBe 2L
+            metrics
+                .single { it.name == "eia.bff.order_quota.limit" }
+                .longGaugeData.points
+                .single()
+                .value shouldBe 600L
+        }
+
+        test("枠のヘッダがない応答では、呼び出しを数えず、枠のメトリクスも出さない") {
+            val fixture = OrderFixture({ respond("""{"orders":[],"notFound":[]}""", HttpStatusCode.OK, JSON) })
+
+            fixture.queries.find(setOf("a"))
+
+            fixture.reader.collectAllMetrics().map { it.name } shouldBe emptyList()
+        }
+
         test("Gateway の公開パスに ids をまとめて送り、Bearer のトークンを付ける。契約の形を読み、知らない項目は読み飛ばす") {
             val fixture =
                 OrderFixture({
