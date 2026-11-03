@@ -103,6 +103,11 @@ class ArchitectureSpec :
             ArchitectureRules.grpcReflectionForbidden(codeBase).assertNone()
         }
 
+        test("GraphQL は BFF の adapters と contract-check だけで使い、BFF は DB と Kafka を使わない(ADR-0043 §8)") {
+            ArchitectureRules.graphqlOnlyInAllowedModules(codeBase).assertNone()
+            ArchitectureRules.bffHasNoPersistenceOrMessaging(codeBase).assertNone()
+        }
+
         test("統合テストの Kafka は KafkaBrokerContainer で立てる(#170)") {
             ArchitectureRules.kafkaContainerOnlyThroughTestSupport(codeBase).assertNone()
         }

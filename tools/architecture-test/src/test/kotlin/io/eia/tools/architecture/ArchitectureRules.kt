@@ -502,6 +502,38 @@ internal object ArchitectureRules {
             packageOnlyInAllowedPaths(codeBase, reflection, emptyList(), "gRPC のリフレクション", "使わない。ADR-0042 §5")
         }
 
+    private val GRAPHQL_ALLOWED_PATHS = listOf(Regex("""^services/bff-graphql/adapters/"""), Regex("""^tools/contract-check/"""))
+    private const val GRAPHQL_RULE = "GraphQL の配置"
+    private const val GRAPHQL_ALLOWED = "services/bff-graphql/adapters と tools/contract-check だけ。ADR-0043 §8"
+
+    /** ADR-0043 §8: graphql-java と java-dataloader を本番コードで使ってよいのは、BFF の adapters と contract-check(SDL の検査)だけ。 */
+    fun graphqlOnlyInAllowedModules(codeBase: CodeBase): List<Violation> =
+        packageOnlyInAllowedPaths(codeBase, "graphql", GRAPHQL_ALLOWED_PATHS, GRAPHQL_RULE, GRAPHQL_ALLOWED) +
+            packageOnlyInAllowedPaths(codeBase, "org.dataloader", GRAPHQL_ALLOWED_PATHS, GRAPHQL_RULE, GRAPHQL_ALLOWED)
+
+    private val BFF_FORBIDDEN =
+        listOf(
+            "org.jetbrains.exposed",
+            "org.apache.kafka",
+            "java.sql",
+            "javax.sql",
+            "io.eia.platform.outbox",
+            "io.eia.platform.inbox",
+            "io.eia.platform.messagingkafka",
+        )
+
+    /**
+     * ADR-0043 §8: BFF は業務のロジックと自分のデータを持たない。DB と Kafka を使わない(画面のための集約に限る。Framework 3 章)。
+     * `Mutation` を置かないことは contract-check の CC-GRAPHQL-001 で検査する。
+     */
+    fun bffHasNoPersistenceOrMessaging(codeBase: CodeBase): List<Violation> =
+        codeBase
+            .filesUnder("services/bff-graphql/")
+            .filter { !TEST_SOURCE_SET.containsMatchIn(it.path) }
+            .flatMap { file ->
+                BFF_FORBIDDEN.flatMap { packageUses(file, it, "BFF の線引き", "BFF は DB と Kafka を使わない。ADR-0043 §8") }
+            }
+
     private const val KAFKA_CONTAINER_RULE = "Kafka のテスト用コンテナの作り方"
     private val KAFKA_CONTAINER_CONSTRUCTOR = Regex("""(?<![\w.])(org\.testcontainers\.kafka\.)?KafkaContainer\s*\(""")
 

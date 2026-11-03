@@ -21,7 +21,7 @@ class ArchitectureRulesSpec :
 
         context("違反サンプルを検出する") {
             test("サービスをディレクトリから列挙する") {
-                violations.services shouldBe listOf("other", "sample")
+                violations.services shouldBe listOf("bff-graphql", "other", "sample")
             }
 
             test("依存方向: domain → application / adapters、adapters → app") {
@@ -152,6 +152,16 @@ class ArchitectureRulesSpec :
                     listOf("UsesGrpcReflection.kt")
             }
 
+            test("GraphQL を許可したモジュールの外の本番コードで使う") {
+                ArchitectureRules.graphqlOnlyInAllowedModules(violations).fileNames() shouldContainExactlyInAnyOrder
+                    listOf("UsesGraphql.kt", "UsesDataLoader.kt")
+            }
+
+            test("BFF が DB と Kafka を使う") {
+                ArchitectureRules.bffHasNoPersistenceOrMessaging(violations).fileNames() shouldContainExactlyInAnyOrder
+                    listOf("BffUsesExposed.kt", "BffUsesKafka.kt", "BffUsesKafka.kt")
+            }
+
             test("AWS SDK を platform/file-transfer と audit のアンカー以外の本番コードで使う") {
                 ArchitectureRules.awsSdkOnlyInAllowedModules(violations).fileNames() shouldContainExactlyInAnyOrder
                     listOf("UsesAwsSdk.kt", "UsesAwsSdkOutsideAnchor.kt")
@@ -176,6 +186,7 @@ class ArchitectureRulesSpec :
                         "platform/reliability/build.gradle.kts" to "SFTP・PGP の依存の宣言",
                         "platform/reliability/build.gradle.kts" to "HiveMQ MQTT Client の依存の宣言",
                         "platform/reliability/build.gradle.kts" to "gRPC の依存の宣言",
+                        "platform/reliability/build.gradle.kts" to "GraphQL の依存の宣言",
                         "platform/file-transfer/build.gradle.kts" to "Hadoop は compileOnly だけ",
                     )
             }
@@ -240,6 +251,8 @@ class ArchitectureRulesSpec :
                 ArchitectureRules.messagingLibrariesOnlyInAllowedModules(compliant).shouldBeEmpty()
                 ArchitectureRules.awsSdkOnlyInAllowedModules(compliant).shouldBeEmpty()
                 ArchitectureRules.grpcOnlyInAllowedModules(compliant).shouldBeEmpty()
+                ArchitectureRules.graphqlOnlyInAllowedModules(compliant).shouldBeEmpty()
+                ArchitectureRules.bffHasNoPersistenceOrMessaging(compliant).shouldBeEmpty()
                 ArchitectureRules.grpcBuildersOnlyInPlatform(compliant).shouldBeEmpty()
                 ArchitectureRules.grpcReflectionForbidden(compliant).shouldBeEmpty()
                 ArchitectureRules.parquetOnlyInFileTransfer(compliant).shouldBeEmpty()
