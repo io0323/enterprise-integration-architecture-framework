@@ -297,11 +297,11 @@ jobs:
       # file(ファイル授受。P09 ⑦。FileExchangeE2E)と b2b(B2B / EDI。P12 ⑧。B2bGatewayE2E)と saas(SaaS 連携。P10 ⑦。SaasE2E)と
       # iot(IoT のテレメトリ。P11 ⑦。IotE2E)。
       # E2E=1 で tests/e2e/e2e.env(待ち時間を短くする設定と、E2E の追加の Flow)を足す
-      - name: Up (core + order + cdc + saga + batch + file + b2b + saas + iot)
+      - name: Up (core + order + cdc + saga + batch + file + b2b + saas + iot + bff)
         id: up
         run: |
           start=$(date +%s)
-          make up PROFILE="order cdc saga batch file b2b saas iot" E2E=1
+          make up PROFILE="order cdc saga batch file b2b saas iot bff" E2E=1
           echo "seconds=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
       - name: E2E
         id: e2e
@@ -321,7 +321,7 @@ jobs:
             echo
             echo "| 段階 | 秒 |"
             echo "|---|---|"
-            echo "| 基盤の起動(make up PROFILE=\"order cdc saga batch file b2b saas iot\" E2E=1) | ${{ steps.up.outputs.seconds }} |"
+            echo "| 基盤の起動(make up PROFILE=\"order cdc saga batch file b2b saas iot bff\" E2E=1) | ${{ steps.up.outputs.seconds }} |"
             echo "| E2E(make e2e) | ${{ steps.e2e.outputs.seconds }} |"
             echo
             if [ -f stats.md ]; then cat stats.md; echo; fi
