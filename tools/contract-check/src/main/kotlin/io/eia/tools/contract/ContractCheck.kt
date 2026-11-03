@@ -12,6 +12,7 @@ import io.eia.tools.contract.rules.EdiRules
 import io.eia.tools.contract.rules.FileCompatibility
 import io.eia.tools.contract.rules.FileRules
 import io.eia.tools.contract.rules.FlowRules
+import io.eia.tools.contract.rules.GraphqlRules
 import io.eia.tools.contract.rules.LifecycleRules
 import io.eia.tools.contract.rules.OpenApiCompatibility
 import io.eia.tools.contract.rules.OpenApiRules
@@ -64,6 +65,7 @@ class ContractCheck(
                     AvroRules.checkFullCompatibility(contracts, it) +
                         OpenApiCompatibility(oasdiff).check(contracts, it) +
                         proto.checkCompatibility(contracts, it) +
+                        GraphqlRules.checkCompatibility(contracts, it) +
                         FileCompatibility.check(contracts, it) +
                         DeviceRules.checkUnchanged(contracts, it) +
                         EdiRules.checkUnchanged(contracts, it)
@@ -83,6 +85,7 @@ class ContractCheck(
                 openApi.violations +
                 asyncApi.violations +
                 proto.check(contracts) +
+                GraphqlRules.check(contracts) +
                 AvroRules.checkNaming(contracts) +
                 OpenApiRules.checkExternal(contracts) +
                 FlowRules(contracts).check() +

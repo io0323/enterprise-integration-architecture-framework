@@ -7,6 +7,7 @@
 | REST(Gateway 公開) | `/{domain}/v{n}/{resource}`(複数形・kebab-case)(ADR-0005) | /sales/v1/orders |
 | REST(サービス内部) | `/v{n}/{resource}`(Gateway が `/{domain}` を除去して転送) | /v1/orders |
 | gRPC | `contracts/proto/io/eia/{domain}/v{n}/{name}.proto`、package `io.eia.{domain}.v{n}`(ADR-0042) | io.eia.inventory.v1.StockQueryService |
+| GraphQL | `contracts/graphql/{domain}.v{n}.graphqls`(公開パス `/{domain}/v{n}/graphql`。ADR-0043) | contracts/graphql/storefront.v1.graphqls |
 | Topic | `{domain}.{entity}.{event}.v{n}` | sales.order.created.v1 |
 | Command Topic | `{domain}.{entity}.cmd-{command}.v{n}`(ADR-0006) | inventory.stock.cmd-reserve.v1 |
 | DLQ | `{topic}.dlq` | sales.order.created.v1.dlq |

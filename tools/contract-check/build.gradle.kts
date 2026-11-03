@@ -18,6 +18,8 @@ dependencies {
     implementation(project(":shared:canonical-model"))
     implementation(libs.avro)
     implementation(libs.swagger.parser)
+    // SDL の検査と破壊的変更の検知(ADR-0043)
+    implementation(libs.graphql.java)
     implementation(libs.json.schema.validator)
     implementation(libs.jackson3.dataformat.yaml)
     runtimeOnly(libs.slf4j.nop)

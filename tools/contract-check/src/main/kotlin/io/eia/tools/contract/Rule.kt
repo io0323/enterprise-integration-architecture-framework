@@ -43,6 +43,12 @@ enum class Rule(
         "9, 16.1",
         "JSON Schema 2020-12 の仕様に合わせて直す",
     ),
+    STRUCT_GRAPHQL(
+        "CC-STRUCT-007",
+        "GraphQL の SDL として読めて、スキーマとして正しいこと",
+        "3.1, 15.2, ADR-0043",
+        "SDL の構文と、型の参照を直す",
+    ),
     STRUCT_PROTO(
         "CC-STRUCT-006",
         "proto が buf lint(STANDARD)を満たすこと(package の版、ディレクトリとの一致、命名、構文)",
@@ -108,9 +114,9 @@ enum class Rule(
     ),
     NAMING_DOMAIN(
         "CC-NAMING-010",
-        "Topic・API・proto の domain が連携 ID の domain と一致する",
+        "Topic・API・proto・GraphQL の domain が連携 ID の domain と一致する",
         "16.1, ADR-0005",
-        "連携 ID の {DOMAIN} を小文字にした値を Topic の先頭セグメント・servers の末尾・proto の package に使う",
+        "連携 ID の {DOMAIN} を小文字にした値を Topic の先頭セグメント・servers の末尾・proto の package・GraphQL のファイル名に使う",
     ),
     NAMING_MQTT_TOPIC(
         "CC-NAMING-011",
@@ -129,6 +135,12 @@ enum class Rule(
         "proto の置き場所は contracts/proto/io/eia/{domain}/v{n}/{name}.proto で、java_package は io.eia.platform.grpcstubs.{domain}.v{n}",
         "5.1, 16.1, ADR-0042",
         "置き場所と java_package を直す。Java のパッケージをサービスと分けるのは、他のサービスが生成したスタブを読めるようにするため",
+    ),
+    NAMING_GRAPHQL(
+        "CC-NAMING-014",
+        "GraphQL の契約のファイル名は contracts/graphql/{domain}.v{n}.graphqls",
+        "16.1, ADR-0043",
+        "{domain} を連携 ID の domain にし、破壊的変更は新しいファイル(v{n+1})で行う",
     ),
 
     // --- API ---
@@ -221,7 +233,7 @@ enum class Rule(
     ),
     CATALOG_UNREGISTERED(
         "CC-CATALOG-006",
-        "OpenAPI / AsyncAPI / proto の契約はカタログに登録されている",
+        "OpenAPI / AsyncAPI / proto / GraphQL の契約はカタログに登録されている",
         "16.1",
         "contracts/catalog/{id}.yaml を追加し、contract にこのファイルを指定する",
     ),
@@ -293,6 +305,26 @@ enum class Rule(
         "contracts/catalog/{id}.yaml(style: edi)を追加し、contract にこの仕様を指定する(文書の種類と向きごとに 1 件)",
     ),
 
+    // --- GraphQL ---
+    GRAPHQL_READ_ONLY(
+        "CC-GRAPHQL-001",
+        "GraphQL の BFF は読み取りだけ(Mutation・Subscription を置かない)",
+        "3.1, ADR-0043",
+        "BFF は業務のロジックを持たない。更新は各サービスの API を呼ぶ。必要になったら ADR で決める",
+    ),
+    GRAPHQL_SCOPES(
+        "CC-GRAPHQL-002",
+        "Query のすべての項目に @requiresScope があり、スコープは {domain}.{entity}:{action}",
+        "12.3, ADR-0043",
+        "@requiresScope(scope: \"sales.order:read\") を付ける。宣言の漏れで認可なしにしない",
+    ),
+    GRAPHQL_LIMITS(
+        "CC-GRAPHQL-003",
+        "schema に @queryLimits があり、リストの引数に @maxItems があり、下流の API の上限以下である",
+        "5.6, ADR-0043",
+        "上限を契約に書く。@maxItems の値は upstreamOperation の upstreamParameter の maxItems 以下にする",
+    ),
+
     // --- 互換性(main との差分) ---
     COMPAT_AVRO(
         "CC-COMPAT-001",
@@ -331,6 +363,12 @@ enum class Rule(
         "proto に main の版からの破壊的変更がない(buf breaking。区分は FILE)",
         "5.3, 15.3, ADR-0042",
         "互換な変更(新しい番号の項目・RPC の追加など)にするか、新しい版のパッケージ(io.eia.{domain}.v{n+1})を並行して提供する",
+    ),
+    COMPAT_GRAPHQL(
+        "CC-COMPAT-007",
+        "GraphQL の SDL に main の版からの破壊的変更がない(SchemaDiff と、適用したディレクティブの比較)",
+        "5.3, 15.3, ADR-0043",
+        "項目や引数の追加など互換な変更にするか、新しい版のファイルを並行して提供する。上限を下げる・スコープを変えるのも破壊的変更",
     ),
 
     EXTERNAL_BREAKING(

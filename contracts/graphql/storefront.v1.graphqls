@@ -1,0 +1,115 @@
+# 画面のための集約(INT-STOREFRONT-001。bff-graphql。ADR-0043)。公開パスは /storefront/v1/graphql(Gateway 経由。ADR-0005)。
+# 読み取りだけで、業務のロジックを持たない。更新の操作(Mutation)は置かない(ADR-0043 の線引き)。
+#
+# - 認可: 項目ごとに @requiresScope。足りない項目は null になり、errors に FORBIDDEN が入る。ほかの項目は返す。
+# - 一部のサービスが止まっている: 読めない項目は null になり、errors に UPSTREAM_UNAVAILABLE が入る。
+#   「ない」(エラーなしの null)と「読めなかった」(エラーつきの null)を区別する。
+# - 過大なクエリは、実行の前に拒否する(下の @queryLimits)。下流を呼ばない。
+
+schema @queryLimits(maxDepth: 8, maxAliases: 10, maxComplexity: 200, maxTokens: 2000, maxBodyBytes: 16384) {
+  query: Query
+}
+
+"この項目を読むのに必要なスコープ。呼び出し元のトークンのスコープで確かめる。"
+directive @requiresScope(scope: String!) on FIELD_DEFINITION
+
+"リストの引数の上限。upstream を書いたら、値はその API の上限以下でなければならない(contract-check が確かめる)。"
+directive @maxItems(value: Int!, upstreamOperation: String, upstreamParameter: String) on ARGUMENT_DEFINITION
+
+"クエリの上限。超えたクエリは 400 で拒否する。複雑度の数え方は ADR-0043。"
+directive @queryLimits(maxDepth: Int!, maxAliases: Int!, maxComplexity: Int!, maxTokens: Int!, maxBodyBytes: Int!) on SCHEMA
+
+"RFC 3339 の日時(UTC)。"
+scalar DateTime
+
+"64 ビットの整数。JSON の数値で返す。"
+scalar Long
+
+type Query {
+  "注文を 1 件読む。ないときは null(エラーなし)。"
+  order(id: ID!): Order @requiresScope(scope: "sales.order:read")
+
+  "注文をまとめて読む。ない ID は notFound に返す。"
+  orders(
+    ids: [ID!]! @maxItems(value: 20, upstreamOperation: "batchGetOrders", upstreamParameter: "ids")
+  ): OrderBatch @requiresScope(scope: "sales.order:read")
+}
+
+type OrderBatch {
+  "見つかった注文。指定した順。"
+  orders: [Order!]!
+  "見つからなかった ID。読めなかったこととは区別する。"
+  notFound: [ID!]!
+}
+
+type Order {
+  id: ID!
+  customerId: ID!
+  status: OrderStatus!
+  orderedAt: DateTime!
+  lines: [OrderLine!]!
+  totalAmount: Money!
+  "届け先。個人情報なので、別のスコープが要る。"
+  shippingAddress: Address @requiresScope(scope: "sales.order:read-address")
+  "出荷。まだ出荷の記録がないときは null(エラーなし)。読めなかったときは null + errors。"
+  shipment: Shipment @requiresScope(scope: "shipping.shipment:read")
+}
+
+"注文の状態。この一覧にない値が届いたら UNKNOWN にする(Tolerant Reader)。"
+enum OrderStatus {
+  PLACED
+  CONFIRMED
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  UNKNOWN
+}
+
+type OrderLine {
+  lineNumber: Int!
+  productId: ID!
+  sku: String!
+  quantity: Long!
+  unitPrice: Money!
+  lineAmount: Money!
+  "在庫。在庫の台帳にない SKU は null(エラーなし)。読めなかったときは null + errors。"
+  stock: StockLevel @requiresScope(scope: "inventory.stock:read")
+}
+
+type Money {
+  "通貨の小数桁数で表した 10 進の文字列。"
+  amount: String!
+  currency: String!
+}
+
+type Address {
+  countryCode: String!
+  postalCode: String!
+  region: String
+  city: String!
+  line1: String!
+  line2: String
+}
+
+type StockLevel {
+  "引当できる数。読んだ時点の値で、引当を保証しない。在庫のサービスが計算した値をそのまま返す。"
+  available: Long!
+  updatedAt: DateTime!
+}
+
+type Shipment {
+  status: ShipmentStatus!
+  "status が SHIPPED のときだけ入る。"
+  shipmentId: ID
+  "status が SHIPPED のときだけ入る。"
+  shippedAt: DateTime
+  "届け先の国(ISO 3166-1 alpha-2)。status が SHIPPED のときだけ入る。"
+  destinationCountry: String
+}
+
+"出荷の状態。この一覧にない値が届いたら UNKNOWN にする(Tolerant Reader)。"
+enum ShipmentStatus {
+  SHIPPED
+  REJECTED
+  UNKNOWN
+}

@@ -1,6 +1,6 @@
 # contract-check
 
-`contracts/` の契約(OpenAPI / AsyncAPI / Avro / proto / ファイル仕様 / 連携カタログ)を検査する CLI(ROADMAP P02、ADR-0012・ADR-0013・ADR-0014・ADR-0042)。
+`contracts/` の契約(OpenAPI / AsyncAPI / Avro / proto / GraphQL / ファイル仕様 / 連携カタログ)を検査する CLI(ROADMAP P02、ADR-0012・ADR-0013・ADR-0014・ADR-0042・ADR-0043)。
 違反が 1 件でもあれば終了コード 1 を返す。
 
 ## 使い方
@@ -51,6 +51,7 @@ ID は `CC-{区分}-{連番}`。定義は `src/main/kotlin/io/eia/tools/contract
 | `CC-STRUCT-003` | AsyncAPI 3.0 の公式 JSON Schema に適合すること | 6.3, 15.2 | AsyncAPI 3.0 の仕様に合わせて記述を直す |
 | `CC-STRUCT-004` | Avro スキーマとして読めること | 6.3 | Avro 1.12 の仕様に合わせて直す(default の型、名前の参照順など) |
 | `CC-STRUCT-005` | JSON Schema(manifest・カタログ・ファイルの仕様・EDI の仕様・デバイスの形式)がメタスキーマに適合すること | 9, 16.1 | JSON Schema 2020-12 の仕様に合わせて直す |
+| `CC-STRUCT-007` | GraphQL の SDL として読めて、スキーマとして正しいこと | 3.1, 15.2, ADR-0043 | SDL の構文と、型の参照を直す |
 | `CC-STRUCT-006` | proto が buf lint(STANDARD)を満たすこと(package の版、ディレクトリとの一致、命名、構文) | 5.1, 15.2, ADR-0042 | buf のメッセージに従って直す。package は io.eia.{domain}.v{n} にし、contracts/proto/io/eia/{domain}/v{n}/ に置く |
 | `CC-NAMING-001` | Topic は {domain}.{entity}.{event}.v{n} | 6.2, 16.1 | 小文字・kebab-case の 4 セグメントに直す(例 sales.order.created.v1)。DLQ は {topic}.dlq |
 | `CC-NAMING-002` | Command Topic の event セグメントは cmd-{command} | 6.2, ADR-0006 | event セグメントを cmd-{command}(kebab-case)にする(例 inventory.stock.cmd-reserve.v1) |
@@ -61,10 +62,11 @@ ID は `CC-{区分}-{連番}`。定義は `src/main/kotlin/io/eia/tools/contract
 | `CC-NAMING-007` | Consumer Group は {service}.{purpose} | 6.4 | 小文字・kebab-case の 2 セグメントにする(例 inventory.reservation) |
 | `CC-NAMING-008` | Avro の namespace は io.eia.events.{domain}、record は PascalCase、ファイル名は {Record}.avsc | 6.3, INTEGRATION_STANDARDS §1 | contracts/avro/{domain}/{Record}.avsc に置き、namespace と名前を合わせる(共通型は io.eia.events.common) |
 | `CC-NAMING-009` | OpenAPI / AsyncAPI のファイル名は {name}.v{n}.yaml で、info.version のメジャーと n が一致する | 5.3, 16.1 | ファイル名を {name}.v{n}.yaml にし、破壊的変更は新しいファイル(v{n+1})で行う |
-| `CC-NAMING-010` | Topic・API・proto の domain が連携 ID の domain と一致する | 16.1, ADR-0005 | 連携 ID の {DOMAIN} を小文字にした値を Topic の先頭セグメント・servers の末尾・proto の package に使う |
+| `CC-NAMING-010` | Topic・API・proto・GraphQL の domain が連携 ID の domain と一致する | 16.1, ADR-0005 | 連携 ID の {DOMAIN} を小文字にした値を Topic の先頭セグメント・servers の末尾・proto の package・GraphQL のファイル名に使う |
 | `CC-NAMING-011` | MQTT のトピックは devices/{tenant}/{deviceId}/{channel} | 17.3, INTEGRATION_STANDARDS §1, ADR-0039 | address を devices/{tenant}/{deviceId}/{channel}(channel は小文字・kebab-case)にする。ACL はこの形でデバイスごとに書く |
 | `CC-NAMING-012` | contracts/devices のファイル名は {message}.v{n}.schema.json | 17.3, ADR-0039 | ファイル名を {message}.v{n}.schema.json にし、n をスキーマの v の const と一致させる(例 telemetry.v2.schema.json) |
 | `CC-NAMING-013` | proto の置き場所は contracts/proto/io/eia/{domain}/v{n}/{name}.proto で、java_package は io.eia.platform.grpcstubs.{domain}.v{n} | 5.1, 16.1, ADR-0042 | 置き場所と java_package を直す。Java のパッケージをサービスと分けるのは、他のサービスが生成したスタブを読めるようにするため |
+| `CC-NAMING-014` | GraphQL の契約のファイル名は contracts/graphql/{domain}.v{n}.graphqls | 16.1, ADR-0043 | {domain} を連携 ID の domain にし、破壊的変更は新しいファイル(v{n+1})で行う |
 | `CC-API-001` | POST は Idempotency-Key ヘッダが必須 | 5.4 | POST の parameters に Idempotency-Key(in: header、required: true)を追加する |
 | `CC-API-002` | 全 operation に 429 + Retry-After の応答がある | 5.6 | responses に 429 を追加し、headers に Retry-After を定義する |
 | `CC-API-003` | 全 operation に security が定義されている(匿名アクセスを許さない) | 12 | operation かトップレベルに security(OAuth2 のスコープ)を定義する。空の要件 {} は使わない |
@@ -78,7 +80,7 @@ ID は `CC-{区分}-{連番}`。定義は `src/main/kotlin/io/eia/tools/contract
 | `CC-CATALOG-003` | 連携 ID が重複しない | 16.1 | 未使用の連番を割り当てる |
 | `CC-CATALOG-004` | カタログの channels と AsyncAPI の channel が一致する | 16.1 | AsyncAPI の channels[*].address をすべて catalog の channels に列挙する(過不足なし) |
 | `CC-CATALOG-005` | event / cdc の consumer は group(Consumer Group)を持つ | 6.4 | consumers[*].group に {service}.{purpose} を書く |
-| `CC-CATALOG-006` | OpenAPI / AsyncAPI / proto の契約はカタログに登録されている | 16.1 | contracts/catalog/{id}.yaml を追加し、contract にこのファイルを指定する |
+| `CC-CATALOG-006` | OpenAPI / AsyncAPI / proto / GraphQL の契約はカタログに登録されている | 16.1 | contracts/catalog/{id}.yaml を追加し、contract にこのファイルを指定する |
 | `CC-CATALOG-007` | 外部の契約(contracts/external)を使う連携は external(ベンダーと出典)を書く | 16.1, ADR-0035 | external: { vendor: <ベンダー>, source: <仕様の出典> } を書く。owner は連携に責任を持つ社内のチーム |
 | `CC-COMMAND-001` | Command Topic の購読者は受信サービスの 1 Consumer Group({service}.command)だけ | 6.2, ADR-0006 | 購読を 1 つにする。複数の系が知るべき事実なら Domain Event として別トピックで発行する |
 | `CC-COMMAND-002` | Command Topic は pattern: queue、pattern: queue は Command Topic のみ | 6.7, ADR-0006 | cmd- トピックを含む連携は pattern: queue にし、イベントトピックとは別の連携として登録する |
@@ -89,12 +91,16 @@ ID は `CC-{区分}-{連番}`。定義は `src/main/kotlin/io/eia/tools/contract
 | `CC-EDI-001` | EDI のサブセットの仕様が EDI の仕様のスキーマに適合する(メッセージ・構文・セグメント・並び・業務の規則) | 11.1, ADR-0041 | contracts/files/edi-spec.v{n}.schema.json の必須項目と値を満たす。inbound の仕様には acknowledgements と businessRules を書く |
 | `CC-EDI-002` | EDI の仕様の中の参照が食い違わない(ファイル名と name・version、並びのセグメント・修飾子、UNH のメッセージの型、応答の仕様、規則のコード) | 11.1, ADR-0041 | 並び(structure)のセグメントを segments に定義し、使わない定義を消す。グループの最初は status M のセグメントにする。修飾子は最初のデータ要素の codes の値にする。acknowledgements は outbound の仕様を指す |
 | `CC-EDI-003` | EDI の仕様は style: edi のカタログに登録され、style: edi のカタログの contract は contracts/files/edi/ の仕様 | 11.1, 16.1 | contracts/catalog/{id}.yaml(style: edi)を追加し、contract にこの仕様を指定する(文書の種類と向きごとに 1 件) |
+| `CC-GRAPHQL-001` | GraphQL の BFF は読み取りだけ(Mutation・Subscription を置かない) | 3.1, ADR-0043 | BFF は業務のロジックを持たない。更新は各サービスの API を呼ぶ。必要になったら ADR で決める |
+| `CC-GRAPHQL-002` | Query のすべての項目に @requiresScope があり、スコープは {domain}.{entity}:{action} | 12.3, ADR-0043 | @requiresScope(scope: "sales.order:read") を付ける。宣言の漏れで認可なしにしない |
+| `CC-GRAPHQL-003` | schema に @queryLimits があり、リストの引数に @maxItems があり、下流の API の上限以下である | 5.6, ADR-0043 | 上限を契約に書く。@maxItems の値は upstreamOperation の upstreamParameter の maxItems 以下にする |
 | `CC-COMPAT-001` | Avro スキーマが main の版に対して FULL 互換(BACKWARD かつ FORWARD) | 6.3, 13, 15.3, ADR-0014 | 追加・削除できるのは default 付きの項目だけ。必須項目の追加・削除、型変更、リネーム、enum 値の増減は新しいバージョンのトピック(.v{n+1})で行う |
 | `CC-COMPAT-002` | OpenAPI に main の版からの破壊的変更がない(oasdiff) | 5.3 | 互換な変更(任意項目の追加など)にするか、/v{n+1} を新設して並行提供する |
 | `CC-COMPAT-003` | ファイルの仕様が main の版に対して互換(列の削除・型や必須性の変更・並べ替え・enum の変更・形式の変更がない) | 9, 15.3 | 足してよいのは、末尾の任意(nullable: true)の列と、新しい形式だけ。ほかの変更は新しい版のファイル({system}_{dataset}.v{n+1}.yaml)で行う |
 | `CC-COMPAT-004` | デバイスの形式のスキーマ(contracts/devices)を main の版から変えていない・消していない(説明の文だけは変えてよい) | 15.3, 17.3, ADR-0039 | 出したデバイスの形式は変えない(古いファームウェアのデバイスが送り続ける)。変更は新しい版のファイル({message}.v{n+1}.schema.json)で足す。版をやめるときは ADR-0039 §4 の手順で例外を承認してもらう |
 | `CC-COMPAT-005` | EDI のサブセットの仕様(contracts/files/edi)を main の版から変えていない(説明の文だけは変えてよい) | 11.1, 15.3, ADR-0041 | 取引先は出した版に合わせて EDI の製品を設定しているので、版の中身は変えない。変更は新しい版のファイル({name}.v{n+1}.yaml)で足し、取引先ごとの切り替えは取引先の台帳で行う |
 | `CC-COMPAT-006` | proto に main の版からの破壊的変更がない(buf breaking。区分は FILE) | 5.3, 15.3, ADR-0042 | 互換な変更(新しい番号の項目・RPC の追加など)にするか、新しい版のパッケージ(io.eia.{domain}.v{n+1})を並行して提供する |
+| `CC-COMPAT-007` | GraphQL の SDL に main の版からの破壊的変更がない(SchemaDiff と、適用したディレクティブの比較) | 5.3, 15.3, ADR-0043 | 項目や引数の追加など互換な変更にするか、新しい版のファイルを並行して提供する。上限を下げる・スコープを変えるのも破壊的変更 |
 | `CC-EXTERNAL-001` | 外部の契約(contracts/external)の破壊的変更(警告。ジョブは失敗させない) | 10.4, 16.1, ADR-0035 | ベンダーの変更に合わせて、取り込みの側(Connector・Flow の定義)を直す。カタログの external.source に変更の出典を書く |
 | `CC-WAIVER-001` | 互換性検査の例外リストの形式が正しい | 16.1, ADR-0013 | 各例外に rule(CC-COMPAT-*)・file・contains・reason・issue・expires(YYYY-MM-DD)を書く |
 | `CC-WAIVER-002` | 期限切れの互換性検査の例外が残っていない | 16.1, ADR-0013 | 例外が不要になっていれば削除する。まだ必要なら理由を Issue に残して expires を延ばす |
@@ -129,6 +135,13 @@ ID は `CC-{区分}-{連番}`。定義は `src/main/kotlin/io/eia/tools/contract
 - 規則の設定は `contracts/proto/buf.yaml`。lint は STANDARD(`CC-STRUCT-006`)、破壊的変更の検査は FILE(`CC-COMPAT-006`)。依存(`deps`)を書かないので、外部のレジストリには接続しない。
 - proto は 1 ファイルごとにカタログの `contract` に登録する(`CC-CATALOG-006`)。互換性の違反の許可(設計中の連携・例外)も、このファイルの単位で判定する。
 - 比較元に proto がなければ `CC-COMPAT-006` は省略する(すべて新規)。proto があるのに buf を実行できなければ、`CC-TOOL-001` で失敗させる(黙って省略しない)。
+
+## GraphQL の契約(ADR-0043)
+
+- `contracts/graphql/{domain}.v{n}.graphqls` に置く(`CC-NAMING-014`)。読み取りだけで、`Mutation`・`Subscription` は置かない(`CC-GRAPHQL-001`)。
+- `Query` のすべての項目に `@requiresScope` を付ける(`CC-GRAPHQL-002`)。クエリの上限は `schema` の `@queryLimits`、リストの引数の上限は `@maxItems` で契約に書く。`upstreamOperation` と `upstreamParameter` を書くと、値が下流の OpenAPI の `maxItems` 以下であることを確かめる(`CC-GRAPHQL-003`)。
+- 破壊的変更の検査(`CC-COMPAT-007`)は 2 段。項目・型・引数・enum は graphql-java の `SchemaDiff`、適用したディレクティブ(`SchemaDiff` には見えない)は contract-check が比べる。**上限を下げる・スコープを変える(足す)のも破壊的変更**。
+- 値の追加の `enum` は破壊的変更にしない。SDL の `enum` には `UNKNOWN` を置き、BFF は一覧にない値を `UNKNOWN` にする。
 
 ## MQTT の契約とデバイスの形式(ADR-0039)
 

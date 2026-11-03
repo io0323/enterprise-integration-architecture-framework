@@ -1,0 +1,14 @@
+id: INT-STOREFRONT-001
+name: Storefront GraphQL
+description: 画面のための集約(注文 + 在庫 + 出荷。BFF。Gateway 公開パス /storefront/v1/graphql。ADR-0043)。読み取りだけ。
+style: graphql
+pattern: request-reply
+provider: { owner: team-storefront, system: bff-graphql }
+consumers:
+  - { owner: team-storefront, system: storefront-web }
+contract: contracts/graphql/storefront.v1.graphqls
+tier: 2
+# 届け先の住所(個人情報)を返すことがある。スコープ sales.order:read-address を持つ呼び出しだけ
+dataClassification: confidential
+slo: { availability: "99.9", latencyP99: "1s" }
+lifecycle: design
