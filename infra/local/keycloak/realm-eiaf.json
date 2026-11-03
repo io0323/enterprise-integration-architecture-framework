@@ -50,6 +50,31 @@
       ]
     },
     {
+      "name": "shipping.shipment:read",
+      "description": "出荷の照会(Framework 12.3。contracts/proto/io/eia/shipping/v1/shipment_query_service.proto。ADR-0042 §9)",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "true", "display.on.consent.screen": "false" }
+    },
+    {
+      "name": "shipping-grpc-audience",
+      "description": "aud に shipping-grpc を入れる(CLAUDE.md §5: JWT は aud を検証する)",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "false", "display.on.consent.screen": "false" },
+      "protocolMappers": [
+        {
+          "name": "audience-shipping-grpc",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "shipping-grpc",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
       "name": "order-api-audience",
       "description": "aud に order-api を入れる(CLAUDE.md §5: JWT は aud を検証する)",
       "protocol": "openid-connect",
@@ -84,7 +109,7 @@
       "implicitFlowEnabled": false,
       "fullScopeAllowed": false,
       "defaultClientScopes": ["order-api-audience"],
-      "optionalClientScopes": ["sales.order:read", "sales.order:write", "sales.order:report", "inventory.stock:read", "inventory-grpc-audience"]
+      "optionalClientScopes": ["sales.order:read", "sales.order:write", "sales.order:report", "inventory.stock:read", "inventory-grpc-audience", "shipping.shipment:read", "shipping-grpc-audience"]
     },
     {
       "clientId": "eiaf-e2e-b",

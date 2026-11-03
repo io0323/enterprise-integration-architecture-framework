@@ -20,6 +20,7 @@ leaves=(
   "apisix:apisix"
   "webhook-receiver:webhook-receiver,localhost"
   "inventory-service:inventory-service,localhost"
+  "shipping-service:shipping-service,localhost"
   "bff-graphql:bff-graphql"
 )
 

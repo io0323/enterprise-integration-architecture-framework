@@ -1455,9 +1455,9 @@ print("; ".join(sorted(set(bad))) if bad else "ok")
 
 # ------------------------------------------------------------------ saga(P07。ADR-0028・ADR-0029)
 # 参加者の起動と配線を確かめる。Avro のコマンドから返事までの流れは、統合テスト(InventoryAppIT)と E2E(P07 ⑥)で確かめる
-# 在庫の照会の gRPC(INT-INVENTORY-003。ADR-0042 §5)。gRPC は HTTP/2 なので curl で確かめられる。
+# 在庫と出荷の照会の gRPC(INT-INVENTORY-003・INT-SHIPPING-003。ADR-0042 §5)。gRPC は HTTP/2 なので curl で確かめられる。
 # 応答の状態は trailer の grpc-status(0 OK / 3 INVALID_ARGUMENT / 7 PERMISSION_DENIED / 16 UNAUTHENTICATED)。
-# 生成したスタブでの通信は E2E(P13 ⑨)と InventoryAppIT で確かめる
+# 生成したスタブでの通信は E2E(P13 ⑨)と各サービスの AppIT で確かめる
 grpc_status() { # grpc_status <URL> <本文のファイル> [curl の引数...]。grpc-status を返す
   local url="$1" body="$2"
   shift 2
@@ -1466,40 +1466,52 @@ grpc_status() { # grpc_status <URL> <本文のファイル> [curl の引数...]�
     tr -d '\r' | sed -n 's/^grpc-status: //p' | tail -1
 }
 
-verify_stock_query_grpc() {
-  local url="https://localhost:19445/io.eia.inventory.v1.StockQueryService/BatchGetStock" certs="$here/certs" token body
+verify_query_grpc() { # verify_query_grpc <サービス> <ポート> <RPC のパス> <スコープ> <本文のファイル>
+  local service="$1" port="$2" path="$3" scope="$4" body="$5"
+  local url="https://localhost:$port$path" certs="$here/certs" token
   local client=(--cert "$certs/bff-graphql.crt" --key "$certs/bff-graphql.key")
-  body="$(mktemp)"
-  # gRPC の枠(圧縮なし 1 バイト + 長さ 4 バイト)と、BatchGetStockRequest{skus: "SKU-1"}
-  printf '\000\000\000\000\007\012\005SKU-1' >"$body"
 
   if curl -sS -o /dev/null --max-time 10 --http2 --cacert "$certs/ca.crt" "$url" 2>/dev/null; then
-    fail "inventory-service: gRPC のポートがクライアント証明書のない接続に応答した"
+    fail "$service: gRPC のポートがクライアント証明書のない接続に応答した"
   else
-    pass "inventory-service: gRPC のポートはクライアント証明書のない接続を拒否する"
+    pass "$service: gRPC のポートはクライアント証明書のない接続を拒否する"
   fi
-  if curl -sS -o /dev/null --max-time 10 --http2-prior-knowledge "http://localhost:19445/" 2>/dev/null; then
-    fail "inventory-service: gRPC のポートが平文に応答した"
+  if curl -sS -o /dev/null --max-time 10 --http2-prior-knowledge "http://localhost:$port/" 2>/dev/null; then
+    fail "$service: gRPC のポートが平文に応答した"
   else
-    pass "inventory-service: gRPC のポートは平文に応答しない"
+    pass "$service: gRPC のポートは平文に応答しない"
   fi
-  # 許可の一覧(bff-graphql)にない SAN の証明書は PERMISSION_DENIED(同じ CA の inventory-service 自身の証明書で確かめる)
-  check "inventory-service: 許可の一覧にない SAN の証明書は PERMISSION_DENIED" \
-    equals 7 grpc_status "$url" "$body" --cert "$certs/inventory-service.crt" --key "$certs/inventory-service.key"
-  check "inventory-service: トークンのない呼び出しは UNAUTHENTICATED" equals 16 grpc_status "$url" "$body" "${client[@]}"
+  # 許可の一覧(bff-graphql)にない SAN の証明書は PERMISSION_DENIED(同じ CA のサービス自身の証明書で確かめる)
+  check "$service: 許可の一覧にない SAN の証明書は PERMISSION_DENIED" \
+    equals 7 grpc_status "$url" "$body" --cert "$certs/$service.crt" --key "$certs/$service.key"
+  check "$service: トークンのない呼び出しは UNAUTHENTICATED" equals 16 grpc_status "$url" "$body" "${client[@]}"
   token="$(curl -fsS -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token -d grant_type=client_credentials -d client_id=eiaf-e2e \
-    --data-urlencode "client_secret=$EIAF_E2E_CLIENT_SECRET" --data-urlencode 'scope=inventory.stock:read inventory-grpc-audience' |
+    --data-urlencode "client_secret=$EIAF_E2E_CLIENT_SECRET" --data-urlencode "scope=$scope" |
     json 'd["access_token"]' 2>/dev/null || true)"
-  [[ -n "$token" ]] || fail "Keycloak: 在庫の照会のトークンを取れない(realm を取り込み直すには make clean が要ります)"
-  check "inventory-service: 許可されたクライアントとトークンなら在庫を読める(grpc-status 0)" \
+  [[ -n "$token" ]] || fail "Keycloak: $service の照会のトークンを取れない(realm を取り込み直すには make clean が要ります)"
+  check "$service: 許可されたクライアントとトークンなら読める(grpc-status 0)" \
     equals 0 grpc_status "$url" "$body" "${client[@]}" -H "Authorization: Bearer $token"
+}
+
+# gRPC の枠は、圧縮なし 1 バイト + 長さ 4 バイト。続けて、項目 1(文字列)の Protobuf
+verify_query_grpcs() {
+  local body
+  body="$(mktemp)"
+  # BatchGetStockRequest{skus: "SKU-1"}
+  printf '\000\000\000\000\007\012\005SKU-1' >"$body"
+  verify_query_grpc inventory-service 19445 /io.eia.inventory.v1.StockQueryService/BatchGetStock \
+    'inventory.stock:read inventory-grpc-audience' "$body"
+  # BatchGetShipmentsRequest{order_ids: "ord-none"}
+  printf '\000\000\000\000\012\012\010ord-none' >"$body"
+  verify_query_grpc shipping-service 19446 /io.eia.shipping.v1.ShipmentQueryService/BatchGetShipments \
+    'shipping.shipment:read shipping-grpc-audience' "$body"
   rm -f "$body"
 }
 
 verify_saga() {
   current="saga"
   local connect=http://localhost:19083
-  verify_stock_query_grpc
+  verify_query_grpcs
   local svc
   for svc in inventory payment shipping; do
     check "Kafka Connect: コネクタ $svc-outbox が RUNNING" bash -c \

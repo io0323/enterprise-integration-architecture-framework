@@ -14,23 +14,30 @@ import io.eia.platform.schemaregistry.ApicurioRegistryClient
 import io.eia.platform.schemaregistry.SchemaIdBook
 import io.eia.platform.schemaregistry.SchemaRegistryConfig
 import io.eia.platform.schemaregistry.WriterSchemas
+import io.eia.platform.security.jwt.JwtVerifier
+import io.eia.platform.security.jwt.JwtVerifierConfig
 import io.eia.platform.security.secret.Secret
 import io.eia.shipping.adapters.inbound.ShippingCommandHandlers
+import io.eia.shipping.adapters.inbound.grpc.ShipmentQueryGrpcService
 import io.eia.shipping.adapters.out.outbox.OutboxShippingReplies
 import io.eia.shipping.adapters.out.outbox.ShippingEventSchemas
 import io.eia.shipping.adapters.out.persistence.ExposedTransactionRunner
 import io.eia.shipping.adapters.out.persistence.InboxProcessedCommands
+import io.eia.shipping.adapters.out.persistence.JdbcShipmentQueries
 import io.eia.shipping.adapters.out.persistence.JdbcShipmentStore
 import io.eia.shipping.adapters.out.persistence.UuidV7ShipmentStamps
 import io.eia.shipping.application.port.inbound.ArrangeShipmentUseCase
 import io.eia.shipping.application.port.inbound.CancelShipmentUseCase
+import io.eia.shipping.application.port.inbound.GetShipmentsUseCase
 import io.eia.shipping.application.port.inbound.PurgeExpiredRecordsUseCase
 import io.eia.shipping.application.port.outbound.ProcessedCommands
+import io.eia.shipping.application.port.outbound.ShipmentQueries
 import io.eia.shipping.application.port.outbound.ShipmentStore
 import io.eia.shipping.application.port.outbound.ShippingReplies
 import io.eia.shipping.application.port.outbound.TransactionRunner
 import io.eia.shipping.application.usecase.ArrangeShipmentService
 import io.eia.shipping.application.usecase.CancelShipmentService
+import io.eia.shipping.application.usecase.GetShipmentsService
 import io.eia.shipping.application.usecase.PurgeExpiredRecordsService
 import io.eia.shipping.domain.ShippingRules
 import io.ktor.client.HttpClient
@@ -39,6 +46,7 @@ import org.apache.kafka.clients.consumer.KafkaConsumer
 import org.apache.kafka.clients.producer.KafkaProducer
 import org.apache.kafka.clients.producer.Producer
 import org.jetbrains.exposed.v1.jdbc.Database
+import org.koin.core.module.Module
 import org.koin.dsl.module
 
 /**
@@ -83,6 +91,7 @@ internal fun shippingModule(
     single<ArrangeShipmentUseCase> { ArrangeShipmentService(get(), get(), get(), get(), get(), UuidV7ShipmentStamps()) }
     single<CancelShipmentUseCase> { CancelShipmentService(get(), get(), get(), get(), get()) }
     single<PurgeExpiredRecordsUseCase> { PurgeExpiredRecordsService(get(), get(), config.retention) }
+    shipmentQueryDefinitions(config, runtime)
     single { ShippingCommandHandlers(get(), get()) }
     // DLQ だけに使う(返事は Outbox で発行する)
     single<Producer<ByteArray, ByteArray>> {
@@ -100,6 +109,28 @@ internal fun shippingModule(
         } else {
             EventConsumer(consumer, ShippingCommandHandlers.GROUP_ID, subscriptions, deadLetters, runtime, committer = committer)
         }
+    }
+}
+
+/** 出荷の照会の gRPC(ADR-0042)。 */
+private fun Module.shipmentQueryDefinitions(
+    config: ShippingConfig,
+    runtime: ObservabilityRuntime,
+) {
+    single<ShipmentQueries> { JdbcShipmentQueries(get()) }
+    single<GetShipmentsUseCase> { GetShipmentsService(get()) }
+    single { ShipmentQueryGrpcService(get()) }
+    single {
+        JwtVerifier(
+            JwtVerifierConfig(
+                issuer = requireNotNull(config.grpc.issuer) { "OIDC_ISSUER が必要です" },
+                audience = config.grpc.audience,
+                jwksUri = requireNotNull(config.grpc.jwksUri) { "OIDC_JWKS_URI が必要です" },
+                // 呼び出し元のクライアントが分からないトークンは受け付けない
+                requireClientId = true,
+            ),
+            meter = runtime.meter,
+        )
     }
 }
 
