@@ -19,7 +19,7 @@ import java.util.concurrent.ConcurrentHashMap
  * | `eia.b2b.documents` | counter | `trading_partner_id`・`b2b.outcome`(`unreadable`・`no_envelope`・`rejected`・`checked`・`resent`)・
  *   `b2b.stage`(拒否した段階 `decryption`・`syntax`・`schema`・`business`。拒否がなければ `none`) |
  * | `eia.b2b.documents.rejected` | counter | `trading_partner_id`・`b2b.stage`。拒否した文書の数(運用通知のアラートの元) |
- * | `eia.b2b.inbox.failures` | counter | `trading_partner_id`・`b2b.reason`(`list`: 受け取りのディレクトリを見られない / `document`: 文書の受け付けの失敗) |
+ * | `eia.b2b.inbox.failures` | counter | `trading_partner_id`・`b2b.reason`(`list`: ディレクトリを見られない / `document`: 受け付けの失敗 / `crash`: 見回りの例外) |
  * | `eia.b2b.inbox.stuck` | gauge | `trading_partner_id`。直近の見回りで、受け付けに失敗して処理中のディレクトリに残ったファイルの数 |
  * | `eia.b2b.acknowledgements` | counter | `trading_partner_id`・`b2b.outcome`(`sent`・`failed`)。応答(CONTRL・APERAK)の送信 |
  * | `eia.b2b.order_submissions` | counter | `b2b.outcome`(`accepted`・`refused`・`expired`・`failed`)。社内への取り込み |
@@ -75,7 +75,7 @@ internal class B2bGatewayMetrics(
     init {
         partners.inbound.forEach { partner ->
             REJECTION_STAGES.forEach { rejected.add(0, Attributes.of(PARTNER, partner, STAGE, it)) }
-            listOf("list", "document").forEach { inboxFailures.add(0, Attributes.of(PARTNER, partner, REASON, it)) }
+            listOf("list", "document", "crash").forEach { inboxFailures.add(0, Attributes.of(PARTNER, partner, REASON, it)) }
         }
         partners.acknowledgements.forEach { partner -> acknowledgements.add(0, Attributes.of(PARTNER, partner, OUTCOME, "failed")) }
         submissions.add(0, Attributes.of(OUTCOME, "failed"))
@@ -110,6 +110,11 @@ internal class B2bGatewayMetrics(
 
     fun pollFailed(partnerId: String) {
         inboxFailures.add(1, Attributes.of(PARTNER, partnerId, REASON, "list"))
+    }
+
+    /** 見回りが想定していない例外で終わった(一覧の失敗と分けて数える)。 */
+    fun pollCrashed(partnerId: String) {
+        inboxFailures.add(1, Attributes.of(PARTNER, partnerId, REASON, "crash"))
     }
 
     fun sent(

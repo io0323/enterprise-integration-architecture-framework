@@ -19,6 +19,7 @@
 | `B2bDocumentRejected` | 取引先の文書を拒否した(段階ごと。下の「拒否した文書」) | warning |
 | `B2bInboxStuck` | 受け付けに失敗したファイルが、処理中のディレクトリに 15 分残っている(下の「受け取りのディレクトリ」) | warning |
 | `B2bInboxUnavailable` | 取引先の受け取りのディレクトリを 15 分見られない(下の「期限が切れたとき」) | warning |
+| `B2bInboxPollCrashing` | 見回りが想定していない例外で 15 分失敗し続けている。その取引先の文書を受け付けられない(下の「受け取りのディレクトリ」) | warning |
 | `B2bAcknowledgementSendFailing` | 応答を送れない状態が 15 分続いている(下の「応答の送信」) | warning |
 | `B2bOrderSubmissionFailing` | 受け付けた注文を order の API に取り込めない状態が 15 分続いている(下の「社内への取り込み」) | warning |
 | `B2bAperakDeadlineApproaching` / `B2bAperakDeadlinePassed` | 業務の応答の期限まで 1 時間を切った / 過ぎた(下の「社内への取り込み」) | warning / critical |
@@ -105,6 +106,7 @@ b2b-gateway は、取引先の SFTP の受け取りのディレクトリ(台帳�
 
 - 処理中に残り続けるファイルは、受け付けに失敗し続けている(DB・S3・鍵の読み込み、大きさの上限 16 MiB の超過など)。b2b-gateway のログで、そのファイルの失敗の理由を確かめる。
   原因を直せば、次の見回りで続きから処理する(受け付けはやり直しても重複しない)。
+- `B2bInboxPollCrashing` は、見回りが想定していない例外で終わっている状態(プログラムの誤りの疑い)。ログの `error.type` を確かめる。止まるのはその取引先の見回りだけで、ほかの取引先は続く。
 - 処理済みのファイルは消してよい(原本は Object Lock の置き場にある)。消す時期は取引先との取り決めで決める。
 
 ## 応答の送信

@@ -123,7 +123,9 @@ public object PgpFiles {
     /**
      * [source] を復号して [target] に書き、取引先の署名と改竄の検知を確かめる。
      * 不合格([PgpVerification.Rejected])なら [target] は消す。一時ファイルを読み書きできなければ [LocalFileFailed]。
+     * どんな [source] でも例外は投げない。
      */
+    @Suppress("TooGenericExceptionCaught") // 信頼できない入力を解析するので、BC のどの非検査例外も不合格にする
     public fun decryptAndVerify(
         source: Path,
         target: Path,
@@ -137,7 +139,9 @@ public object PgpFiles {
             } catch (_: IOException) {
                 // 暗号文の形の誤り(BC は壊れた入力を IOException で知らせる)。ローカルの失敗と区別できないので、不合格として扱い、本文は消す
                 PgpVerification.Rejected(PgpRejection.MALFORMED)
-            } catch (_: IllegalStateException) {
+            } catch (_: RuntimeException) {
+                // 取引先のファイルは信頼できない入力で、BC は壊れた入力を非検査例外でも知らせる(UnsupportedPacketVersionException など。種類は版で変わる)。
+                // 外に出すと、1 つのファイルで受信のループが止まる
                 PgpVerification.Rejected(PgpRejection.MALFORMED)
             }
         if (result is PgpVerification.Rejected) {
