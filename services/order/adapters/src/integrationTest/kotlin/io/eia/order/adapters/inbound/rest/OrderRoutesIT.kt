@@ -20,6 +20,7 @@ import io.eia.order.adapters.out.saga.SagaSchemas
 import io.eia.order.adapters.out.saga.UuidV7SagaIds
 import io.eia.order.application.usecase.GetDailyOrderSummaryService
 import io.eia.order.application.usecase.GetOrderService
+import io.eia.order.application.usecase.GetOrdersService
 import io.eia.order.application.usecase.PlaceOrderService
 import io.eia.order.application.usecase.SagaCoordinator
 import io.eia.order.domain.BusinessDay
@@ -74,7 +75,9 @@ import io.ktor.server.testing.testApplication
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.nanoseconds
 import kotlin.time.Instant
@@ -168,6 +171,7 @@ private fun ApplicationTestBuilder.orderService(
                     ),
                 ),
             getOrder = GetOrderService(repository),
+            getOrders = GetOrdersService(repository),
             idempotency = IdempotencyHandler(PostgresIdempotencyStore(db.database)),
             transaction = ExposedTransactionBoundary(db.database),
         )
@@ -416,6 +420,66 @@ class OrderRoutesIT :
                     response.headers[HttpHeaders.WWWAuthenticate] shouldBe """Bearer realm="eiaf", error="invalid_token""""
                     response.problemType() shouldBe "https://eiaf.example/problems/unauthorized"
                     db.count("SELECT count(*) FROM idempotency_record") shouldBe 0
+                }
+            }
+        }
+
+        context("GET /v1/orders?ids=(P13 ⑤)") {
+            suspend fun ApplicationTestBuilder.batch(
+                query: String,
+                token: String,
+            ) = client.get("/v1/orders$query") { header(HttpHeaders.Authorization, "Bearer $token") }
+
+            test("契約の OrderBatch の形で、指定した順に返す。ない ID と形式が不正な ID は notFound") {
+                val db = environment.newDatabase()
+                testApplication {
+                    orderService(db, idp)
+                    val first = place(idp.token(), key = "batch-1").headers[HttpHeaders.Location]!!.removePrefix("orders/")
+                    val second = place(idp.token(), key = "batch-2").headers[HttpHeaders.Location]!!.removePrefix("orders/")
+                    val tooLong = "x".repeat(65)
+
+                    val response = batch("?ids=$second&ids=ord-none&ids=$first&ids=$second&ids=$tooLong", idp.token())
+
+                    response.status shouldBe HttpStatusCode.OK
+                    val body = response.bodyAsText()
+                    ContractSchemas.violations("OrderBatch", body).shouldBeEmpty()
+                    val tree = Json.parseToJsonElement(body).jsonObject
+                    tree.getValue("orders").jsonArray.map {
+                        it.jsonObject
+                            .getValue("id")
+                            .jsonPrimitive.content
+                    } shouldBe
+                        listOf(second, first)
+                    tree.getValue("orders").jsonArray.forEach {
+                        it.jsonObject
+                            .getValue("lines")
+                            .jsonArray
+                            .isNotEmpty() shouldBe true
+                    }
+                    tree.getValue("notFound").jsonArray.map { it.jsonPrimitive.content } shouldBe listOf("ord-none", tooLong)
+                }
+            }
+
+            test("ids がない・上限(20 件)を超えるなら 422 validation-failed。ちょうど 20 件は通す") {
+                val db = environment.newDatabase()
+                testApplication {
+                    orderService(db, idp)
+                    val many = List(21) { "ids=ord-$it" }
+                    listOf("", "?" + many.joinToString("&")).forEach { query ->
+                        val response = batch(query, idp.token())
+                        response.status shouldBe HttpStatusCode.UnprocessableEntity
+                        response.problemType() shouldBe "https://eiaf.example/problems/validation-failed"
+                    }
+                    batch("?" + many.take(20).joinToString("&"), idp.token()).status shouldBe HttpStatusCode.OK
+                }
+            }
+
+            test("認証は必須(なければ 401)。読み取りのスコープがなければ 403") {
+                val db = environment.newDatabase()
+                testApplication {
+                    orderService(db, idp)
+                    client.get("/v1/orders?ids=ord-1").status shouldBe HttpStatusCode.Unauthorized
+                    batch("?ids=ord-1", idp.token(scopes = SCOPE_WRITE)).status shouldBe HttpStatusCode.Forbidden
                 }
             }
         }

@@ -53,6 +53,9 @@ internal class FakeOrderRepository(
         }
     }
 
+    override suspend fun findByIds(ids: Set<OrderId>): Result<List<Order>, DomainError> =
+        failWith?.let { err(it) } ?: ok(ids.mapNotNull { orders[it] })
+
     override suspend fun findById(id: OrderId): Result<Order?, DomainError> = failWith?.let { err(it) } ?: ok(orders[id])
 
     override suspend fun update(order: Order): Result<Order, DomainError> {
