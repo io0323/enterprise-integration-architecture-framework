@@ -54,17 +54,18 @@ P05 ⑤c で、order-service を APISIX(3.18。standalone の YAML)経由で公�
 - `X-Correlation-Id` は `request-id` プラグインで、なければ付け(UUID)、応答にも返す。受け取った値はそのまま送り、形式の検査と採番し直しはサービスが行う(ADR-0018 §3)。span の属性 `x-correlation-id` にも入れる。
 
 ### 5. クライアント(azp)ごとの Rate Limit と、独自のコード
-- `limit-count` で、クライアント(`azp`)ごとに 60 件 / 60 秒。超えたら 429 + `Retry-After`(整数の秒)+ Problem Details `rate-limited`(Framework 5.4)。
+- `limit-count` で、クライアント(`azp`)ごとに 60 件 / 60 秒(クライアントごとに枠を変えられる。P13 ⑧b。ADR-0043 §9)。超えたら 429 + `Retry-After`(整数の秒)+ Problem Details `rate-limited`(Framework 5.4)。
 - **独自のコード(`serverless-*` プラグインのインラインの Lua)を 3 つ使う。どれも、APISIX 3.18 の設定だけでは実現できないことを確かめた。**
   | # | 場所(フェーズ・優先度) | 処理 | 設定だけでできない理由 |
   |---|---|---|---|
   | 1 | global_rules・rewrite・12010 | 受信した `traceparent` / `tracestate` を消す | §4 のとおり。`opentelemetry` に受信したヘッダを無視する設定がなく、nginx でヘッダを消すモジュール(headers-more)もない |
-  | 2 | ルート・access・2000(`openid-connect` の 2599 の後、`limit-count` の 1002 の前) | 検証したトークンの `azp` を `X-Eiaf-Client-Id` に入れる。`X-Userinfo` は上流に送らない | `limit-count` のキーは nginx の変数の組み合わせだけで、JWT のクレームを取り出せない。`openid-connect` は検証したクレームを `X-Userinfo`(base64 の JSON)に入れるが、そのままキーにすると `exp`・`jti` を含むため、トークンごとの枠になる。jwt-auth の Consumer をクライアントごとに作る方法は、公開鍵を設定に固定する必要があり、Keycloak の鍵のローテーションに追従できない |
+  | 2 | ルート・access・2000(`openid-connect` の 2599 の後、`limit-count` の 1002 の前) | 検証したトークンの `azp` を `X-Eiaf-Client-Id` に入れる。`X-Userinfo` は上流に送らない。**`azp` から枠を引いて `limit-count` の `count` の変数に入れる**(P13 ⑧b で追加。枠の値はコードに書かず、環境変数から読む) | `limit-count` のキーは nginx の変数の組み合わせだけで、JWT のクレームを取り出せない。`openid-connect` は検証したクレームを `X-Userinfo`(base64 の JSON)に入れるが、そのままキーにすると `exp`・`jti` を含むため、トークンごとの枠になる。jwt-auth の Consumer をクライアントごとに作る方法は、公開鍵を設定に固定する必要があり、Keycloak の鍵のローテーションに追従できない |
   | 3 | ルート・header_filter | ゲートウェイ自身の 401 / 429 を `application/problem+json` にし、429 に `Retry-After` を付ける(上流の応答は変えない) | `_meta.error_response` で本文は変えられるが、Content-Type は変えられない。`limit-count` は `Retry-After` を付けず、`X-RateLimit-Reset` は小数(例 `29.42`)で、`Retry-After` は整数の秒(RFC 9110 §10.2.3)でなければならない。`response-rewrite` は 1 つのルートに 1 つで、状態コードごとの処理と計算ができない |
 - **偽のヘッダを使わせない**: Rate Limit のキーの `X-Eiaf-Client-Id` は、外部から来たものを `proxy-rewrite`(rewrite のフェーズ。コード 2 より前)で必ず消し、コード 2 が検証したトークンの `azp` だけを入れる。`X-Userinfo` は、クライアントが送ったものを `openid-connect` が検証の前に消し、検証したクレームで入れ直す。
 - **独自のコードの振る舞いは `make verify PROFILE=order` で確かめる**:
   - コード 1: 送った trace_id が使われず、Tempo の apisix の span が起点で、order-service の span の親になる。
   - コード 2: 2 つ目のクライアント(`eiaf-e2e-b`)の枠が、`eiaf-e2e` が偽の `X-Eiaf-Client-Id: eiaf-e2e-b` と偽の `X-Userinfo` を付けて送った要求で減らない。`eiaf-e2e` が 429 になっても、`eiaf-e2e-b` は 429 にならない。
+  - コード 2 の枠(`make verify PROFILE="order saga bff"`): `eiaf-bff-graphql` は 600、一覧にないクライアントは 500 にならず既定の 60 で数えられる。偽のヘッダで BFF の枠を使えず、減らせない。枠の設定が不正なら apisix は起動しない。
   - コード 3: 401 と 429 が `application/problem+json`、429 の `Retry-After` が正の整数。
 - 2 つ目のクライアント `eiaf-e2e-b` を realm に加えた(スコープの扱いは `eiaf-e2e` と同じ。ADR-0019 §8 の方針は変えない)。Keycloak は realm を初回だけ取り込むので、このクライアントより前に作ったボリュームでは `make clean` が要る。
 
@@ -96,3 +97,4 @@ P05 ⑤c で、order-service を APISIX(3.18。standalone の YAML)経由で公�
 
 ## 改訂履歴
 - 2026-10-01: 作成(P05 ⑤c)。
+- 2026-11-03: §5 の独自のコード 2 の役割に、クライアントごとの枠を引く処理を足した(P13 ⑧b。`limit-count` の `count` は式を受け付けないため。経緯は ADR-0043 §9)。

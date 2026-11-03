@@ -44,13 +44,13 @@ internal val SHIPPING_CHANNEL = named("shipping-channel")
 
 private val TOKEN_RESILIENCE = named("token-resilience")
 
-/** 下流ごとに、必要なスコープだけのトークンを取る(ADR-0043 §7)。 */
+/** 下流ごとに、必要なスコープとその下流の `aud` だけのトークンを取る(ADR-0043 §7)。 */
 private fun Scope.tokens(
     config: BffConfig,
     secrets: SecretProvider,
-    scope: String,
+    vararg scopes: String,
 ) = ClientCredentialsTokenProvider(
-    ClientCredentialsConfig(config.tokenUrl, config.clientId, BffConfig.CLIENT_SECRET, setOf(scope)),
+    ClientCredentialsConfig(config.tokenUrl, config.clientId, BffConfig.CLIENT_SECRET, scopes.toSet()),
     get<HttpClient>(),
     secrets,
     resilience = get<Resilience>(TOKEN_RESILIENCE),
@@ -92,13 +92,15 @@ internal fun bffModule(
             )
         }
         single {
+            val stockTokens = tokens(config, secrets, UpstreamScopes.STOCK, "inventory-grpc-audience")
+            val shipmentTokens = tokens(config, secrets, UpstreamScopes.SHIPMENT, "shipping-grpc-audience")
             StorefrontGraphql(
                 StorefrontGraphql.contractSdl(),
                 LoadOrdersService(
                     HttpOrderQueries(
                         get(),
                         config.gatewayUrl,
-                        tokens(config, secrets, HttpOrderQueries.SCOPE),
+                        tokens(config, secrets, HttpOrderQueries.SCOPE, "order-api-audience"),
                         resilience("order-api"),
                         OrderQuotaMetrics(runtime.meter),
                     ),
@@ -106,14 +108,14 @@ internal fun bffModule(
                 LoadStockLevelsService(
                     GrpcStockQueries(
                         get<ManagedChannel>(INVENTORY_CHANNEL),
-                        GrpcClient("inventory", tokens(config, secrets, UpstreamScopes.STOCK).asGrpcTokenSource(), get()),
+                        GrpcClient("inventory", stockTokens.asGrpcTokenSource(), get()),
                         resilience("inventory"),
                     ),
                 ),
                 LoadShipmentsService(
                     GrpcShipmentQueries(
                         get<ManagedChannel>(SHIPPING_CHANNEL),
-                        GrpcClient("shipping", tokens(config, secrets, UpstreamScopes.SHIPMENT).asGrpcTokenSource(), get()),
+                        GrpcClient("shipping", shipmentTokens.asGrpcTokenSource(), get()),
                         resilience("shipping"),
                     ),
                 ),

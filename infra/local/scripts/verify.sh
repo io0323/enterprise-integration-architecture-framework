@@ -1744,6 +1744,196 @@ PY
   check "Gateway: Webhook のルートの Rate Limit を超えたら 429 と Retry-After(Problem Details)" gateway_rate_limited
 }
 
+# ------------------------------------------------------------------ bff(P13。ADR-0043)
+# Gateway → BFF → 注文(REST)・在庫と出荷(gRPC)。下流の障害と部分応答は E2E(P13 ⑨)で確かめる
+storefront_token() { # storefront_token <スコープ>(eiaf-e2e。失敗したら空)
+  curl -fsS -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token -d grant_type=client_credentials -d client_id=eiaf-e2e \
+    --data-urlencode "client_secret=$EIAF_E2E_CLIENT_SECRET" --data-urlencode "scope=$1" | json 'd["access_token"]' 2>/dev/null || true
+}
+bff_token() { # bff_token <スコープ>(eiaf-bff-graphql。失敗したら空)
+  curl -fsS -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token -d grant_type=client_credentials -d client_id=eiaf-bff-graphql \
+    --data-urlencode "client_secret=$EIAF_BFF_GRAPHQL_CLIENT_SECRET" --data-urlencode "scope=$1" | json 'd["access_token"]' 2>/dev/null || true
+}
+storefront_query() { # storefront_query <トークン> <GraphQL のクエリ> [curl の引数...](応答のヘッダと本文を出力する)
+  local token="$1" query="$2"
+  shift 2
+  curl -sS -D - --max-time 20 -X POST http://localhost:19080/storefront/v1/graphql -H "Authorization: Bearer $token" \
+    -H 'Content-Type: application/json' "$@" -d "$(python3 -c 'import json,sys; print(json.dumps({"query": sys.argv[1]}))' "$query")"
+}
+http_status() { head -n1 | awk '{print $2}'; } # 応答のヘッダと本文から、状態コードを取り出す
+response_body() { awk 'body { print } /^\r?$/ { body = 1 }'; } # 応答のヘッダと本文から、本文を取り出す
+apisix_refuses_quota() { # apisix_refuses_quota <変数>=<不正な値>(起動の前に止まり、Gateway を始めない)
+  local output
+  if output="$("${compose[@]}" run --rm --no-deps -e "$1" apisix 2>&1)"; then return 1; fi
+  [[ "$output" == *"${1%%=*}"* ]]
+}
+
+verify_bff() {
+  current="bff"
+  if [[ " ${profiles[*]} " != *" order "* || " ${profiles[*]} " != *" saga "* ]]; then
+    fail 'bff は下流を読むので、make verify PROFILE="order saga bff" で確かめる'
+    return
+  fi
+  local certs="$here/certs" direct=https://localhost:19447/v1/graphql gateway=http://localhost:19080/sales/v1/orders
+
+  # BFF は mTLS で Gateway からだけ受ける(ADR-0024 §6)
+  if curl -sS -o /dev/null --max-time 10 --cacert "$certs/ca.crt" "$direct" 2>/dev/null; then
+    fail "BFF: クライアント証明書のない接続に応答した"
+  else
+    pass "BFF: クライアント証明書のない接続を拒否する"
+  fi
+  if curl -sS -o /dev/null --max-time 10 --cacert "$certs/ca.crt" --cert "$certs/bff-graphql.crt" --key "$certs/bff-graphql.key" "$direct" 2>/dev/null; then
+    fail "BFF: 許可の一覧にない SAN の証明書の接続に応答した"
+  else
+    pass "BFF: 許可の一覧にない SAN の証明書を拒否する(Gateway の証明書だけ)"
+  fi
+
+  # 承認の条件 2: BFF のトークンは読み取りだけ。注文を作れない(confused deputy の緩和。ADR-0043 §7)
+  local bff code
+  bff="$(bff_token 'sales.order:read order-api-audience')"
+  [[ -n "$bff" ]] || fail "Keycloak: eiaf-bff-graphql のトークンを取れない(realm を取り込み直すには make clean が要ります)"
+  code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token \
+    -d grant_type=client_credentials -d client_id=eiaf-bff-graphql --data-urlencode "client_secret=$EIAF_BFF_GRAPHQL_CLIENT_SECRET" \
+    --data-urlencode 'scope=sales.order:write' || true)"
+  if [[ "$code" == 400 ]]; then pass "Keycloak: eiaf-bff-graphql は sales.order:write を取れない"; else fail "Keycloak: eiaf-bff-graphql の sales.order:write の要求が $code"; fi
+  local body='{"customerId":"cust-bff","lines":[{"productId":"prod-1","sku":"SKU-1","quantity":1,"unitPrice":{"amount":"1000","currency":"JPY"}}],"shippingAddress":{"countryCode":"JP","postalCode":"100-0001","city":"Chiyoda","line1":"1-1"}}'
+  code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$gateway" -H "Authorization: Bearer $bff" -H "Idempotency-Key: verify-bff-denied-$$-$(date +%s)" \
+    -H 'Content-Type: application/json' -d "$body" || true)"
+  if [[ "$code" == 403 ]]; then pass "Gateway: BFF のトークンでの注文の作成は 403(書き込みのスコープがない)"; else fail "Gateway: BFF のトークンでの注文の作成が $code"; fi
+
+  # クライアントごとの枠(ADR-0043 §9): BFF は 600、一覧にないクライアント(eiaf-e2e-b)は既定の 60 で数えられ、500 にならない
+  local other bff_headers other_first other_second before after
+  other="$(client_token eiaf-e2e-b "$EIAF_E2E_B_CLIENT_SECRET")"
+  bff_headers="$(curl -sS -D - -o /dev/null "$gateway?ids=ord-none" -H "Authorization: Bearer $bff")"
+  if [[ "$(http_status <<<"$bff_headers")" == 200 && "$(header_value x-ratelimit-limit <<<"$bff_headers")" == 600 ]]; then
+    pass "Gateway: BFF の枠は 600 件 / 60 秒"
+  else
+    fail "Gateway: BFF の枠が想定外 ($(http_status <<<"$bff_headers") / $(header_value x-ratelimit-limit <<<"$bff_headers"))"
+  fi
+  other_first="$(curl -sS -D - -o /dev/null "$gateway/ord-none" -H "Authorization: Bearer $other")"
+  other_second="$(curl -sS -D - -o /dev/null "$gateway/ord-none" -H "Authorization: Bearer $other")"
+  if [[ "$(http_status <<<"$other_first")" == 404 && "$(header_value x-ratelimit-limit <<<"$other_first")" == 60 &&
+    "$(header_value x-ratelimit-remaining <<<"$other_second")" -lt "$(header_value x-ratelimit-remaining <<<"$other_first")" ]]; then
+    pass "Gateway: 一覧にないクライアントは 500 にならず、既定の枠(60 件 / 60 秒)で数えられる"
+  else
+    fail "Gateway: 一覧にないクライアントの応答が想定外 ($(http_status <<<"$other_first") / $(header_value x-ratelimit-limit <<<"$other_first"))"
+  fi
+  # 偽のヘッダで BFF の枠を使えない・消費できない(承認済みの計画の make verify の項目)
+  before="$(curl -sS -D - -o /dev/null "$gateway?ids=ord-none" -H "Authorization: Bearer $bff" | header_value x-ratelimit-remaining)"
+  local forged_userinfo forged
+  forged_userinfo="$(printf '{"azp":"eiaf-bff-graphql"}' | base64)"
+  for _ in 1 2 3; do
+    forged="$(curl -sS -D - -o /dev/null "$gateway/ord-none" -H "Authorization: Bearer $other" -H 'X-Eiaf-Client-Id: eiaf-bff-graphql' -H "X-Userinfo: $forged_userinfo")"
+  done
+  after="$(curl -sS -D - -o /dev/null "$gateway?ids=ord-none" -H "Authorization: Bearer $bff" | header_value x-ratelimit-remaining)"
+  if [[ "$(header_value x-ratelimit-limit <<<"$forged")" == 60 && "$after" -ge $((before - 1)) ]]; then
+    pass "Gateway: 偽の X-Eiaf-Client-Id・X-Userinfo では BFF の枠を使えず、減らせない"
+  else
+    fail "Gateway: 偽のヘッダの枠が想定外 (limit=$(header_value x-ratelimit-limit <<<"$forged"), BFF の残り $before → $after)"
+  fi
+  # 枠の設定の誤りでは Gateway を始めない(count の変数が空になる経路をなくす。ADR-0043 §9)
+  check "Gateway: 既定の枠が不正(空でない数字以外)なら apisix は起動しない" apisix_refuses_quota EIAF_RATE_LIMIT_DEFAULT=abc
+  check "Gateway: 既定の枠が 0 なら apisix は起動しない" apisix_refuses_quota EIAF_RATE_LIMIT_DEFAULT=0
+  check "Gateway: クライアントの枠の形式が不正なら apisix は起動しない" apisix_refuses_quota EIAF_RATE_LIMIT_CLIENTS=eiaf-bff-graphql=0
+
+  # Gateway のルートの認証(ADR-0023 §2)
+  local caller wrong response
+  caller="$(storefront_token 'bff-graphql-audience sales.order:read inventory.stock:read shipping.shipment:read')"
+  [[ -n "$caller" ]] || fail "Keycloak: 画面のクライアントのトークンを取れない(realm を取り込み直すには make clean が要ります)"
+  code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST http://localhost:19080/storefront/v1/graphql -H 'Content-Type: application/json' -d '{"query":"{ __typename }"}')"
+  if [[ "$code" == 401 ]]; then pass "Gateway: トークンのない GraphQL の要求は 401"; else fail "Gateway: トークンのない要求が $code"; fi
+  wrong="$(storefront_token 'sales.order:read')"
+  response="$(storefront_query "$wrong" '{ __typename }')"
+  if [[ "$(http_status <<<"$response")" == 401 && "$(header_value content-type <<<"$response")" == application/problem+json* ]]; then
+    pass "Gateway: aud に bff-graphql がないトークンは 401(Problem Details)"
+  else
+    fail "Gateway: aud の違うトークンの応答が想定外 ($(http_status <<<"$response"))"
+  fi
+
+  # 注文 + 在庫 + 出荷を 1 回で読む(eiaf-e2e は order の検査で Rate Limit を使い切っていることがあるので、eiaf-e2e-b で作る)
+  local order_id
+  order_id="$(curl -sS -X POST "$gateway" -H "Authorization: Bearer $other" -H "Idempotency-Key: verify-bff-$$-$(date +%s)" \
+    -H 'Content-Type: application/json' -d "$body" | json 'd["id"]' 2>/dev/null || true)"
+  [[ -n "$order_id" ]] || fail "Gateway: 検査の注文を作れない"
+  local full="{ order(id: \"$order_id\") { id status lines { sku stock { available } } shipment { status } } }"
+  response="$(storefront_query "$caller" "$full")"
+  if [[ "$(http_status <<<"$response")" == 200 && "$(response_body <<<"$response" | json 'd["data"]["order"]["id"] if not d.get("errors") else d["errors"]' 2>/dev/null)" == "$order_id" ]]; then
+    pass "Gateway → BFF: 注文 + 在庫 + 出荷を 1 回で読める(エラーなし。REST と mTLS の gRPC を通る)"
+  else
+    fail "Gateway → BFF: 集約の応答が想定外 ($(response_body <<<"$response" | cut -c1-300))"
+  fi
+
+  # 住所は別のスコープ。足りなければ、その項目だけ null + FORBIDDEN(ADR-0043 §7)
+  response="$(storefront_query "$caller" "{ order(id: \"$order_id\") { id shippingAddress { city } } }" | response_body)"
+  if [[ "$(json 'd["errors"][0]["extensions"]["code"] + "/" + d["data"]["order"]["id"] + "/" + str(d["data"]["order"]["shippingAddress"])' <<<"$response" 2>/dev/null)" == "FORBIDDEN/$order_id/None" ]]; then
+    pass "BFF: 住所のスコープがなければ、住所だけ null + FORBIDDEN"
+  else
+    fail "BFF: 住所のスコープなしの応答が想定外 ($(cut -c1-300 <<<"$response"))"
+  fi
+  response="$(storefront_query "$(storefront_token 'bff-graphql-audience sales.order:read sales.order:read-address')" "{ order(id: \"$order_id\") { shippingAddress { city } } }" | response_body)"
+  if [[ "$(json 'd["data"]["order"]["shippingAddress"]["city"]' <<<"$response" 2>/dev/null)" == Chiyoda ]]; then
+    pass "BFF: sales.order:read-address があれば住所を読める"
+  else
+    fail "BFF: 住所のスコープありの応答が想定外 ($(cut -c1-300 <<<"$response"))"
+  fi
+
+  # 過大なクエリ・イントロスペクション(ROADMAP P13 の DoD。ADR-0043 §4)
+  local many
+  many="$(python3 -c 'print(",".join(chr(34) + "ord-none-" + str(i) + chr(34) for i in range(21)))')"
+  response="$(storefront_query "$caller" "{ orders(ids: [$many]) { notFound } }")"
+  if [[ "$(http_status <<<"$response")" == 400 && "$(response_body <<<"$response" | json 'd["errors"][0]["extensions"]["code"]' 2>/dev/null)" == QUERY_LIMIT_EXCEEDED ]]; then
+    pass "BFF: ids が 20 件を超えるクエリは 400 QUERY_LIMIT_EXCEEDED"
+  else
+    fail "BFF: 過大なクエリの応答が想定外 ($(http_status <<<"$response"))"
+  fi
+  response="$(storefront_query "$caller" '{ __schema { types { name } } }' | response_body)"
+  if [[ "$(json 'd.get("data") is None and bool(d["errors"])' <<<"$response" 2>/dev/null)" == True ]]; then
+    pass "BFF: イントロスペクションは無効"
+  else
+    fail "BFF: イントロスペクションの応答が想定外 ($(cut -c1-200 <<<"$response"))"
+  fi
+
+  # メトリクスとアラートのルール(注文を読んだ後。送信は 10 秒ごと)
+  check "Prometheus: BFF が Gateway の枠(600)を知っている(BffOrderQuotaHigh の分母)" \
+    retry 12 10 equals 600 prom_value 'max(eia_bff_order_quota_limit{job="bff-graphql"})'
+  local rules
+  rules="$(curl -fsS http://localhost:19090/api/v1/rules | json '" ".join(r["name"] for g in d["data"]["groups"] for r in g["rules"])' 2>/dev/null || true)"
+  if [[ " $rules " == *" BffOrderQuotaHigh "* && " $rules " == *" BffPartialResponses "* ]]; then
+    pass "Prometheus: BFF のアラートのルールを読み込んでいる"
+  else
+    fail "Prometheus: BFF のアラートのルールがない"
+  fi
+
+  # 複雑度の枠(ADR-0043 §9)。ほかの検査の枠を使わないよう最後に行う。1 回 140 で、大きさ 1000 を超えるまで続ける
+  local heavy="{ orders(ids: [$(python3 -c 'print(",".join(chr(34) + "ord-none-" + str(i) + chr(34) for i in range(20)))')]) { orders { shipment { status } lines { stock { available } } } } }"
+  local limited=""
+  for _ in $(seq 1 25); do
+    response="$(storefront_query "$caller" "$heavy")"
+    if [[ "$(http_status <<<"$response")" == 429 ]]; then limited=yes; break; fi
+  done
+  if [[ "$limited" == yes && "$(header_value retry-after <<<"$response")" -ge 1 &&
+    "$(response_body <<<"$response" | json 'd["type"]' 2>/dev/null)" == https://eiaf.example/problems/rate-limited ]]; then
+    pass "BFF: 複雑度の枠を超えると 429 + Retry-After + Problem Details rate-limited"
+  else
+    fail "BFF: 複雑度の枠の応答が想定外 ($(http_status <<<"$response"))"
+  fi
+
+  # ダッシュボード(部分応答は平常時は空でよい。拒否と個人情報の読み取りは、上の検査で数を流している)
+  local dash result
+  dash="$(curl -fsS -u "admin:$GRAFANA_ADMIN_PASSWORD" http://localhost:19300/api/dashboards/uid/eiaf-bff || true)"
+  if [[ "$(json 'd["meta"]["folderTitle"] + "/" + d["dashboard"]["title"]' <<<"$dash" 2>/dev/null)" == "EIAF/Storefront — BFF" ]]; then
+    pass "Grafana: ダッシュボード Storefront — BFF(フォルダ EIAF)を provisioning で読み込んでいる"
+    result="$(dashboard_panels_return_data "$dash" "部分応答(読めなかったサービス別)")"
+    if [[ "$result" == ok ]]; then
+      pass "Grafana: BFF のダッシュボードの全パネルの式が、Prometheus でデータを返す"
+    else
+      fail "Grafana: BFF のパネルの式が想定外: $result"
+    fi
+  else
+    fail "Grafana: ダッシュボード eiaf-bff を読み込めない"
+  fi
+}
+
 verify_health
 for p in "${profiles[@]}"; do
   if declare -F "verify_$p" >/dev/null; then "verify_$p"; else current="$p"; fail "verify_$p が未定義"; fi

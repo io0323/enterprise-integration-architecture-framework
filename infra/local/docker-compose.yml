@@ -806,6 +806,55 @@ services:
       <<: *healthcheck
       test: ["CMD", "/probe/bin/wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/health/ready"]
 
+  # ---------------------------------------------------------------- bff(P13。ADR-0043)
+  # 画面のための集約。注文は Gateway 経由、在庫と出荷は gRPC で読む。データを持たないので migrate はない。
+  # 下流は order と saga の profile にあるので、make up PROFILE="order saga bff" で動かす。下流がなければ部分応答になる。
+  # 証明書の鍵を読むので、ホストの利用者の uid で動かす(ADR-0024 §7)
+  bff-graphql:
+    build:
+      context: ../../services/bff-graphql/app
+      args:
+        JAVA_RUNTIME_IMAGE: ${JAVA_RUNTIME_IMAGE:?}
+    profiles: [bff]
+    command: ["serve"]
+    user: "${EIAF_UID:-65532}:${EIAF_GID:-65532}"
+    depends_on:
+      keycloak:
+        condition: service_healthy
+      otel-collector:
+        condition: service_healthy
+    environment:
+      BFF_TLS_CERT_FILE: /certs/bff-graphql.crt
+      BFF_TLS_KEY_FILE: /certs/bff-graphql.key
+      BFF_TLS_CLIENT_CA_FILE: /certs/ca.crt
+      BFF_TLS_ALLOWED_CLIENTS: apisix
+      # iss はトークンに入っている値(ホストから見た URL)、JWKS はコンテナから届く URL(ADR-0019)
+      OIDC_ISSUER: http://localhost:19180/realms/eiaf
+      OIDC_JWKS_URI: http://keycloak:8080/realms/eiaf/protocol/openid-connect/certs
+      BFF_TOKEN_URL: http://keycloak:8080/realms/eiaf/protocol/openid-connect/token
+      BFF_CLIENT_SECRET: ${EIAF_BFF_GRAPHQL_CLIENT_SECRET:?make env を実行してください}
+      BFF_GATEWAY_URL: http://apisix:9080
+      BFF_INVENTORY_TARGET: inventory-service:9443
+      BFF_SHIPPING_TARGET: shipping-service:9443
+      # 複雑度の枠(ADR-0043 §9)。E2E・検証で小さくできる
+      BFF_COMPLEXITY_BUCKET_CAPACITY: ${BFF_COMPLEXITY_BUCKET_CAPACITY:-1000}
+      BFF_COMPLEXITY_REFILL_PER_SECOND: ${BFF_COMPLEXITY_REFILL_PER_SECOND:-60}
+      OTEL_SERVICE_NAME: bff-graphql
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    ports:
+      # mTLS なしの接続を拒否することの検査用(ADR-0024 §6)
+      - 127.0.0.1:19447:8443
+    volumes:
+      # CA の鍵(ca.key)は渡さない
+      - ./certs/ca.crt:/certs/ca.crt:ro
+      - ./certs/bff-graphql.crt:/certs/bff-graphql.crt:ro
+      - ./certs/bff-graphql.key:/certs/bff-graphql.key:ro
+      - *probe-volume
+    mem_limit: 256m
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "/probe/bin/wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/health/ready"]
+
   # ---------------------------------------------------------------- iot(P11。ADR-0039)
   # パスワードと ACL のファイルを、デバイスの一覧(mosquitto/devices.txt)と secrets/mqtt/device-passwords から起動のたびに作り直す
   # (mosquitto/start.sh。ボリュームには置かない)。デバイスは自分のトピックにだけ書け、iot-bridge は読むだけ、eiaf-monitor は $SYS だけ
@@ -1252,11 +1301,12 @@ services:
       KC_METRICS_ENABLED: "true"
       KC_LOG_LEVEL: warn
       # realm-eiaf.json の ${EIAF_E2E_CLIENT_SECRET} / ${EIAF_E2E_B_CLIENT_SECRET} / ${EIAF_BATCH_ETL_CLIENT_SECRET} /
-      # ${EIAF_B2B_GATEWAY_CLIENT_SECRET} を置換する
+      # ${EIAF_B2B_GATEWAY_CLIENT_SECRET} / ${EIAF_BFF_GRAPHQL_CLIENT_SECRET} を置換する
       EIAF_E2E_CLIENT_SECRET: ${EIAF_E2E_CLIENT_SECRET:?}
       EIAF_E2E_B_CLIENT_SECRET: ${EIAF_E2E_B_CLIENT_SECRET:?make env を実行してください}
       EIAF_BATCH_ETL_CLIENT_SECRET: ${EIAF_BATCH_ETL_CLIENT_SECRET:?make env を実行してください}
       EIAF_B2B_GATEWAY_CLIENT_SECRET: ${EIAF_B2B_GATEWAY_CLIENT_SECRET:?make env を実行してください}
+      EIAF_BFF_GRAPHQL_CLIENT_SECRET: ${EIAF_BFF_GRAPHQL_CLIENT_SECRET:?make env を実行してください}
       JAVA_OPTS_KC_HEAP: -XX:MaxRAMPercentage=60 -XX:InitialRAMPercentage=25
     ports:
       - 127.0.0.1:19180:8080
@@ -1290,11 +1340,18 @@ services:
       - sh
       - -c
       - >-
+        printf '%s' "$$EIAF_RATE_LIMIT_DEFAULT" | grep -Eq '^[1-9][0-9]*$$' ||
+        { echo 'EIAF_RATE_LIMIT_DEFAULT は正の整数にしてください' >&2; exit 1; } &&
+        { [ -z "$$EIAF_RATE_LIMIT_CLIENTS" ] || printf '%s' "$$EIAF_RATE_LIMIT_CLIENTS" | grep -Eq '^[^,=]+=[1-9][0-9]*(,[^,=]+=[1-9][0-9]*)*$$'; } ||
+        { echo 'EIAF_RATE_LIMIT_CLIENTS は クライアント=正の整数 のカンマ区切りにしてください' >&2; exit 1; } &&
         pem() { awk '{printf "%s\\n", $$0}' "$$1"; } &&
         export GATEWAY_CLIENT_CERT="$$(pem /certs/apisix.crt)" GATEWAY_CLIENT_KEY="$$(pem /certs/apisix.key)" &&
         exec /docker-entrypoint.sh docker-start
     environment:
       APISIX_STAND_ALONE: "true"
+      # クライアント(azp)ごとの枠(60 秒あたりの件数。ADR-0043 §9)。一覧にないクライアントは既定の枠で数える
+      EIAF_RATE_LIMIT_DEFAULT: ${EIAF_RATE_LIMIT_DEFAULT:-60}
+      EIAF_RATE_LIMIT_CLIENTS: ${EIAF_RATE_LIMIT_CLIENTS:-eiaf-bff-graphql=600}
     ports:
       - 127.0.0.1:19080:9080
     volumes:

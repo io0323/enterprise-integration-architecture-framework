@@ -1,0 +1,68 @@
+# bff.rules.yml の単体テスト(make alerts-test)。
+rule_files:
+  - bff.rules.yml
+evaluation_interval: 1m
+tests:
+  - name: 枠の 80% を超える呼び出しが 5 分続いたら警告する(1 分 500 件 / 枠 600 = 83%)
+    interval: 1m
+    input_series:
+      - series: 'eia_bff_order_quota_calls_total{job="bff-graphql",instance="a"}'
+        values: "0+300x20"
+      - series: 'eia_bff_order_quota_calls_total{job="bff-graphql",instance="b"}'
+        values: "0+200x20"
+      - series: 'eia_bff_order_quota_limit{job="bff-graphql",instance="a"}'
+        values: "600x20"
+      - series: 'eia_bff_order_quota_limit{job="bff-graphql",instance="b"}'
+        values: "600x20"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: BffOrderQuotaHigh
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: BffOrderQuotaHigh
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "Gateway の BFF の枠の使用率が 80% を超えている(現在 83.33%)"
+              runbook: docs/runbooks/bff-graphql.md#bff-の枠の使用率が高いとき
+
+  - name: 枠の 80% 以下なら警告しない(1 分 480 件 / 枠 600 = 80%)
+    interval: 1m
+    input_series:
+      - series: 'eia_bff_order_quota_calls_total{job="bff-graphql"}'
+        values: "0+480x20"
+      - series: 'eia_bff_order_quota_limit{job="bff-graphql"}'
+        values: "600x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: BffOrderQuotaHigh
+        exp_alerts: []
+
+  - name: 枠を変えると分母も変わる(同じ 500 件でも、枠 1200 なら警告しない)
+    interval: 1m
+    input_series:
+      - series: 'eia_bff_order_quota_calls_total{job="bff-graphql"}'
+        values: "0+500x20"
+      - series: 'eia_bff_order_quota_limit{job="bff-graphql"}'
+        values: "1200x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: BffOrderQuotaHigh
+        exp_alerts: []
+
+  - name: 部分応答が 15 分続いたら、読めないサービスごとに警告する
+    interval: 1m
+    input_series:
+      - series: 'eia_graphql_partial_responses_total{job="bff-graphql",service="inventory"}'
+        values: "0+1x30"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: BffPartialResponses
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: BffPartialResponses
+        exp_alerts:
+          - exp_labels: { severity: warning, service: inventory }
+            exp_annotations:
+              summary: "inventory を読めず、部分応答を返し続けている"
+              runbook: docs/runbooks/bff-graphql.md#部分応答が続くとき

@@ -1,0 +1,24 @@
+# 画面のための集約(bff-graphql)のアラート(P13。ADR-0043 §6・§9)。対応は docs/runbooks/bff-graphql.md。単体テストは bff.test.yml(make alerts-test)。
+groups:
+  - name: bff
+    rules:
+      # Gateway の BFF の枠の使用率。枠(分母)は Gateway の応答の X-RateLimit-Limit から読むので、Gateway の設定を変えれば追従する。
+      # 枠の時間窓は 60 秒(apisix.yaml の time_window)。枠を超えると、全クライアントの注文の項目が読めなくなるので、超える前に知らせる
+      - alert: BffOrderQuotaHigh
+        expr: sum(rate(eia_bff_order_quota_calls_total[2m])) * 60 / max(eia_bff_order_quota_limit) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Gateway の BFF の枠の使用率が 80% を超えている(現在 {{ $value | humanizePercentage }})"
+          runbook: docs/runbooks/bff-graphql.md#bff-の枠の使用率が高いとき
+
+      # 部分応答は HTTP 200 なので、RED の Errors には出ない(ADR-0043 §6)
+      - alert: BffPartialResponses
+        expr: sum by (service) (increase(eia_graphql_partial_responses_total[5m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.service }} を読めず、部分応答を返し続けている"
+          runbook: docs/runbooks/bff-graphql.md#部分応答が続くとき

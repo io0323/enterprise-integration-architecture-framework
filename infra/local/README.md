@@ -85,6 +85,7 @@ Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)�
 | 19444 | `webhook-receiver:8443` | webhook-receiver | saas | Webhook の受け口(`/v1/webhooks/crm`)。**mTLS だけ**(SAN `apisix`)。mTLS なしの接続を拒否することの検査用。送り手は Gateway の `/sales/v1/webhooks/crm` に送る |
 | 19445 | `inventory-service:9443` | inventory-service | saga | 在庫の照会の gRPC。**mTLS だけ**(クライアント証明書は SAN `bff-graphql` だけ。ADR-0042 §5) |
 | 19446 | `shipping-service:9443` | shipping-service | saga | 出荷の照会の gRPC。**mTLS だけ**(クライアント証明書は SAN `bff-graphql` だけ。ADR-0042 §5) |
+| 19447 | `bff-graphql:8443` | bff-graphql | bff | 画面のための集約(`/v1/graphql`)。**mTLS だけ**(クライアント証明書は SAN `apisix` だけ)。公開パスは Gateway の `/storefront/v1/graphql`(ADR-0043) |
 | 19474 | `toxiproxy:8474` | Toxiproxy | chaos | 管理 API(toxic の追加・削除) |
 | 19883 | `mosquitto:1883` | Mosquitto | iot | MQTT(匿名接続は不可。デバイスごとの資格情報と ACL。ADR-0039 §3) |
 
@@ -103,6 +104,7 @@ Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)�
 | Keycloak client credentials(2 つ目) | `eiaf-e2e-b`(`eiaf-e2e` と同じ設定。クライアントごとの Rate Limit・冪等の範囲の確認用。ADR-0023 §5) | `EIAF_E2E_B_CLIENT_SECRET`。**P05 ⑤c より前に作ったボリュームには無いので、`make clean` が必要** |
 | Keycloak client credentials(分析のバッチ) | `eiaf-batch-etl`(スコープ `sales.order:report` だけ。週次の照合で注文の日次の集計を読む。ADR-0031 §6) | `EIAF_BATCH_ETL_CLIENT_SECRET`。**P08 ④ より前に作ったボリュームには無いので、`make clean` が必要** |
 | Keycloak client credentials(B2B / EDI Gateway) | `eiaf-b2b-gateway`(スコープ `sales.order:write` だけ。取引先から受け付けた注文を order の API で登録する。ADR-0040 §6) | `EIAF_B2B_GATEWAY_CLIENT_SECRET`。**P12 ⑤b より前に作ったボリュームには無いので、`make clean` が必要** |
+| Keycloak client credentials(画面のための集約) | `eiaf-bff-graphql`(注文・在庫・出荷の読み取りのスコープだけ。書き込みのスコープを持たない。ADR-0043 §7) |
 | Grafana | `admin` | `GRAFANA_ADMIN_PASSWORD` |
 | MQTT(デバイス) | `{tenant}/{deviceId}`(`mosquitto/devices.txt` の各行) | ファイル `secrets/mqtt/device-passwords`(1 行に「ユーザー名 パスワード」)。デバイスを足すときは `docs/runbooks/iot-bridge.md` |
 | MQTT(iot-bridge・監視) | `iot-bridge`(テレメトリの読み取りだけ)・`eiaf-monitor`(`$SYS` の読み取りだけ) | `MQTT_BRIDGE_PASSWORD`・`MQTT_MONITOR_PASSWORD` |
