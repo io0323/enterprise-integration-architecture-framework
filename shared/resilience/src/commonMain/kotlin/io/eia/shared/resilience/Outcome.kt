@@ -23,6 +23,7 @@ internal enum class Outcome {
             val error = (result as? Result.Err)?.error ?: return SUCCESS
             return when {
                 error is ResilienceRejection -> IGNORED
+                error is UncountedFailure -> IGNORED
                 error is DeadlineExceeded && error.source == DeadlineSource.CALLER -> IGNORED
                 error is DomainError.Retryable -> FAILURE
                 else -> SUCCESS // NonRetryable: 依存先は応答している

@@ -462,6 +462,46 @@ internal object ArchitectureRules {
             .filter { RESILIENCE_CONSTRUCTOR.containsMatchIn(it.code.replace(IMPORT_OR_PACKAGE_LINE, "").replace(COMMENT, "")) }
             .map { Violation(RESILIENCE_RULE, it.path, "Resilience(...) を直接作っています(ResilienceMetrics.resilience(...) で作る)") }
 
+    private val GRPC_ALLOWED_PATHS = listOf(Regex("""^platform/grpc/"""), Regex("""^services/[^/]+/(adapters|app)/"""))
+
+    /**
+     * ADR-0042 §5: gRPC(`io.grpc`)を本番コードで使ってよいのは、platform/grpc と services/<name>/adapters・app だけ。
+     * スタブ(platform/grpc-stubs)は生成コードで、src にコードがない。依存の宣言は [LibraryDeclarationRules] で検査する。
+     */
+    fun grpcOnlyInAllowedModules(codeBase: CodeBase): List<Violation> =
+        packageOnlyInAllowedPaths(
+            codeBase,
+            "io.grpc",
+            GRPC_ALLOWED_PATHS,
+            "gRPC の配置",
+            "platform/grpc と services/*/adapters・app だけ。ADR-0042 §5",
+        )
+
+    private val GRPC_BUILDERS = listOf("io.grpc.Grpc", "io.grpc.ManagedChannelBuilder", "io.grpc.ServerBuilder", "io.grpc.netty")
+
+    /**
+     * ADR-0042 §5: チャネルとサーバは platform/grpc だけで作る。サービスが直接作ると、mTLS・自動のリトライを止める設定・
+     * JWT の確認を抜かせてしまうため。
+     */
+    fun grpcBuildersOnlyInPlatform(codeBase: CodeBase): List<Violation> =
+        GRPC_BUILDERS.flatMap { builder ->
+            packageOnlyInAllowedPaths(
+                codeBase,
+                builder,
+                listOf(Regex("""^platform/grpc/""")),
+                "gRPC のチャネルとサーバの作り方",
+                "platform/grpc の GrpcChannels・GrpcServer を使う。ADR-0042 §5",
+            )
+        }
+
+    private val GRPC_REFLECTION = listOf("io.grpc.protobuf.services", "io.grpc.reflection")
+
+    /** ADR-0042 §5: gRPC のサーバのリフレクションは、本番で誤って有効にしないよう、どこにも実装しない。 */
+    fun grpcReflectionForbidden(codeBase: CodeBase): List<Violation> =
+        GRPC_REFLECTION.flatMap { reflection ->
+            packageOnlyInAllowedPaths(codeBase, reflection, emptyList(), "gRPC のリフレクション", "使わない。ADR-0042 §5")
+        }
+
     private const val KAFKA_CONTAINER_RULE = "Kafka のテスト用コンテナの作り方"
     private val KAFKA_CONTAINER_CONSTRUCTOR = Regex("""(?<![\w.])(org\.testcontainers\.kafka\.)?KafkaContainer\s*\(""")
 

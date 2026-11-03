@@ -15,6 +15,12 @@ public sealed interface ResilienceError : DomainError.Retryable {
 }
 
 /**
+ * 依存先の状態を表さないエラーの印(ADR-0021 §3)。Circuit Breaker とリトライバジェットに、成功としても失敗としても数えない。
+ * 例: 証明書の設定の誤りで接続できない(依存先が健全かどうかは分からない)。Half-Open なら、試す枠を返す。
+ */
+public interface UncountedFailure
+
+/**
  * 依存先に送らずに、手元で断った呼び出し([CircuitOpen] と [BulkheadFull])。
  *
  * 依存先の状態を表さないので、Circuit Breaker の失敗にもリトライバジェットにも数えず、リトライもしない(ADR-0021 §3)。

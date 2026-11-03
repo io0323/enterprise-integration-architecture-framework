@@ -1,0 +1,32 @@
+# 社内の gRPC の証明書のエラーのアラート(P13。ADR-0042 §8)。対応は docs/runbooks/dev-certificates.md。単体テストは grpc.test.yml(make alerts-test)。
+#
+# - 証明書のエラーは再試行で直らず、Circuit Breaker も開かない(依存先の障害ではないため)。ほかのアラートでは気づけないので、1 件目で知らせる
+# - カウンタは 1 件目の失敗で系列が現れる。increase は現れたときの増え方を数えないので、直近 5 分に現れた系列も失敗として扱う
+groups:
+  - name: grpc
+    rules:
+      # 呼び出し側: 証明書が原因で依存先に接続できない(直すまで呼び出しは失敗し続ける)
+      - alert: GrpcClientCertificateFailure
+        expr: |
+          sum by (eia_dependency_name, reason) (increase(eia_grpc_client_certificate_failures_total[5m])) > 0
+          or
+          (sum by (eia_dependency_name, reason) (eia_grpc_client_certificate_failures_total) > 0
+            unless sum by (eia_dependency_name, reason) (eia_grpc_client_certificate_failures_total offset 5m))
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.eia_dependency_name }} への gRPC の接続が証明書のエラーで失敗している(理由 {{ $labels.reason }})"
+          runbook: docs/runbooks/dev-certificates.md#grpc-の接続が証明書のエラーで失敗するとき
+
+      # 受ける側: クライアント証明書を拒否した。設定の誤りか、許可していないクライアントからの接続
+      - alert: GrpcClientCertificateRejected
+        expr: |
+          sum by (job, reason) (increase(eia_grpc_server_certificate_rejections_total[5m])) > 0
+          or
+          (sum by (job, reason) (eia_grpc_server_certificate_rejections_total) > 0
+            unless sum by (job, reason) (eia_grpc_server_certificate_rejections_total offset 5m))
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }} がクライアント証明書を拒否した(理由 {{ $labels.reason }})"
+          runbook: docs/runbooks/dev-certificates.md#grpc-の接続が証明書のエラーで失敗するとき

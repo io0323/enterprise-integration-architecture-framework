@@ -4,6 +4,7 @@ package io.eia.shared.resilience
 
 import io.eia.shared.kernel.DomainError
 import io.eia.shared.kernel.Result
+import io.eia.shared.kernel.err
 import io.eia.shared.kernel.isOk
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
@@ -40,6 +41,11 @@ private fun TestCoroutineScheduler.breaker(
 private suspend fun CircuitBreaker.fail(times: Int) = repeat(times) { execute { failure() } }
 
 private suspend fun CircuitBreaker.succeed(times: Int) = repeat(times) { execute { success() } }
+
+private object UncountedRejection : DomainError.NonRetryable, UncountedFailure {
+    override val code: String get() = "uncounted"
+    override val message: String get() = "依存先の状態を表さない失敗"
+}
 
 class CircuitBreakerSpec :
     FunSpec({
@@ -117,6 +123,12 @@ class CircuitBreakerSpec :
             }
         }
 
+        test("UncountedFailure は何件続いても Circuit Breaker を開かない") {
+            val breaker = testScheduler.breaker(ResilienceListener.NONE)
+            repeat(CONFIG.minimumCalls * 3) { breaker.execute { err(UncountedRejection) } }
+            breaker.state shouldBe CircuitState.CLOSED
+        }
+
         context("Open") {
             test("呼び出さずに CircuitOpen を返し、retryAfter は Open が明けるまでの残り時間") {
                 val listener = RecordingListener()
@@ -179,6 +191,16 @@ class CircuitBreakerSpec :
                 breaker.succeed(2)
                 breaker.fail(3)
                 breaker.state shouldBe CircuitState.CLOSED
+            }
+
+            test("Half-Open で UncountedFailure は成功にも失敗にも数えず、枠を返して Half-Open のまま") {
+                val breaker = testScheduler.breaker(ResilienceListener.NONE)
+                breaker.fail(CONFIG.minimumCalls)
+                testScheduler.advanceTimeBy(CONFIG.openDuration)
+
+                repeat(CONFIG.halfOpenPermits * 2) { breaker.execute { err(UncountedRejection) } }
+
+                breaker.state shouldBe CircuitState.HALF_OPEN
             }
 
             test("Half-Open では NonRetryable も成功に数える(依存先は応答している)") {

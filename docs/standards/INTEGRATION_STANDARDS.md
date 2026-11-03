@@ -25,6 +25,7 @@
 |---|---|---|---|
 | traceparent | ○ | ○ | W3C Trace Context |
 | X-Correlation-Id / correlationid | ○ | ○ | 業務トランザクション ID(入口で採番) |
+| gRPC の metadata | `traceparent`・`x-correlation-id`・`authorization`(ADR-0042 §6・§9) | — | 社内の gRPC は HTTP のヘッダと同じ名前を小文字で運ぶ |
 | Idempotency-Key | POST 必須 | — | 24h 保持(Webhook の受け口は webhook-id で代える) |
 | webhook-id, webhook-timestamp, webhook-signature | Webhook の受け口で必須 | — | Standard Webhooks の署名(ADR-0035 §2) |
 | ce_id, ce_source, ce_type, ce_time, ce_specversion | — | ○ | CloudEvents binary mode |

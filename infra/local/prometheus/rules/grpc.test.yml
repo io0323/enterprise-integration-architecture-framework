@@ -1,0 +1,67 @@
+# grpc.rules.yml の単体テスト(promtool test rules。make alerts-test)。
+rule_files:
+  - grpc.rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: 証明書のエラーの 1 件目(系列が現れたとき)で critical、増えなくなって 5 分を過ぎたら消える
+    interval: 1m
+    input_series:
+      - series: 'eia_grpc_client_certificate_failures_total{job="bff-graphql",eia_dependency_name="inventory",reason="expired"}'
+        values: "_ _ 1 1 1 1 1 1 1 1 1 1"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: GrpcClientCertificateFailure
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: GrpcClientCertificateFailure
+        exp_alerts:
+          - exp_labels: { severity: critical, eia_dependency_name: inventory, reason: expired }
+            exp_annotations:
+              summary: "inventory への gRPC の接続が証明書のエラーで失敗している(理由 expired)"
+              runbook: docs/runbooks/dev-certificates.md#grpc-の接続が証明書のエラーで失敗するとき
+      - eval_time: 9m
+        alertname: GrpcClientCertificateFailure
+        exp_alerts: []
+
+  - name: 証明書のエラーが増え続ける間は critical のまま
+    interval: 1m
+    input_series:
+      - series: 'eia_grpc_client_certificate_failures_total{job="bff-graphql",eia_dependency_name="shipping",reason="untrusted"}'
+        values: "1 3 5 7 9 11 13 15"
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: GrpcClientCertificateFailure
+        exp_alerts:
+          - exp_labels: { severity: critical, eia_dependency_name: shipping, reason: untrusted }
+            exp_annotations:
+              summary: "shipping への gRPC の接続が証明書のエラーで失敗している(理由 untrusted)"
+              runbook: docs/runbooks/dev-certificates.md#grpc-の接続が証明書のエラーで失敗するとき
+
+  - name: 証明書のエラーがなければ鳴らない(ほかの理由で系列が 0 のまま)
+    interval: 1m
+    input_series:
+      - series: 'eia_grpc_client_certificate_failures_total{job="bff-graphql",eia_dependency_name="inventory",reason="expired"}'
+        values: "0 0 0 0 0 0 0 0"
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: GrpcClientCertificateFailure
+        exp_alerts: []
+
+  - name: 受ける側がクライアント証明書を拒否したら warning
+    interval: 1m
+    input_series:
+      - series: 'eia_grpc_server_certificate_rejections_total{job="inventory-service",reason="client_not_allowed"}'
+        values: "_ _ 1 2 2 2 2 2 2 2 2 2"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: GrpcClientCertificateRejected
+        exp_alerts:
+          - exp_labels: { severity: warning, job: inventory-service, reason: client_not_allowed }
+            exp_annotations:
+              summary: "inventory-service がクライアント証明書を拒否した(理由 client_not_allowed)"
+              runbook: docs/runbooks/dev-certificates.md#grpc-の接続が証明書のエラーで失敗するとき
+      - eval_time: 10m
+        alertname: GrpcClientCertificateRejected
+        exp_alerts: []
