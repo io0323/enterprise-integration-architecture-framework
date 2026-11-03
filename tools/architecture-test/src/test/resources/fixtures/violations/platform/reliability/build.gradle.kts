@@ -7,6 +7,8 @@ dependencies {
     implementation(libs.hivemq.mqtt.client)
     // 違反: gRPC の依存は platform/grpc と platform/grpc-stubs だけ
     implementation(libs.grpc.netty.shaded)
+    // 違反: GraphQL の依存は BFF の adapters と contract-check だけ
+    implementation(libs.graphql.java)
     // テストの依存は対象外
     testImplementation(libs.aws.sdk.s3)
 }

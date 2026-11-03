@@ -57,6 +57,14 @@ internal object LibraryDeclarationRules {
             "platform/grpc と platform/grpc-stubs だけ。ADR-0042 §5",
         )
 
+    private val GRAPHQL =
+        Library(
+            "GraphQL の依存の宣言",
+            listOf("libs.graphql.", "\"com.graphql-java:"),
+            listOf(Regex("""^services/bff-graphql/adapters/"""), Regex("""^tools/contract-check/""")),
+            "services/bff-graphql/adapters と tools/contract-check だけ。ADR-0043 §8",
+        )
+
     private val HADOOP_MARKERS = listOf("libs.hadoop.", "\"org.apache.hadoop:")
     private val HADOOP_RUNTIME_CHECKED = listOf(Regex("""^platform/"""), Regex("""^services/"""))
 
@@ -69,6 +77,7 @@ internal object LibraryDeclarationRules {
                     outsideAllowed(TRANSFER_SECURITY, path, declaration),
                     outsideAllowed(HIVEMQ, path, declaration),
                     outsideAllowed(GRPC, path, declaration),
+                    outsideAllowed(GRAPHQL, path, declaration),
                     hadoopAtRuntime(path, configuration, declaration),
                 )
             }
