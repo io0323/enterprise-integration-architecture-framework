@@ -5,8 +5,12 @@ plugins {
 
 dependencies {
     api(project(":services:bff-graphql:application"))
-    // 検証したトークン(スコープとクライアント)
-    implementation(project(":platform:security"))
+    // 検証したトークン(スコープとクライアント)と、下流を呼ぶトークンの取得
+    api(project(":platform:security"))
+    // 在庫と出荷の照会(ADR-0042)
+    api(project(":platform:grpc"))
+    implementation(project(":platform:grpc-stubs"))
+    implementation(libs.ktor.client.core)
     api(libs.graphql.java)
     api(libs.ktor.server.core)
     api(libs.opentelemetry.api)
@@ -16,7 +20,8 @@ dependencies {
     implementation(libs.slf4j.api)
 
     testImplementation(libs.ktor.server.test.host)
-    testImplementation(libs.ktor.client.core)
+    testImplementation(libs.ktor.client.mock)
+    testImplementation(project(":platform:test-support"))
     testImplementation(libs.opentelemetry.sdk.testing)
 }
 
