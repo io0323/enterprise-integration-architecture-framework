@@ -78,7 +78,8 @@ P13(#16)で、画面のために注文・在庫・出荷を集約する `bff-gra
 
 - **拒否は 400 + `errors[].extensions`(`code: QUERY_LIMIT_EXCEEDED`、`limit`)で、下流を 1 回も呼ばない。** データの取得の前に動く Instrumentation で確かめる。テストは偽の下流の呼び出しの数で確かめる。
 - **フラグメントをすべて展開し、変数を当てはめた後のクエリで数える**(graphql-java の `ExecutableNormalizedOperation`)。
-  - `QueryTraverser`(`MaxQueryDepthInstrumentation` などが使う)は**同じフラグメントを 1 回しか辿らない**。⑦a のテストで、再利用したフラグメントで別名の上限をすり抜けられることを確かめて、使うのをやめた。複雑度も過小になる。
+  - `QueryTraverser` は**同じフラグメントを 1 回しか辿らない**。⑦a のテストで、再利用したフラグメントで別名の上限をすり抜けられることを確かめて、使うのをやめた。
+  - 組み込みの `MaxQueryComplexityInstrumentation` も同じ弱点を持つことを実測した(既定の数え方。graphql-java 26.1)。同じ内容の項目を読むクエリで、インラインで 4 回書くと 16、同じフラグメントを 4 回使うと 7 になる。`MaxQueryDepthInstrumentation` も `QueryTraverser` を使う(ソースで確認。深さの過小評価は実測していない)。
   - 入れ子のフラグメントで項目を指数的に増やすクエリは、展開の途中で止める(`maxFieldsCount`)。
 - **変数で渡した `ids` も同じ**(実行の前に当てはめた値で数える)。
 - **複雑度の数え方**: 下流を呼ぶ項目と、その件数で数える。スカラーと、データを持っているだけの型(`Money`・`Address`)は数えない。
@@ -155,7 +156,7 @@ BFF は「画面のための集約」に限る(Framework 3 章)。
 ## Alternatives Considered
 - **コードからスキーマを作り、生成した SDL を contracts にコミットして比べる(graphql-kotlin)**: 比べることはできるが、契約が実装の後になる。CLAUDE.md §5 の Contract First に反する。不採用。
 - **`status` を `String` にする**: 値の追加で型が変わらないが、画面が値の一覧を型で知れなくなる。`UNKNOWN` のある `enum` にする。
-- **`MaxQueryDepthInstrumentation`・`MaxQueryComplexityInstrumentation` をそのまま使う**: `QueryTraverser` を使うので、§4 のとおり再利用したフラグメントを数え損なう。別名の上限も持たない。不採用。
+- **`MaxQueryDepthInstrumentation`・`MaxQueryComplexityInstrumentation` をそのまま使う**: §4 の実測のとおり、再利用したフラグメントの複雑度を過小に数える。別名の上限も持たない。不採用。
 - **一部のサービスが止まったら全体を失敗にする**: 実装は簡単だが、在庫のサービスの障害で注文の画面まで見られなくなる。Tier の低い依存先が全体を止める。不採用。
 - **読めなかった項目を空の値(在庫 0 など)で返す**: 画面が読めなかったことを区別できず、誤った表示になる。不採用。
 - **古いキャッシュを Fallback にする**: BFF にデータを持たせることになる(§8)。在庫は古い値が誤解を招く。不採用。
@@ -173,3 +174,4 @@ BFF は「画面のための集約」に限る(Framework 3 章)。
 - graphql-java の正規化は、クエリごとにフラグメントを展開するので、小さくない処理になる。トークンの上限(2000)と展開の上限(2000)で抑える。
 
 ## 改訂履歴
+- 2026-11-03: P13 ⑦b で下流のクライアントを実装した(`HttpOrderQueries`、`GrpcStockQueries`、`GrpcShipmentQueries`)。§4 に組み込みの Instrumentation の実測の結果を足した。
