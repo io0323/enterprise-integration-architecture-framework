@@ -14,6 +14,7 @@ import java.util.concurrent.CompletionException
 
 /** `errors[].extensions.code`。画面はこの値で扱いを決める。 */
 internal object ErrorCodes {
+    const val RATE_LIMITED = "RATE_LIMITED"
     const val QUERY_LIMIT_EXCEEDED = "QUERY_LIMIT_EXCEEDED"
     const val BAD_REQUEST = "BAD_REQUEST"
     const val FORBIDDEN = "FORBIDDEN"

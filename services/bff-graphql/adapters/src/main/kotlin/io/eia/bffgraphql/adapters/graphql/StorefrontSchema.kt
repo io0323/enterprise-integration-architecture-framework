@@ -163,6 +163,9 @@ internal class StorefrontSchema private constructor(
 internal class RequestContext(
     val token: VerifiedToken,
 ) {
+    /** 複雑度の枠のキー。`requireClientId` の検証で、運用では必ずある。 */
+    val client: String get() = token.clientId.orEmpty()
+
     @Volatile
     var readSensitive: Boolean = false
         private set

@@ -1,0 +1,3 @@
+<configuration>
+  <include resource="io/eia/platform/observability/logback-base.xml"/>
+</configuration>

@@ -5,6 +5,8 @@
 # - 一部のサービスが止まっている: 読めない項目は null になり、errors に UPSTREAM_UNAVAILABLE が入る。
 #   「ない」(エラーなしの null)と「読めなかった」(エラーつきの null)を区別する。
 # - 過大なクエリは、実行の前に拒否する(下の @queryLimits)。下流を呼ばない。
+# - クエリ全体の注文の ID(重複を除く)も @maxItems の値まで。別名で並べても、下流には 1 回にまとめて送るため。
+# - 複雑度の枠(クライアントごと)を超えたら 429 + Retry-After + Problem Details。
 
 schema @queryLimits(maxDepth: 8, maxAliases: 10, maxComplexity: 200, maxTokens: 2000, maxBodyBytes: 16384) {
   query: Query
