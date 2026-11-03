@@ -120,7 +120,7 @@ internal class QueryLimitInstrumentation(
             .extensions(mapOf("code" to ErrorCodes.QUERY_LIMIT_EXCEEDED, "limit" to limit))
             .build()
 
-    private object LimitExceeded : ErrorClassification
+    private data object LimitExceeded : ErrorClassification
 
     private companion object {
         const val LIMIT_COMPLEXITY = "maxComplexity"
@@ -135,7 +135,7 @@ internal class QueryLimitInstrumentation(
 }
 
 /** 複雑度の枠が足りない(ルートが 429 + `Retry-After` にする。ADR-0043 §9)。 */
-internal object RateLimited : ErrorClassification {
+internal data object RateLimited : ErrorClassification {
     private const val RETRY_AFTER_MILLIS = "retryAfterMillis"
 
     fun error(wait: Duration) =

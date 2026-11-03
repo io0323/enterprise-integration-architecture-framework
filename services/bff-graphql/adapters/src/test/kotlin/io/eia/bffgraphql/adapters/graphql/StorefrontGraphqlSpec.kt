@@ -231,6 +231,12 @@ private fun JsonObject.code(): String =
         .getValue("code")
         .jsonPrimitive.content
 
+private fun JsonObject.classification(): String =
+    getValue("extensions")
+        .jsonObject
+        .getValue("classification")
+        .jsonPrimitive.content
+
 private fun JsonObject.limit(): String =
     getValue("extensions")
         .jsonObject
@@ -449,6 +455,17 @@ class StorefrontGraphqlSpec :
 
             test("バケットが 1 回のクエリの上限より小さいと、起動の時点で誤りにする(上限以内のクエリが永久に通らなくなるため)") {
                 shouldThrow<IllegalArgumentException> { Fixture(rateLimiter = ComplexityRateLimiter(199, 10)) }
+            }
+
+            test("エラーの classification に、内部のクラス名とハッシュ値を出さない(項目のエラーと上限の超過)") {
+                val fixture = Fixture()
+                testApplication {
+                    storefront(fixture)
+                    val forbidden = query("""{ order(id: "a") { id } }""", scopes = "").json().errors().single()
+                    forbidden.classification() shouldBe "StorefrontError"
+                    val rejected = query("""{ orders(ids: ${ids(21)}) { notFound } }""").json().errors().single()
+                    rejected.classification() shouldBe "LimitExceeded"
+                }
             }
 
             test("別名の数の上限") {

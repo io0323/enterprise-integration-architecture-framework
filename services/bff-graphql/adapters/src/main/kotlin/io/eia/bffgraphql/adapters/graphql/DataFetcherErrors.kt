@@ -24,7 +24,7 @@ internal object ErrorCodes {
 }
 
 /** errors の種類(仕様の `classification`。応答には `extensions.code` を返す)。 */
-internal object StorefrontError : ErrorClassification
+internal data object StorefrontError : ErrorClassification
 
 /**
  * データの取得の例外を errors の 1 件にする(ADR-0043 §6)。文は決まった文だけにする(下流の情報と例外の文を応答に出さない)。
