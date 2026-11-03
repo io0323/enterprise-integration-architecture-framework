@@ -1,6 +1,8 @@
 package io.eia.shipping.app
 
 import io.eia.platform.security.secret.SecretName
+import io.eia.platform.security.tls.TlsFiles
+import io.eia.platform.security.tls.TlsVariables
 import io.eia.shared.kernel.FieldViolation
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.ValidationError
@@ -8,8 +10,10 @@ import io.eia.shared.kernel.err
 import io.eia.shared.kernel.ok
 import io.eia.shipping.domain.SettledRetention
 import io.eia.shipping.domain.ShippingRules
+import java.net.URI
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * shipping-service の設定(環境変数)。パスワードは値ではなく名前([SecretName])だけを持ち、`SecretProvider` から読む。
@@ -24,6 +28,12 @@ import kotlin.time.Duration.Companion.hours
  * | `SHIPPING_KAFKA_BOOTSTRAP` | なし(serve では必須) | serve(例 `kafka:9092`) |
  * | `SHIPPING_SCHEMA_REGISTRY_URL` | なし(serve では必須) | serve(例 `http://apicurio:8080/apis/registry/v3`) |
  * | `SHIPPING_HEALTH_PORT` | 8081 | serve(`/health/live` と `/health/ready` だけ。平文。コンテナの外に公開しない) |
+ * | `SHIPPING_GRPC_PORT` | 9443 | serve(出荷の照会の gRPC。mTLS だけで受ける。ADR-0042 §5) |
+ * | `SHIPPING_GRPC_TLS_CERT_FILE` / `SHIPPING_GRPC_TLS_KEY_FILE` / `SHIPPING_GRPC_TLS_CLIENT_CA_FILE` | なし(serve では必須) | serve |
+ * | `SHIPPING_GRPC_TLS_ALLOWED_CLIENTS` | なし(serve では必須) | serve(クライアント証明書の SAN の DNS 名。カンマ区切り) |
+ * | `SHIPPING_GRPC_AUDIENCE` | `shipping-grpc` | serve(トークンの `aud`) |
+ * | `SHIPPING_GRPC_MAX_BUDGET` | 3s | serve(1 回の照会の上限。呼び出し元の deadline がない・これより長いときに使う) |
+ * | `OIDC_ISSUER` / `OIDC_JWKS_URI` | なし(serve では必須) | serve(トークンの検証。ADR-0019) |
  * | `SHIPPING_SETTLED_RETENTION` | 30d | serve(終わった出荷の記録と「取消済み」の印の保持期間。14 日より短くはできない。ADR-0029 §5) |
  * | `SHIPPING_PURGE_INTERVAL` | 1h | serve(保持期間を過ぎた記録の削除の間隔) |
  * | `SHIPPING_SUPPORTED_COUNTRIES` | JP | serve(模擬の出荷できる国。ISO 3166-1 alpha-2 のカンマ区切り。ADR-0029 §7) |
@@ -40,6 +50,7 @@ internal data class ShippingConfig(
     val healthPort: Int,
     val retention: SettledRetention,
     val purgeInterval: Duration,
+    val grpc: GrpcSettings,
     val supportedCountries: Set<String> = ShippingRules.DEFAULT_COUNTRIES,
 ) {
     companion object {
@@ -48,8 +59,13 @@ internal data class ShippingConfig(
         const val KAFKA_BOOTSTRAP = "SHIPPING_KAFKA_BOOTSTRAP"
         const val SCHEMA_REGISTRY_URL = "SHIPPING_SCHEMA_REGISTRY_URL"
         const val RETENTION = "SHIPPING_SETTLED_RETENTION"
+        val GRPC_TLS = TlsVariables("SHIPPING_GRPC")
+        const val OIDC_ISSUER = "OIDC_ISSUER"
+        const val OIDC_JWKS_URI = "OIDC_JWKS_URI"
         private const val DEFAULT_HEALTH_PORT = 8081
         private val DEFAULT_PURGE_INTERVAL = 1.hours
+        private const val DEFAULT_GRPC_PORT = 9443
+        private val DEFAULT_GRPC_MAX_BUDGET = 3.seconds
 
         fun fromEnvironment(env: Map<String, String>): Result<ShippingConfig, ValidationError> {
             val reader = EnvReader(env)
@@ -65,6 +81,18 @@ internal data class ShippingConfig(
                     retention = reader.retention(RETENTION),
                     purgeInterval = reader.duration("SHIPPING_PURGE_INTERVAL") ?: DEFAULT_PURGE_INTERVAL,
                     supportedCountries = reader.countries("SHIPPING_SUPPORTED_COUNTRIES"),
+                    grpc =
+                        GrpcSettings(
+                            port = reader.port("SHIPPING_GRPC_PORT", DEFAULT_GRPC_PORT),
+                            tls = GRPC_TLS.files(env),
+                            // 既定を持たない: 許可するクライアントは配備ごとに明示する
+                            allowedClients =
+                                if (reader.optional(GRPC_TLS.allowedClients) == null) emptySet() else GRPC_TLS.allowedClients(env),
+                            audience = reader.optional("SHIPPING_GRPC_AUDIENCE") ?: "shipping-grpc",
+                            maxBudget = reader.duration("SHIPPING_GRPC_MAX_BUDGET") ?: DEFAULT_GRPC_MAX_BUDGET,
+                            issuer = reader.optional(OIDC_ISSUER),
+                            jwksUri = reader.optional(OIDC_JWKS_URI)?.let(URI::create),
+                        ),
                 )
             return if (reader.violations.isEmpty()) ok(config) else err(ValidationError(reader.violations))
         }
@@ -76,6 +104,9 @@ internal data class ShippingConfig(
             buildList {
                 if (bootstrapServers == null) add(FieldViolation(KAFKA_BOOTSTRAP, "serve では必須です"))
                 if (schemaRegistryUrl == null) add(FieldViolation(SCHEMA_REGISTRY_URL, "serve では必須です"))
+                if (grpc.allowedClients.isEmpty()) add(FieldViolation(GRPC_TLS.allowedClients, "serve では必須です"))
+                if (grpc.issuer == null) add(FieldViolation(OIDC_ISSUER, "serve では必須です"))
+                if (grpc.jwksUri == null) add(FieldViolation(OIDC_JWKS_URI, "serve では必須です"))
             }
         return if (violations.isEmpty()) {
             ok(
@@ -86,6 +117,17 @@ internal data class ShippingConfig(
         }
     }
 }
+
+/** 出荷の照会の gRPC の設定(ADR-0042)。TLS のファイルの有無は起動時に `ServerTls.load` が確かめる。 */
+internal data class GrpcSettings(
+    val port: Int,
+    val tls: TlsFiles,
+    val allowedClients: Set<String>,
+    val audience: String,
+    val maxBudget: Duration,
+    val issuer: String?,
+    val jwksUri: URI?,
+)
 
 internal data class ServeSettings(
     val bootstrapServers: String,

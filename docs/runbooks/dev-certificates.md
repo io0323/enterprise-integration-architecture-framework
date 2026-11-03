@@ -16,6 +16,7 @@
 | `order-service.crt` / `.key` | サーバ証明書(SAN `order-service`・`localhost`) | 30 日 | order-service の API のポート(8443) |
 | `apisix.crt` / `.key` | ゲートウェイのクライアント証明書(SAN `apisix`) | 30 日 | APISIX から order-service への接続(ADR-0023 §3)。APISIX はこの CA で order-service のサーバ証明書も検証する |
 | `inventory-service.crt` / `.key` | サーバ証明書(SAN `inventory-service`・`localhost`) | 30 日 | inventory-service の gRPC のポート(9443。ADR-0042 §5) |
+| `shipping-service.crt` / `.key` | サーバ証明書(SAN `shipping-service`・`localhost`) | 30 日 | shipping-service の gRPC のポート(9443。ADR-0042 §5) |
 | `bff-graphql.crt` / `.key` | BFF のクライアント証明書(SAN `bff-graphql`) | 30 日 | BFF から gRPC のサービスへの接続(ADR-0042 §5) |
 
 - 鍵は EC P-256 の PKCS#8(`BEGIN PRIVATE KEY`)で、権限は 0600。コンテナは、`make certs` を実行した利用者の uid で動いて読む。**root(uid 0)では `make up` と `make certs` は止まる**(ADR-0024 §7)。root 以外の利用者で実行する。

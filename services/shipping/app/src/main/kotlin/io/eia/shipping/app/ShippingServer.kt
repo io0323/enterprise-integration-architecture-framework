@@ -1,19 +1,27 @@
 package io.eia.shipping.app
 
 import com.zaxxer.hikari.HikariDataSource
+import io.eia.platform.grpc.GrpcServer
+import io.eia.platform.grpc.GrpcServerConfig
+import io.eia.platform.grpc.GrpcService
+import io.eia.platform.grpc.GrpcTelemetry
 import io.eia.platform.messagingkafka.EventConsumer
 import io.eia.platform.messagingkafka.OffsetCommitter
 import io.eia.platform.observability.Observability
 import io.eia.platform.observability.ObservabilityConfig
 import io.eia.platform.observability.ObservabilityRuntime
 import io.eia.platform.schemaregistry.SchemaIdBook
+import io.eia.platform.security.jwt.JwtVerifier
 import io.eia.platform.security.secret.EnvSecretProvider
+import io.eia.platform.security.secret.Secret
+import io.eia.platform.security.tls.ServerTls
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.ValidationError
 import io.eia.shared.kernel.err
 import io.eia.shared.kernel.flatMap
 import io.eia.shared.kernel.map
 import io.eia.shared.kernel.ok
+import io.eia.shipping.adapters.inbound.grpc.ShipmentQueryGrpcService
 import io.eia.shipping.application.port.inbound.PurgeExpiredRecordsUseCase
 import io.ktor.client.HttpClient
 import io.ktor.http.ContentType
@@ -49,6 +57,7 @@ import java.util.concurrent.Executors
  *
  * - 返事のスキーマ ID を解決してから、コマンドの読み取りを始める([EventConsumer]。1 つのスレッドで動かす)。
  * - 保持期間を過ぎた記録(終わった出荷・印・冪等消費の記録)を定期的に消す(読み取りとは別のコルーチン)。
+ * - 出荷の照会を gRPC で受ける(mTLS だけ。ADR-0042 §5)。読み取りとは別で、コマンドの処理を止めない。
  * - ヘルスチェックのポートは平文で `/health/live` と `/health/ready` だけ。ready は、スキーマ ID をすべて解決して読み取りを始め、
  *   直近の処理が Unavailable(DB に接続できないなど)でないときだけ UP(ADR-0028 §1)。
  */
@@ -58,6 +67,7 @@ internal class ShippingServer private constructor(
     private val runtime: ObservabilityRuntime,
     private val scope: CoroutineScope,
     private val consumerThread: ExecutorService,
+    private val grpc: GrpcServer,
 ) {
     private val stopped = CountDownLatch(1)
 
@@ -69,6 +79,8 @@ internal class ShippingServer private constructor(
                 .port
         }
 
+    val grpcPort: Int get() = grpc.port
+
     fun awaitTermination() {
         Runtime.getRuntime().addShutdownHook(Thread { stop() })
         stopped.await()
@@ -77,11 +89,13 @@ internal class ShippingServer private constructor(
     /** 読み取りを止め、Consumer(読み取りのスレッドで閉じる)・Producer・DB・サーバを閉じる。コミットしていないコマンドは、次の起動で読み直す。 */
     fun stop() {
         if (stopped.count == 0L) return
+        grpc.stop()
         runBlocking { scope.coroutineContext[Job]?.cancelAndJoin() }
         consumerThread.shutdown()
         server.stop(GRACE_MILLIS, TIMEOUT_MILLIS)
         koin.get<Producer<ByteArray, ByteArray>>().close()
         koin.get<HttpClient>().close()
+        koin.get<JwtVerifier>().close()
         koin.get<HikariDataSource>().close()
         koin.close()
         runtime.close()
@@ -100,18 +114,19 @@ internal class ShippingServer private constructor(
             ShippingConfig
                 .fromEnvironment(env)
                 .flatMap { config -> config.forServe().map { serve -> config to serve } }
-                .flatMap { (config, serve) ->
+                .flatMap { (config, serve) -> ServerTls.load(config.grpc.tls).map { tls -> Triple(config, serve, tls) } }
+                .flatMap { (config, serve, tls) ->
                     when (val password = EnvSecretProvider(env).get(ShippingConfig.APP_PASSWORD)) {
-                        is Result.Ok -> ok(Triple(config, serve, password.value))
+                        is Result.Ok -> ok(ServeInputs(config, serve, tls, password.value))
                         is Result.Err -> err(ValidationError.of(ShippingConfig.APP_PASSWORD.value, password.error.message))
                     }
                 }.flatMap { inputs ->
                     val observabilityEnv = mapOf(ObservabilityConfig.ENV_SERVICE_NAME to "shipping-service") + env
                     ObservabilityConfig.fromEnvironment(observabilityEnv).map { observability -> inputs to observability }
                 }.map { (inputs, observability) ->
-                    val (config, serve, password) = inputs
+                    val config = inputs.config
                     val runtime = Observability.init(observability)
-                    val koin = koinApplication { modules(shippingModule(config, serve, password, runtime, committer)) }.koin
+                    val koin = koinApplication { modules(shippingModule(config, inputs.serve, inputs.password, runtime, committer)) }.koin
                     val schemaIds = koin.get<SchemaIdBook>()
                     val consumer = koin.get<EventConsumer>()
                     val purge = koin.get<PurgeExpiredRecordsUseCase>()
@@ -131,6 +146,7 @@ internal class ShippingServer private constructor(
                             delay(config.purgeInterval)
                         }
                     }
+                    val grpc = startGrpc(config, inputs.tls, koin, runtime)
                     val server =
                         embeddedServer(Netty, configure = { connector { port = config.healthPort } }) {
                             routing {
@@ -149,7 +165,35 @@ internal class ShippingServer private constructor(
                             }
                         }.start(wait = false)
                     logger.info("shipping-service を起動しました")
-                    ShippingServer(server, koin, runtime, scope, consumerThread)
+                    ShippingServer(server, koin, runtime, scope, consumerThread, grpc)
                 }
     }
 }
+
+/** 出荷の照会の gRPC を起動する(ADR-0042 §5)。 */
+private fun startGrpc(
+    config: ShippingConfig,
+    tls: ServerTls,
+    koin: Koin,
+    runtime: ObservabilityRuntime,
+): GrpcServer =
+    GrpcServer.start(
+        GrpcServerConfig(
+            port = config.grpc.port,
+            tls = tls,
+            allowedClients = config.grpc.allowedClients,
+            verify = koin.get<JwtVerifier>()::verify,
+            telemetry = GrpcTelemetry.of(runtime),
+            services = listOf(GrpcService(koin.get<ShipmentQueryGrpcService>(), setOf(SHIPMENT_READ_SCOPE))),
+            maxBudget = config.grpc.maxBudget,
+        ),
+    )
+
+private const val SHIPMENT_READ_SCOPE = "shipping.shipment:read"
+
+private data class ServeInputs(
+    val config: ShippingConfig,
+    val serve: ServeSettings,
+    val tls: ServerTls,
+    val password: Secret,
+)

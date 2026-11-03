@@ -48,6 +48,12 @@ public fun interface ShipmentStamps {
     public fun next(): ShipmentStamp
 }
 
+/** 出荷の照会(読み取りだけ。ロックを取らない。ADR-0042 §4)。 */
+public interface ShipmentQueries {
+    /** [orderIds] の注文の出荷の記録を読む(「取消済み」の印を含む)。記録のない注文は結果に含めない。 */
+    public suspend fun find(orderIds: Set<String>): Result<List<Shipment>, DomainError>
+}
+
 /** 返事のイベント(INT-SHIPPING-002)。adapters が Outbox で書く。トランザクションの中で呼ぶ。 */
 public interface ShippingReplies {
     public suspend fun arrangeReplied(

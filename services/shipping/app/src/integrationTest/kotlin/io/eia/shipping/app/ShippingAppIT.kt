@@ -2,6 +2,28 @@
 
 package io.eia.shipping.app
 
+import com.nimbusds.jose.JOSEObjectType
+import com.nimbusds.jose.JWSAlgorithm
+import com.nimbusds.jose.JWSHeader
+import com.nimbusds.jose.crypto.RSASSASigner
+import com.nimbusds.jose.jwk.JWKSet
+import com.nimbusds.jose.jwk.RSAKey
+import com.nimbusds.jose.jwk.gen.RSAKeyGenerator
+import com.nimbusds.jwt.JWTClaimsSet
+import com.nimbusds.jwt.SignedJWT
+import com.sun.net.httpserver.HttpServer
+import io.eia.platform.grpc.CertificateFailureReason
+import io.eia.platform.grpc.GrpcCallRejected
+import io.eia.platform.grpc.GrpcCallUnavailable
+import io.eia.platform.grpc.GrpcCertificateFailure
+import io.eia.platform.grpc.GrpcChannels
+import io.eia.platform.grpc.GrpcClient
+import io.eia.platform.grpc.GrpcTelemetry
+import io.eia.platform.grpc.GrpcTokenSource
+import io.eia.platform.grpcstubs.shipping.v1.BatchGetShipmentsRequest
+import io.eia.platform.grpcstubs.shipping.v1.BatchGetShipmentsResponse
+import io.eia.platform.grpcstubs.shipping.v1.ShipmentQueryServiceGrpc
+import io.eia.platform.grpcstubs.shipping.v1.ShipmentQueryServiceGrpcKt.ShipmentQueryServiceCoroutineStub
 import io.eia.platform.messagingkafka.AvroEventDeserializer
 import io.eia.platform.messagingkafka.AvroEventSerializer
 import io.eia.platform.messagingkafka.DeadLetterPublisher
@@ -18,11 +40,19 @@ import io.eia.platform.schemaregistry.SchemaIdBook
 import io.eia.platform.schemaregistry.SchemaRegistryConfig
 import io.eia.platform.schemaregistry.SchemaSubject
 import io.eia.platform.schemaregistry.WriterSchemas
+import io.eia.platform.security.tls.ServerTls
+import io.eia.platform.security.tls.TlsFiles
+import io.eia.platform.security.tls.TlsVariables
 import io.eia.platform.testsupport.ApicurioRegistryContainer
 import io.eia.platform.testsupport.InfraImages
 import io.eia.platform.testsupport.KafkaBrokerContainer
 import io.eia.platform.testsupport.KafkaConnectContainer
+import io.eia.platform.testsupport.TestPki
+import io.eia.shared.kernel.DomainError
 import io.eia.shared.kernel.Result
+import io.eia.shared.kernel.err
+import io.eia.shared.kernel.ok
+import io.eia.shared.sdk.http.token.AccessToken
 import io.eia.shipping.adapters.inbound.AddressV1
 import io.eia.shipping.adapters.inbound.ArrangeShipmentV1
 import io.eia.shipping.adapters.inbound.CancelShipmentV1
@@ -35,6 +65,11 @@ import io.eia.shipping.adapters.out.outbox.ShipmentRejectionReasonV1
 import io.eia.shipping.adapters.out.outbox.ShipmentShippedV1
 import io.eia.shipping.adapters.out.outbox.ShippingEventSchemas
 import io.eia.shipping.adapters.out.persistence.ShippingSchema
+import io.grpc.Grpc
+import io.grpc.InsecureChannelCredentials
+import io.grpc.ManagedChannel
+import io.grpc.Status
+import io.grpc.TlsChannelCredentials
 import io.kotest.assertions.fail
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
@@ -58,13 +93,17 @@ import org.apache.kafka.common.serialization.StringDeserializer
 import org.postgresql.ds.PGSimpleDataSource
 import org.testcontainers.containers.Network
 import org.testcontainers.postgresql.PostgreSQLContainer
+import java.net.InetSocketAddress
 import java.net.URI
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.security.SecureRandom
 import java.time.Duration
+import java.util.Date
 import java.util.HexFormat
 import kotlin.io.path.readText
+import kotlin.time.Clock
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 import kotlin.uuid.Uuid
@@ -77,6 +116,8 @@ private fun <T, E> Result<T, E>.ok(): T =
     }
 
 private const val CONNECTOR = "shipping-outbox"
+private const val ISSUER = "http://issuer.test/realms/eiaf"
+private const val SCOPE = "shipping.shipment:read"
 private const val OWNER_ROLE = "shipping_service"
 private const val DATABASE = "shipping_service"
 
@@ -109,6 +150,40 @@ class ShippingAppIT :
         val cdcPassword = randomHex()
         val connect = KafkaConnectContainer("kafka:19092", mapOf("DEBEZIUM_DB_PASSWORD" to cdcPassword)).withNetwork(network)
         val http = JdkHttpClient.newHttpClient()
+        val pki = TestPki()
+        val grpcServerCert = pki.issue("shipping-service", listOf("localhost"))
+        val tokenKey: RSAKey = RSAKeyGenerator(2048).keyID("test-key").generate()
+        val jwks =
+            HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+                createContext("/jwks") { exchange ->
+                    val body = JWKSet(tokenKey.toPublicJWK()).toString().toByteArray()
+                    exchange.sendResponseHeaders(200, body.size.toLong())
+                    exchange.responseBody.use { it.write(body) }
+                }
+                start()
+            }
+
+        fun token(scope: String): String {
+            val now = Clock.System.now()
+            val claims =
+                JWTClaimsSet
+                    .Builder()
+                    .issuer(ISSUER)
+                    .audience("shipping-grpc")
+                    .subject("service-account-bff")
+                    .claim("azp", "eiaf-bff-graphql")
+                    .claim("scope", scope)
+                    .issueTime(Date(now.toEpochMilliseconds()))
+                    .expirationTime(Date((now + 5.minutes).toEpochMilliseconds()))
+                    .build()
+            val header =
+                JWSHeader
+                    .Builder(JWSAlgorithm.RS256)
+                    .keyID(tokenKey.keyID)
+                    .type(JOSEObjectType.JWT)
+                    .build()
+            return SignedJWT(header, claims).apply { sign(RSASSASigner(tokenKey)) }.serialize()
+        }
         val ktor = HttpClient(CIO)
         val runtime = Observability.init(ObservabilityConfig.of("shipping-it").ok(), TelemetrySinks(), installLogAppender = false)
         lateinit var server: ShippingServer
@@ -191,6 +266,38 @@ class ShippingAppIT :
                 runtime,
                 "/sales/order-service",
             ).send(commandBSerializer, sagaId, CancelShipmentV1(sagaId, "order-$sagaId")).ok()
+
+        suspend fun queryShipments(
+            channel: ManagedChannel,
+            scope: String,
+        ): Result<BatchGetShipmentsResponse, DomainError> {
+            val tokens =
+                object : GrpcTokenSource {
+                    override suspend fun token(): Result<AccessToken, DomainError> =
+                        ok(AccessToken(token(scope), Clock.System.now() + 5.minutes, setOf(scope)))
+
+                    override suspend fun invalidate(token: AccessToken) = Unit
+                }
+            val telemetry = GrpcTelemetry(runtime.openTelemetry, runtime.tracer, runtime.meter)
+            val request =
+                BatchGetShipmentsRequest
+                    .newBuilder()
+                    .addOrderIds("order-without-shipment")
+                    .build()
+            return GrpcClient("shipping", tokens, telemetry, fallbackDeadline = 30.seconds)
+                .call(ShipmentQueryServiceCoroutineStub(channel), ShipmentQueryServiceGrpc.getBatchGetShipmentsMethod()) { metadata ->
+                    batchGetShipments(request, metadata)
+                }.also { channel.shutdownNow() }
+        }
+
+        fun channel(cert: TestPki.Issued): ManagedChannel =
+            GrpcChannels.mutualTls(
+                "localhost:${server.grpcPort}",
+                ServerTls
+                    .load(
+                        TlsFiles(TlsVariables("TEST"), cert.certFile.toString(), cert.keyFile.toString(), pki.caFile.toString()),
+                    ).ok(),
+            )
 
         beforeSpec {
             postgres.start()
@@ -276,6 +383,13 @@ class ShippingAppIT :
                             "SHIPPING_KAFKA_BOOTSTRAP" to kafka.bootstrapServers,
                             "SHIPPING_SCHEMA_REGISTRY_URL" to registry.baseUrl,
                             "SHIPPING_HEALTH_PORT" to "0",
+                            "SHIPPING_GRPC_PORT" to "0",
+                            "SHIPPING_GRPC_TLS_CERT_FILE" to grpcServerCert.certFile.toString(),
+                            "SHIPPING_GRPC_TLS_KEY_FILE" to grpcServerCert.keyFile.toString(),
+                            "SHIPPING_GRPC_TLS_CLIENT_CA_FILE" to pki.caFile.toString(),
+                            "SHIPPING_GRPC_TLS_ALLOWED_CLIENTS" to "bff-graphql",
+                            "OIDC_ISSUER" to ISSUER,
+                            "OIDC_JWKS_URI" to "http://127.0.0.1:${jwks.address.port}/jwks",
                         ),
                     ).ok()
             val ready = TimeSource.Monotonic.markNow() + 60.seconds
@@ -287,6 +401,8 @@ class ShippingAppIT :
 
         afterSpec {
             server.stop()
+            jwks.stop(0)
+            pki.close()
             producer.close()
             ktor.close()
             runtime.close()
@@ -295,6 +411,35 @@ class ShippingAppIT :
             registry.stop()
             postgres.stop()
             network.close()
+        }
+
+        context("出荷の照会の gRPC(INT-SHIPPING-003。ROADMAP P13 の DoD。ADR-0042)") {
+            test("契約から生成したスタブで、許可されたクライアントが読める。記録のない注文は応答に含めない") {
+                queryShipments(channel(pki.issue("bff", listOf("bff-graphql"))), SCOPE).ok().shipmentsList shouldBe emptyList()
+            }
+
+            test("許可の一覧にないクライアント証明書は PERMISSION_DENIED") {
+                queryShipments(channel(pki.issue("other", listOf("someone-else"))), SCOPE) shouldBe
+                    err(GrpcCallRejected("shipping", Status.Code.PERMISSION_DENIED))
+            }
+
+            test("スコープが足りないトークンは PERMISSION_DENIED") {
+                queryShipments(channel(pki.issue("bff", listOf("bff-graphql"))), "sales.order:read") shouldBe
+                    err(GrpcCallRejected("shipping", Status.Code.PERMISSION_DENIED))
+            }
+
+            test("mTLS なしの接続を拒否する") {
+                val anonymous =
+                    Grpc
+                        .newChannelBuilder(
+                            "localhost:${server.grpcPort}",
+                            TlsChannelCredentials.newBuilder().trustManager(pki.caFile.toFile()).build(),
+                        ).build()
+                queryShipments(anonymous, SCOPE) shouldBe err(GrpcCertificateFailure("shipping", CertificateFailureReason.REJECTED_BY_PEER))
+
+                val plaintext = Grpc.newChannelBuilder("localhost:${server.grpcPort}", InsecureChannelCredentials.create()).build()
+                queryShipments(plaintext, SCOPE) shouldBe err(GrpcCallUnavailable("shipping", Status.Code.UNAVAILABLE))
+            }
         }
 
         test("手配の指示に、Saga ID のキー・同じトレースの返事(shipping.shipment.shipped.v1)が Outbox と Debezium で届く") {

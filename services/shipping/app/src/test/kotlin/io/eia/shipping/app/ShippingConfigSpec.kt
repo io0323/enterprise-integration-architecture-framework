@@ -7,7 +7,9 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 
 private fun <T> Result<T, *>.ok(): T =
     when (this) {
@@ -28,7 +30,16 @@ class ShippingConfigSpec :
             config.retention shouldBe SettledRetention.DEFAULT
             config.purgeInterval shouldBe 1.hours
             (config.forServe() as Result.Err).error.violations.map { it.field } shouldBe
-                listOf(ShippingConfig.KAFKA_BOOTSTRAP, ShippingConfig.SCHEMA_REGISTRY_URL)
+                listOf(
+                    ShippingConfig.KAFKA_BOOTSTRAP,
+                    ShippingConfig.SCHEMA_REGISTRY_URL,
+                    ShippingConfig.GRPC_TLS.allowedClients,
+                    ShippingConfig.OIDC_ISSUER,
+                    ShippingConfig.OIDC_JWKS_URI,
+                )
+            config.grpc.port shouldBe 9443
+            config.grpc.audience shouldBe "shipping-grpc"
+            config.grpc.maxBudget shouldBe 3.seconds
         }
 
         test("値を読む(期間は ISO 8601 と Kotlin の表記)") {
@@ -42,11 +53,19 @@ class ShippingConfigSpec :
                                 "SHIPPING_HEALTH_PORT" to "0",
                                 "SHIPPING_SETTLED_RETENTION" to "P45D",
                                 "SHIPPING_PURGE_INTERVAL" to "10m",
+                                "SHIPPING_GRPC_PORT" to "0",
+                                "SHIPPING_GRPC_TLS_ALLOWED_CLIENTS" to "bff-graphql, other",
+                                "SHIPPING_GRPC_MAX_BUDGET" to "500ms",
+                                "OIDC_ISSUER" to "http://issuer",
+                                "OIDC_JWKS_URI" to "http://issuer/jwks",
                             ),
                     ).ok()
             config.healthPort shouldBe 0
             config.retention.value shouldBe 45.days
             config.purgeInterval shouldBe 10.minutes
+            config.grpc.port shouldBe 0
+            config.grpc.allowedClients shouldBe setOf("bff-graphql", "other")
+            config.grpc.maxBudget shouldBe 500.milliseconds
             config.forServe().ok() shouldBe ServeSettings("kafka:9092", "http://apicurio:8080/apis/registry/v3")
         }
 
