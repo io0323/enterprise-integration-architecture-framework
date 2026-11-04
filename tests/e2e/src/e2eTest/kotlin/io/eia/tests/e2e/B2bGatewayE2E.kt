@@ -349,8 +349,9 @@ class B2bGatewayE2E :
             val (gpgStatus, status) = partnerGpg(work, decrypt)
             withClue(status) {
                 gpgStatus shouldBe 0
-                status.lines().count { it.startsWith("[GNUPG:] VALIDSIG") } shouldBe files.size
-                status.lines().count { it.startsWith("[GNUPG:] GOODMDC") } shouldBe files.size
+                // gpg の標準出力と標準エラーは 1 つにまとめて読むので、同じ行に混ざることがある。行頭ではなく出現の回数で数える
+                status.windowed("[GNUPG:] VALIDSIG".length).count { it == "[GNUPG:] VALIDSIG" } shouldBe files.size
+                status.windowed("[GNUPG:] GOODMDC".length).count { it == "[GNUPG:] GOODMDC" } shouldBe files.size
             }
 
             fun edi(local: String) = Files.readString(work.resolve("$local.edi"), Charsets.ISO_8859_1)

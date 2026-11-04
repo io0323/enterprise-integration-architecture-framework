@@ -102,6 +102,9 @@ internal class BffServer private constructor(
                     ObservabilityConfig.fromEnvironment(observabilityEnv).map { observability ->
                         val runtime = Observability.init(observability)
                         val koin = koinApplication { modules(bffModule(config, tls, runtime, secrets)) }.koin
+                        // 最初のリクエストで TLS の接続から始めると、下流の試行のタイムアウトに当たりやすい。起動時に接続を始める(ADR-0043 §6)
+                        koin.get<ManagedChannel>(INVENTORY_CHANNEL).getState(true)
+                        koin.get<ManagedChannel>(SHIPPING_CHANNEL).getState(true)
                         val server =
                             embeddedServer(Netty, configure = {
                                 mutualTlsConnectors(config.httpsPort, config.healthPort, tls, config.allowedClients)

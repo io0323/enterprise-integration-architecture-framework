@@ -180,11 +180,16 @@ class BffE2E :
         val orderId by lazy { shippedOrder() }
 
         test("Gateway → BFF → 注文(REST)+ 在庫と出荷(契約から生成したスタブの gRPC)を 1 回で返す(DoD)") {
-            val response = graphql("""{ order(id: "$orderId") { $FULL_ORDER } }""")
-
-            response.statusCode() shouldBe 200
-            val body = response.bodyObject()
-            withClue(response.body()) { body.errorList() shouldBe emptyList() }
+            // 起動の直後は、下流の最初の呼び出しがタイムアウトして部分応答になることがある(ADR-0043 §6)。解消するまで待つ
+            val body =
+                withClue("注文 $orderId の集約がエラーなしで返らない") {
+                    eventually {
+                        graphql("""{ order(id: "$orderId") { $FULL_ORDER } }""")
+                            .takeIf { it.statusCode() == 200 }
+                            ?.bodyObject()
+                            ?.takeIf { it.errorList().isEmpty() }
+                    }.shouldNotBeNull()
+                }
             val order = body.orderData()
             order.getValue("id").jsonPrimitive.content shouldBe orderId
             order.getValue("status").jsonPrimitive.content shouldBe "SHIPPED"
