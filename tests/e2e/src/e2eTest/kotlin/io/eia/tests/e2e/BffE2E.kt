@@ -89,14 +89,16 @@ private fun shippedOrder(): String {
     return id
 }
 
-private val infra: Path = Path.of(System.getProperty("eiaf.repo.root", ".")).resolve("infra/local")
+private val repoRoot: Path = Path.of(System.getProperty("eiaf.repo.root", "."))
+private val infra: Path = repoRoot.resolve("infra/local")
 
 /** 障害の注入(下流のコンテナの停止・起動)。在庫と出荷は saga の profile のサービス。 */
 private fun compose(vararg args: String) {
     val command =
         listOf("docker", "compose", "-f", infra.resolve("docker-compose.yml").toString()) +
             listOf("--env-file", infra.resolve("images.env").toString(), "--env-file", infra.resolve(".env").toString()) +
-            listOf("--profile", "core", "--profile", "saga") + args
+            // e2e.env がないと、起動し直したサービスの接続先が Toxiproxy から外れる(ADR-0044)
+            listOf("--env-file", repoRoot.resolve("tests/e2e/e2e.env").toString(), "--profile", "core", "--profile", "saga") + args
     val process = ProcessBuilder(command).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start()
     check(process.waitFor(3, TimeUnit.MINUTES) && process.exitValue() == 0) { "docker compose ${args.toList()} が失敗しました" }
 }

@@ -311,10 +311,14 @@ services:
         condition: service_completed_successfully
       otel-collector:
         condition: service_healthy
+      # E2E のときだけ、Kafka への接続が Toxiproxy を通る(tests/e2e/e2e.env。ADR-0044)
+      toxiproxy:
+        condition: service_healthy
+        required: false
     environment:
       INVENTORY_DB_URL: jdbc:postgresql://postgres:5432/inventory_service
       INVENTORY_APP_DB_PASSWORD: ${INVENTORY_APP_DB_PASSWORD:?make env を実行してください}
-      INVENTORY_KAFKA_BOOTSTRAP: kafka:9092
+      INVENTORY_KAFKA_BOOTSTRAP: ${INVENTORY_KAFKA_BOOTSTRAP:-kafka:9092}
       INVENTORY_SCHEMA_REGISTRY_URL: http://apicurio:8080/apis/registry/v3
       INVENTORY_GRPC_TLS_CERT_FILE: /certs/inventory-service.crt
       INVENTORY_GRPC_TLS_KEY_FILE: /certs/inventory-service.key
