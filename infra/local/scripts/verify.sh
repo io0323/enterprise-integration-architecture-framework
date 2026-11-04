@@ -1408,6 +1408,21 @@ verify_dashboard() {
     fail "Grafana: パネルの式が想定外: $result"
   fi
 
+  # 全体の一覧(P14 ⑤)。障害のときに出るパネルと、ほかの profile で出るパネルは空でよい
+  dash="$(curl -fsS -u "admin:$GRAFANA_ADMIN_PASSWORD" http://localhost:19300/api/dashboards/uid/eiaf-slo-resilience || true)"
+  if [[ "$(json 'd["meta"]["folderTitle"] + "/" + d["dashboard"]["title"]' <<<"$dash" 2>/dev/null)" == "EIAF/EIAF — SLO & Resilience" ]]; then
+    pass "Grafana: ダッシュボード EIAF — SLO & Resilience(フォルダ EIAF)を provisioning で読み込んでいる"
+    result="$(dashboard_panels_return_data "$dash" "SLO と締め切りのアラート" "Circuit Breaker が開いている依存先" "タイムアウト(種類別)" \
+      "呼び出し元の締め切りで打ち切った割合" "Batch の SLA の余裕")"
+    if [[ "$result" == ok ]]; then
+      pass "Grafana: SLO & Resilience の全パネルの式が、Prometheus でデータを返す"
+    else
+      fail "Grafana: SLO & Resilience のパネルの式が想定外: $result"
+    fi
+  else
+    fail "Grafana: ダッシュボード eiaf-slo-resilience を読み込めない"
+  fi
+
   verify_slo_rules order-api-availability order-api-latency order-events-publish
   # 平常時に誤りの割合が 1 に張り付かない(累積の統計を拾う誤りの再発の防止。Kafka の検査の直後でも、接続していて現在の遅れは小さい)
   check "Prometheus: SLO order-events-publish の誤りの割合が 100% に張り付いていない" retry 12 10 bash -c \
