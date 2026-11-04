@@ -27,6 +27,7 @@ import kotlin.time.TimeSource
  * |---|---|---|
  * | `eia.resilience.circuit_breaker.state` | gauge | `state`(`closed` / `open` / `half_open`)。現在の状態だけ 1、ほかは 0 |
  * | `eia.resilience.circuit_breaker.transitions` | counter | `from`・`to` |
+ * | `eia.resilience.attempts` | counter | なし。依存先への試行の数(`caller_deadline` の割合の分母。ADR-0045 §4) |
  * | `eia.resilience.retries` | counter | なし |
  * | `eia.resilience.retries.suppressed` | counter | `reason`(`deadline` / `circuit_open` / `budget_exhausted`) |
  * | `eia.resilience.retry_budget.tokens` | gauge | なし。リトライバジェットの残高 |
@@ -47,6 +48,7 @@ public class ResilienceMetrics(
 
     private val transitions: LongCounter =
         meter.counter("eia.resilience.circuit_breaker.transitions", "{transition}", "Circuit Breaker の状態の遷移")
+    private val attempts: LongCounter = meter.counter("eia.resilience.attempts", "{attempt}", "依存先への試行の数")
     private val retries: LongCounter = meter.counter("eia.resilience.retries", "{retry}", "リトライした回数")
     private val suppressed: LongCounter =
         meter.counter("eia.resilience.retries.suppressed", "{retry}", "RetryPolicy が認めたリトライを見送った回数(理由別)")
@@ -100,6 +102,10 @@ public class ResilienceMetrics(
         timeSource: TimeSource.WithComparableMarks = TimeSource.Monotonic,
         random: Random = Random.Default,
     ): Resilience = Resilience(name, config, timeSource, random, this).also(::register)
+
+    override fun onAttempt(name: String) {
+        attempts.add(1, attributes(name))
+    }
 
     override fun onRetry(
         name: String,

@@ -156,6 +156,17 @@ class ResilienceMetricsSpec :
                 mapOf(dependency("billing", "kind" to "caller_deadline") to 1L)
         }
 
+        test("試行の数を数える(リトライの 1 回ごと。caller_deadline の割合の分母。ADR-0045 §4)") {
+            val config = ResilienceConfig(attemptTimeout = 1.seconds, retry = FIXED, retryBudget = null, circuitBreaker = null)
+            val resilience = metrics.resilience("shipping", config, testScheduler.timeSource)
+
+            resilience.execute { FAILURE }
+
+            val attempts = reader.collectAllMetrics().points("eia.resilience.attempts")
+            attempts.keys shouldBe setOf(dependency("shipping"))
+            (attempts.getValue(dependency("shipping")).toLong() > 1L) shouldBe true
+        }
+
         test("Bulkhead の拒否") {
             val config =
                 ResilienceConfig(
