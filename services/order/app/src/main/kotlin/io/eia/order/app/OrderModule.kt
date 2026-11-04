@@ -79,6 +79,7 @@ import org.koin.core.module.Module
 import org.koin.core.qualifier.named
 import org.koin.dsl.module
 import kotlin.time.Clock
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.toJavaDuration
 
 /**
@@ -100,6 +101,11 @@ internal fun orderModule(
             HikariDataSource(
                 HikariConfig().apply {
                     jdbcUrl = config.dbUrl
+                    // statement_timeout は DB の側で効くので、ネットワークの遅延・切断では止まらない。接続の待ちと通信の待ちにも上限を置き、
+                    // Gateway のタイムアウト(504)より先に 503 を返す(ADR-0024 §3)
+                    connectionTimeout = DB_CONNECTION_WAIT.inWholeMilliseconds
+                    addDataSourceProperty("connectTimeout", DB_CONNECTION_WAIT.inWholeSeconds)
+                    addDataSourceProperty("socketTimeout", (config.requestBudget + DB_SOCKET_MARGIN).inWholeSeconds)
                     username = config.appUser
                     password = appPassword.reveal()
                     poolName = "order-app"
@@ -138,6 +144,12 @@ internal fun orderModule(
             )
         }
     }
+
+/** 接続の取得の上限。リクエストの予算より十分に短くする(既定の 30 秒では、切断のときに予算の間ずっと待つ)。 */
+private val DB_CONNECTION_WAIT = 3.seconds
+
+/** 通信の待ちの上限は「予算 + これ」。DB の文の上限(残り時間 + 0.5 秒)より後に切れるようにする。 */
+private val DB_SOCKET_MARGIN = 1.seconds
 
 /** Schema Registry に問い合わせる HTTP クライアントの名前(起動時のスキーマ ID の解決だけに使う)。 */
 internal val SCHEMA_REGISTRY_HTTP = named("schema-registry-http")
