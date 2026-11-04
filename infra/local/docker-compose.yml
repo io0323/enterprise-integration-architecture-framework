@@ -823,6 +823,10 @@ services:
         condition: service_healthy
       otel-collector:
         condition: service_healthy
+      # E2E のときだけ、Gateway への接続が Toxiproxy を通る(tests/e2e/e2e.env。ADR-0044)
+      toxiproxy:
+        condition: service_healthy
+        required: false
     environment:
       BFF_TLS_CERT_FILE: /certs/bff-graphql.crt
       BFF_TLS_KEY_FILE: /certs/bff-graphql.key
@@ -833,7 +837,7 @@ services:
       OIDC_JWKS_URI: http://keycloak:8080/realms/eiaf/protocol/openid-connect/certs
       BFF_TOKEN_URL: http://keycloak:8080/realms/eiaf/protocol/openid-connect/token
       BFF_CLIENT_SECRET: ${EIAF_BFF_GRAPHQL_CLIENT_SECRET:?make env を実行してください}
-      BFF_GATEWAY_URL: http://apisix:9080
+      BFF_GATEWAY_URL: ${BFF_GATEWAY_URL:-http://apisix:9080}
       BFF_INVENTORY_TARGET: inventory-service:9443
       BFF_SHIPPING_TARGET: shipping-service:9443
       # 複雑度の枠(ADR-0043 §9)。E2E・検証で小さくできる
@@ -1160,8 +1164,12 @@ services:
       # 監査のアンカーのバケット(eiaf-audit)とポリシーができてから起動する
       seaweedfs-init:
         condition: service_healthy
+      # E2E のときだけ、DB への接続が Toxiproxy を通る(tests/e2e/e2e.env。ADR-0044)
+      toxiproxy:
+        condition: service_healthy
+        required: false
     environment:
-      ORDER_DB_URL: jdbc:postgresql://postgres:5432/order_service
+      ORDER_DB_URL: ${ORDER_SERVE_DB_URL:-jdbc:postgresql://postgres:5432/order_service}
       ORDER_APP_DB_PASSWORD: ${ORDER_APP_DB_PASSWORD:?make env を実行してください}
       # 書き込むイベント(Outbox)のスキーマ ID を起動時に解決する Schema Registry(ADR-0025 §3)
       ORDER_SCHEMA_REGISTRY_URL: http://apicurio:8080/apis/registry/v3

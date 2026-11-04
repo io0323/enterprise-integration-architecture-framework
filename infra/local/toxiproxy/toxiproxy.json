@@ -16,5 +16,11 @@
     "listen": "0.0.0.0:19433",
     "upstream": "postgres:5432",
     "enabled": true
+  },
+  {
+    "name": "gateway-from-bff",
+    "listen": "0.0.0.0:19081",
+    "upstream": "apisix:9080",
+    "enabled": true
   }
 ]
