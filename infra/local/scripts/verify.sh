@@ -1933,8 +1933,6 @@ verify_bff() {
     fail "Prometheus: BFF のアラートのルールがない"
   fi
 
-  verify_slo_rules storefront-availability storefront-latency
-
   # 複雑度の枠(ADR-0043 §9)。ほかの検査の枠を使わないよう最後に行う。1 回 140 で、大きさ 1000 を超えるまで続ける
   local heavy="{ orders(ids: [$(python3 -c 'print(",".join(chr(34) + "ord-none-" + str(i) + chr(34) for i in range(20)))')]) { orders { shipment { status } lines { stock { available } } } } }"
   local limited=""
@@ -1948,6 +1946,9 @@ verify_bff() {
   else
     fail "BFF: 複雑度の枠の応答が想定外 ($(http_status <<<"$response"))"
   fi
+
+  # SLO のルールの式(上の複雑度の検査で流量を流した後。流量がないと割合は 0 ÷ 0 になる)
+  verify_slo_rules storefront-availability storefront-latency
 
   # ダッシュボード(部分応答は平常時は空でよい。拒否と個人情報の読み取りは、上の検査で数を流している)
   local dash result
