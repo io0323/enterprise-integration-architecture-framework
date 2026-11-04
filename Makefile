@@ -10,7 +10,8 @@ INFRA := infra/local
 # E2E=1: E2E 用の設定(tests/e2e/e2e.env。待ち時間を短くする)を足して起動する(例: make up PROFILE="order cdc saga batch file b2b saas iot bff" E2E=1)
 E2E ?=
 COMPOSE := docker compose -f $(INFRA)/docker-compose.yml --env-file $(INFRA)/images.env --env-file $(INFRA)/.env $(if $(E2E),--env-file tests/e2e/e2e.env)
-COMPOSE_PROFILES_ARGS := --profile core $(foreach p,$(filter-out core,$(PROFILE)),--profile $(p))
+# E2E=1 は、サービスの接続先を Toxiproxy に切り替える(e2e.env)ので chaos の profile を足す(ADR-0044)
+COMPOSE_PROFILES_ARGS := --profile core $(foreach p,$(filter-out core,$(PROFILE)),--profile $(p)) $(if $(E2E),--profile chaos)
 SERVICE ?=
 # order-service のコンテナは、開発用の鍵(infra/local/certs/*.key。0600)を読むため、ホストの利用者の uid で動かす。
 # root(uid 0)では make up と make certs を止める(コンテナが root で動き、distroless の nonroot の意味がなくなるため。ADR-0024 §7)
