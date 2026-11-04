@@ -77,6 +77,10 @@ class ArchitectureSpec :
             ArchitectureRules.messagingLibrariesOnlyInAllowedModules(codeBase).assertNone()
         }
 
+        test("常駐のサービスの繰り返しの仕事は RepeatingJobs で動かす(#191)") {
+            ArchitectureRules.repeatingJobsThroughPlatform(codeBase).assertNone()
+        }
+
         test("AWS SDK は platform/file-transfer と platform/audit のアンカーだけで使う(ADR-0032 §6)") {
             ArchitectureRules.awsSdkOnlyInAllowedModules(codeBase).assertNone()
         }

@@ -11,6 +11,7 @@ import io.eia.platform.observability.Observability
 import io.eia.platform.observability.ObservabilityConfig
 import io.eia.platform.observability.ObservabilityRuntime
 import io.eia.platform.observability.TelemetrySinks
+import io.eia.platform.observability.jobs.RepeatingJobs
 import io.eia.platform.security.secret.EnvSecretProvider
 import io.eia.platform.security.secret.Secret
 import io.eia.shared.kernel.Result
@@ -199,13 +200,12 @@ internal class BatchEtlServer private constructor(
             val positions = koin.get<KafkaIngestPositions>()
             val store = koin.get<JdbcBatchStore>()
             val metrics = koin.get<BatchEtlMetrics>()
-            while (currentCoroutineContext().isActive) {
+            koin.get<RepeatingJobs>().repeat("ingest-lag-probe", config.lagProbeInterval) {
                 val stored = withContext(Dispatchers.IO) { store.readCheckpoint(JdbcRawOrderStore.WATERMARK) }.getOrNull()
                 when (val lag = positions.lag(stored?.let(::SourcePosition), Clock.System.now())) {
                     is Result.Ok -> metrics.lag(lag.value)
                     is Result.Err -> logger.warn("取り込みの遅れを確かめられません({})", lag.error.code)
                 }
-                delay(config.lagProbeInterval)
             }
         }
 

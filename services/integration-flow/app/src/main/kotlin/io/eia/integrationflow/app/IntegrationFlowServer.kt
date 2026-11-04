@@ -14,6 +14,7 @@ import io.eia.platform.messagingkafka.EventConsumer
 import io.eia.platform.observability.Observability
 import io.eia.platform.observability.ObservabilityConfig
 import io.eia.platform.observability.ObservabilityRuntime
+import io.eia.platform.observability.jobs.RepeatingJobs
 import io.eia.platform.schemaregistry.SchemaIdBook
 import io.eia.platform.security.secret.EnvSecretProvider
 import io.eia.shared.kernel.FieldViolation
@@ -121,8 +122,8 @@ internal class IntegrationFlowServer private constructor(
                         schemaIds.resolveUntilReady()
                         consumer.run()
                     }
-                    launchSyncJobs(scope, koin, inputs, schemaIds)
-                    launchPurgeJob(scope, koin.get(), inputs.config)
+                    launchSyncJobs(scope, koin, inputs, schemaIds, runtime)
+                    launchPurgeJob(scope, koin.get(), inputs.config, runtime)
                     val server =
                         embeddedServer(Netty, configure = { connector { port = inputs.config.healthPort } }) {
                             routing {
@@ -204,15 +205,17 @@ internal class IntegrationFlowServer private constructor(
             koin: Koin,
             inputs: ServeInputs,
             schemaIds: SchemaIdBook,
+            runtime: ObservabilityRuntime,
         ) {
             val sync = koin.get<SyncFlowUseCase>()
             val metrics = koin.get<FlowMetrics>()
+            val jobs = RepeatingJobs(runtime.meter)
             inputs.catalog.flows.forEach { flow ->
                 flow.triggers.filterIsInstance<Trigger.Poll>().forEach { trigger ->
                     val interval = inputs.config.pollInterval ?: trigger.every
                     scope.launch {
                         schemaIds.resolveUntilReady()
-                        while (isActive) {
+                        jobs.repeat("sync-${flow.id}", interval) {
                             when (val synced = sync(flow, trigger)) {
                                 is Result.Ok -> {
                                     metrics.synced(flow.id, synced.value)
@@ -224,7 +227,6 @@ internal class IntegrationFlowServer private constructor(
                                     logger.warn("Flow {} を同期できません({})。次の間隔でやり直します", flow.id, synced.error.code)
                                 }
                             }
-                            delay(interval)
                         }
                     }
                 }
@@ -236,10 +238,10 @@ internal class IntegrationFlowServer private constructor(
             scope: CoroutineScope,
             processed: InboxProcessedMessages,
             config: IntegrationFlowConfig,
+            runtime: ObservabilityRuntime,
         ) {
             scope.launch {
-                while (isActive) {
-                    delay(config.purgeInterval)
+                RepeatingJobs(runtime.meter).repeat("purge-processed-messages", config.purgeInterval, delayFirst = true) {
                     var total = 0
                     do {
                         val deleted = (processed.purgeExpired(PURGE_BATCH) as? Result.Ok)?.value ?: 0

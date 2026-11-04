@@ -88,6 +88,32 @@ class BatchSchedulerSpec :
             trigger: RunTrigger = RunTrigger.MANUAL,
         ) = RunRecord(RunKey(dag.id, day), status, generation, trigger, "00-${"1".repeat(32)}-${"2".repeat(16)}-01", now, now)
 
+        test("起動の条件の確認が想定していない例外で失敗しても、スケジューラは止まらず次の回に起動する(#191)") {
+            val store = InMemoryBatchStore()
+            val checks = AtomicInteger()
+            val failingOnce =
+                object : BatchStore by store {
+                    override fun find(run: RunKey) =
+                        if (checks.getAndIncrement() == 0) throw UnsupportedOperationException("壊れた行") else store.find(run)
+                }
+            val scheduler =
+                BatchScheduler(
+                    BatchRunner(store, telemetry.runtime, TestClock(now)),
+                    failingOnce,
+                    listOf(BatchJob(ingest, Trigger.Scheduled(Schedule.daily(LocalTime(1, 0), tokyo)))),
+                    TestClock(now),
+                    settings = BatchScheduler.Settings(pollInterval = 10.milliseconds),
+                )
+
+            coroutineScope {
+                val loop = launch(Dispatchers.Default) { scheduler.run() }
+                withTimeout(5.seconds) {
+                    while (store.runs[RunKey(ingest.id, day)]?.status != RunStatus.SUCCEEDED) delay(10.milliseconds)
+                }
+                loop.cancel()
+            }
+        }
+
         test("時刻: 直近の起動のパーティションの記録がないか RUNNING のまま残っていれば起動し、成功・失敗していれば起動しない") {
             val store = InMemoryBatchStore()
             val job = BatchJob(ingest, Trigger.Scheduled(Schedule.daily(LocalTime(1, 0), tokyo)))

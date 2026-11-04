@@ -8,6 +8,7 @@ import io.eia.legacyorderacl.application.port.inbound.ResyncResult
 import io.eia.platform.observability.ObservabilityRuntime
 import io.eia.platform.observability.context.ObservabilityContext
 import io.eia.platform.observability.context.withSpan
+import io.eia.platform.observability.jobs.RepeatingJobs
 import io.eia.shared.kernel.CorrelationId
 import io.eia.shared.kernel.DomainError
 import io.eia.shared.kernel.Result
@@ -31,10 +32,7 @@ internal class ReconcileJob(
     private val resync: ResyncLegacyOrdersUseCase? = null,
 ) {
     suspend fun run() {
-        while (currentCoroutineContext().isActive) {
-            runOnce()
-            delay(interval)
-        }
+        RepeatingJobs(observability.meter).repeat("legacy-order-reconcile", interval) { runOnce() }
     }
 
     /** 1 回照合し、[resync] が真で自動の再同期が有効なら、ずれを取り直す。 */

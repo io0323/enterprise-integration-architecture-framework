@@ -29,6 +29,7 @@ import io.eia.platform.filetransfer.write.FilePublisher
 import io.eia.platform.messagingkafka.DeadLetterPublisher
 import io.eia.platform.messagingkafka.KafkaProducerSettings
 import io.eia.platform.observability.ObservabilityRuntime
+import io.eia.platform.observability.jobs.RepeatingJobs
 import io.eia.platform.observability.ktor.client.ClientObservability
 import io.eia.platform.reliability.ResilienceMetrics
 import io.eia.platform.schemaregistry.ApicurioRegistryClient
@@ -98,6 +99,7 @@ internal fun batchEtlModule(
     config.reconcile?.let { includes(reconcileModule(it, secrets, runtime)) }
     config.salesFile?.let { includes(salesFileModule(it, secrets)) }
     single(DAILY) { OrderDailyJob.dag(get(), get(), get(), config.slaAt) }
+    single { RepeatingJobs(runtime.meter) }
     single { BatchRunner(get<JdbcBatchStore>(), runtime, listener = BatchMetrics(runtime.meter)) }
     single {
         val jobs =
@@ -113,6 +115,7 @@ internal fun batchEtlModule(
             jobs = jobs,
             monitor = SlaMonitor(jobs, store, meter = runtime.meter),
             settings = BatchScheduler.Settings(pollInterval = config.pollInterval),
+            repeating = get(),
         )
     }
 }

@@ -1,0 +1,26 @@
+# jobs.rules.yml の単体テスト(make alerts-test)。
+rule_files:
+  - jobs.rules.yml
+evaluation_interval: 1m
+tests:
+  - name: 1 件目の失敗で知らせ、次の失敗がなければ 1 時間で消える。失敗のない仕事では発火しない
+    interval: 1m
+    input_series:
+      - series: 'eia_job_unexpected_failures_total{job="order-service",eia_job_name="saga-timeouts"}'
+        values: "0x10 1x120"
+      - series: 'eia_job_unexpected_failures_total{job="order-service",eia_job_name="purge"}'
+        values: "0x130"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: RepeatingJobFailing
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: RepeatingJobFailing
+        exp_alerts:
+          - exp_labels: { severity: warning, job: order-service, eia_job_name: saga-timeouts }
+            exp_annotations:
+              summary: "order-service の繰り返しの仕事 saga-timeouts が想定していない例外で失敗している"
+              runbook: docs/runbooks/repeating-jobs.md#仕事が想定していない例外で失敗しているとき
+      - eval_time: 90m
+        alertname: RepeatingJobFailing
+        exp_alerts: []

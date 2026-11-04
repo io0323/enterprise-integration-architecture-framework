@@ -24,6 +24,7 @@ import io.eia.platform.filetransfer.store.S3ObjectStore
 import io.eia.platform.filetransfer.store.S3StoreConfig
 import io.eia.platform.filetransfer.verify.FileVerifier
 import io.eia.platform.observability.ObservabilityRuntime
+import io.eia.platform.observability.jobs.RepeatingJobs
 import io.eia.platform.security.secret.SecretProvider
 import org.koin.dsl.module
 
@@ -71,6 +72,7 @@ internal fun fileExchangeModule(
     }
     single { FileExchangeMetrics(runtime.meter) }
     single { ReceiveJob.dag(get(), get(), get()) }
+    single { RepeatingJobs(runtime.meter) }
     single { BatchRunner(get<JdbcBatchStore>(), runtime, listener = BatchMetrics(runtime.meter)) }
     single {
         BatchScheduler(
@@ -78,6 +80,7 @@ internal fun fileExchangeModule(
             store = get<JdbcBatchStore>(),
             jobs = listOf(ReceiveJob.job(get(), get<S3ObjectStore>(), config.prefixes.inbox)),
             settings = BatchScheduler.Settings(pollInterval = config.pollInterval, maxConcurrentRuns = MAX_CONCURRENT_RUNS),
+            repeating = get(),
         )
     }
 }
