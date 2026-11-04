@@ -3,6 +3,9 @@
 # - 目標はカタログ(contracts/catalog)の値。誤差の予算は 30 日あたり
 # - バーンレートは「予算を使う速さ」。14.4 倍で 1 時間続くと 30 日の予算の 2%、6 倍で 6 時間続くと 5% を使う(Google SRE Workbook の多重窓)
 # - 長い窓で「続いていること」を、短い窓で「今も起きていること」を確かめる。回復すると短い窓から先に消える
+# - 5xx が 1 件もないときは誤りの割合を 0 にする(分子の系列がなく、そのままでは「データなし」になる)
+# - le は Prometheus 3 が 500.0 の形に正規化する
+# - Debezium の遅れの系列には累積の統計(MaxValue・P99 など)も混ざるので、現在の値(MilliSecondsBehindSource)だけを選ぶ
 # - 流量がないと割合は計算できず(NaN)、発火しない。止まっていることは、サービスごとのヘルスとアラートで見る
 groups:
   - name: slo-budgets
@@ -36,83 +39,83 @@ groups:
   - name: slo-error-ratios
     rules:
       - record: slo:error_ratio:rate5m
-        expr: sum(rate(apisix_http_status{route="sales-order-api",code=~"5.."}[5m])) / sum(rate(apisix_http_status{route="sales-order-api"}[5m]))
+        expr: (sum(rate(apisix_http_status{route="sales-order-api",code=~"5.."}[5m])) or on() vector(0)) / sum(rate(apisix_http_status{route="sales-order-api"}[5m]))
         labels:
           slo: order-api-availability
       - record: slo:error_ratio:rate30m
-        expr: sum(rate(apisix_http_status{route="sales-order-api",code=~"5.."}[30m])) / sum(rate(apisix_http_status{route="sales-order-api"}[30m]))
+        expr: (sum(rate(apisix_http_status{route="sales-order-api",code=~"5.."}[30m])) or on() vector(0)) / sum(rate(apisix_http_status{route="sales-order-api"}[30m]))
         labels:
           slo: order-api-availability
       - record: slo:error_ratio:rate1h
-        expr: sum(rate(apisix_http_status{route="sales-order-api",code=~"5.."}[1h])) / sum(rate(apisix_http_status{route="sales-order-api"}[1h]))
+        expr: (sum(rate(apisix_http_status{route="sales-order-api",code=~"5.."}[1h])) or on() vector(0)) / sum(rate(apisix_http_status{route="sales-order-api"}[1h]))
         labels:
           slo: order-api-availability
       - record: slo:error_ratio:rate6h
-        expr: sum(rate(apisix_http_status{route="sales-order-api",code=~"5.."}[6h])) / sum(rate(apisix_http_status{route="sales-order-api"}[6h]))
+        expr: (sum(rate(apisix_http_status{route="sales-order-api",code=~"5.."}[6h])) or on() vector(0)) / sum(rate(apisix_http_status{route="sales-order-api"}[6h]))
         labels:
           slo: order-api-availability
       - record: slo:error_ratio:rate5m
-        expr: 1 - sum(rate(apisix_http_latency_bucket{route="sales-order-api",type="request",le="500"}[5m])) / sum(rate(apisix_http_latency_count{route="sales-order-api",type="request"}[5m]))
+        expr: 1 - sum(rate(apisix_http_latency_bucket{route="sales-order-api",type="request",le="500.0"}[5m])) / sum(rate(apisix_http_latency_count{route="sales-order-api",type="request"}[5m]))
         labels:
           slo: order-api-latency
       - record: slo:error_ratio:rate30m
-        expr: 1 - sum(rate(apisix_http_latency_bucket{route="sales-order-api",type="request",le="500"}[30m])) / sum(rate(apisix_http_latency_count{route="sales-order-api",type="request"}[30m]))
+        expr: 1 - sum(rate(apisix_http_latency_bucket{route="sales-order-api",type="request",le="500.0"}[30m])) / sum(rate(apisix_http_latency_count{route="sales-order-api",type="request"}[30m]))
         labels:
           slo: order-api-latency
       - record: slo:error_ratio:rate1h
-        expr: 1 - sum(rate(apisix_http_latency_bucket{route="sales-order-api",type="request",le="500"}[1h])) / sum(rate(apisix_http_latency_count{route="sales-order-api",type="request"}[1h]))
+        expr: 1 - sum(rate(apisix_http_latency_bucket{route="sales-order-api",type="request",le="500.0"}[1h])) / sum(rate(apisix_http_latency_count{route="sales-order-api",type="request"}[1h]))
         labels:
           slo: order-api-latency
       - record: slo:error_ratio:rate6h
-        expr: 1 - sum(rate(apisix_http_latency_bucket{route="sales-order-api",type="request",le="500"}[6h])) / sum(rate(apisix_http_latency_count{route="sales-order-api",type="request"}[6h]))
+        expr: 1 - sum(rate(apisix_http_latency_bucket{route="sales-order-api",type="request",le="500.0"}[6h])) / sum(rate(apisix_http_latency_count{route="sales-order-api",type="request"}[6h]))
         labels:
           slo: order-api-latency
       - record: slo:error_ratio:rate5m
-        expr: sum(rate(apisix_http_status{route="storefront-graphql",code=~"5.."}[5m])) / sum(rate(apisix_http_status{route="storefront-graphql"}[5m]))
+        expr: (sum(rate(apisix_http_status{route="storefront-graphql",code=~"5.."}[5m])) or on() vector(0)) / sum(rate(apisix_http_status{route="storefront-graphql"}[5m]))
         labels:
           slo: storefront-availability
       - record: slo:error_ratio:rate30m
-        expr: sum(rate(apisix_http_status{route="storefront-graphql",code=~"5.."}[30m])) / sum(rate(apisix_http_status{route="storefront-graphql"}[30m]))
+        expr: (sum(rate(apisix_http_status{route="storefront-graphql",code=~"5.."}[30m])) or on() vector(0)) / sum(rate(apisix_http_status{route="storefront-graphql"}[30m]))
         labels:
           slo: storefront-availability
       - record: slo:error_ratio:rate1h
-        expr: sum(rate(apisix_http_status{route="storefront-graphql",code=~"5.."}[1h])) / sum(rate(apisix_http_status{route="storefront-graphql"}[1h]))
+        expr: (sum(rate(apisix_http_status{route="storefront-graphql",code=~"5.."}[1h])) or on() vector(0)) / sum(rate(apisix_http_status{route="storefront-graphql"}[1h]))
         labels:
           slo: storefront-availability
       - record: slo:error_ratio:rate6h
-        expr: sum(rate(apisix_http_status{route="storefront-graphql",code=~"5.."}[6h])) / sum(rate(apisix_http_status{route="storefront-graphql"}[6h]))
+        expr: (sum(rate(apisix_http_status{route="storefront-graphql",code=~"5.."}[6h])) or on() vector(0)) / sum(rate(apisix_http_status{route="storefront-graphql"}[6h]))
         labels:
           slo: storefront-availability
       - record: slo:error_ratio:rate5m
-        expr: 1 - sum(rate(apisix_http_latency_bucket{route="storefront-graphql",type="request",le="1000"}[5m])) / sum(rate(apisix_http_latency_count{route="storefront-graphql",type="request"}[5m]))
+        expr: 1 - sum(rate(apisix_http_latency_bucket{route="storefront-graphql",type="request",le="1000.0"}[5m])) / sum(rate(apisix_http_latency_count{route="storefront-graphql",type="request"}[5m]))
         labels:
           slo: storefront-latency
       - record: slo:error_ratio:rate30m
-        expr: 1 - sum(rate(apisix_http_latency_bucket{route="storefront-graphql",type="request",le="1000"}[30m])) / sum(rate(apisix_http_latency_count{route="storefront-graphql",type="request"}[30m]))
+        expr: 1 - sum(rate(apisix_http_latency_bucket{route="storefront-graphql",type="request",le="1000.0"}[30m])) / sum(rate(apisix_http_latency_count{route="storefront-graphql",type="request"}[30m]))
         labels:
           slo: storefront-latency
       - record: slo:error_ratio:rate1h
-        expr: 1 - sum(rate(apisix_http_latency_bucket{route="storefront-graphql",type="request",le="1000"}[1h])) / sum(rate(apisix_http_latency_count{route="storefront-graphql",type="request"}[1h]))
+        expr: 1 - sum(rate(apisix_http_latency_bucket{route="storefront-graphql",type="request",le="1000.0"}[1h])) / sum(rate(apisix_http_latency_count{route="storefront-graphql",type="request"}[1h]))
         labels:
           slo: storefront-latency
       - record: slo:error_ratio:rate6h
-        expr: 1 - sum(rate(apisix_http_latency_bucket{route="storefront-graphql",type="request",le="1000"}[6h])) / sum(rate(apisix_http_latency_count{route="storefront-graphql",type="request"}[6h]))
+        expr: 1 - sum(rate(apisix_http_latency_bucket{route="storefront-graphql",type="request",le="1000.0"}[6h])) / sum(rate(apisix_http_latency_count{route="storefront-graphql",type="request"}[6h]))
         labels:
           slo: storefront-latency
       - record: slo:error_ratio:rate5m
-        expr: 1 - avg(avg_over_time((debezium_postgres_streaming_connected{server="order-outbox"} * on(server) (debezium_postgres_streaming_millisecondsbehindsource{server="order-outbox"} <= bool 5000))[5m:30s]))
+        expr: 1 - avg(avg_over_time((max by (server) (debezium_postgres_streaming_connected{server="order-outbox"}) * on(server) (max by (server) (debezium_postgres_streaming_millisecondsbehindsource{server="order-outbox",_objectname=~".*><>MilliSecondsBehindSource"}) <= bool 5000))[5m:30s]))
         labels:
           slo: order-events-publish
       - record: slo:error_ratio:rate30m
-        expr: 1 - avg(avg_over_time((debezium_postgres_streaming_connected{server="order-outbox"} * on(server) (debezium_postgres_streaming_millisecondsbehindsource{server="order-outbox"} <= bool 5000))[30m:30s]))
+        expr: 1 - avg(avg_over_time((max by (server) (debezium_postgres_streaming_connected{server="order-outbox"}) * on(server) (max by (server) (debezium_postgres_streaming_millisecondsbehindsource{server="order-outbox",_objectname=~".*><>MilliSecondsBehindSource"}) <= bool 5000))[30m:30s]))
         labels:
           slo: order-events-publish
       - record: slo:error_ratio:rate1h
-        expr: 1 - avg(avg_over_time((debezium_postgres_streaming_connected{server="order-outbox"} * on(server) (debezium_postgres_streaming_millisecondsbehindsource{server="order-outbox"} <= bool 5000))[1h:30s]))
+        expr: 1 - avg(avg_over_time((max by (server) (debezium_postgres_streaming_connected{server="order-outbox"}) * on(server) (max by (server) (debezium_postgres_streaming_millisecondsbehindsource{server="order-outbox",_objectname=~".*><>MilliSecondsBehindSource"}) <= bool 5000))[1h:30s]))
         labels:
           slo: order-events-publish
       - record: slo:error_ratio:rate6h
-        expr: 1 - avg(avg_over_time((debezium_postgres_streaming_connected{server="order-outbox"} * on(server) (debezium_postgres_streaming_millisecondsbehindsource{server="order-outbox"} <= bool 5000))[6h:30s]))
+        expr: 1 - avg(avg_over_time((max by (server) (debezium_postgres_streaming_connected{server="order-outbox"}) * on(server) (max by (server) (debezium_postgres_streaming_millisecondsbehindsource{server="order-outbox",_objectname=~".*><>MilliSecondsBehindSource"}) <= bool 5000))[6h:30s]))
         labels:
           slo: order-events-publish
 

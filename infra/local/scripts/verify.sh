@@ -1409,6 +1409,9 @@ verify_dashboard() {
   fi
 
   verify_slo_rules order-api-availability order-api-latency order-events-publish
+  # 平常時に誤りの割合が 1 に張り付かない(累積の統計を拾う誤りの再発の防止。Kafka の検査の直後でも、接続していて現在の遅れは小さい)
+  check "Prometheus: SLO order-events-publish の誤りの割合が 100% に張り付いていない" retry 12 10 bash -c \
+    "[[ \"\$(curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=slo:error_ratio:rate5m{slo=\"order-events-publish\"} < 1' | python3 -c 'import json,sys; print(len(json.load(sys.stdin)[\"data\"][\"result\"]))')\" == 1 ]]"
 
   # CDC のダッシュボード(P06 ④)。アラートのパネルは平常時は空でよい
   dash="$(curl -fsS -u "admin:$GRAFANA_ADMIN_PASSWORD" http://localhost:19300/api/dashboards/uid/eiaf-cdc || true)"
