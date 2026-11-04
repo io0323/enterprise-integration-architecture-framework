@@ -27,6 +27,8 @@ import org.apache.kafka.common.errors.RetriableException
 import org.apache.kafka.common.header.Headers
 import org.apache.kafka.common.serialization.ByteArrayDeserializer
 import org.slf4j.LoggerFactory
+import java.sql.SQLException
+import java.sql.SQLTransientConnectionException
 import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -376,12 +378,35 @@ private suspend fun invokeGuarded(
         handle()
     } catch (e: CancellationException) {
         throw e
+    } catch (e: SQLTransientConnectionException) {
+        dbUnavailable(e)
+    } catch (e: SQLException) {
+        if (e.sqlState?.startsWith(SQLSTATE_CONNECTION_CLASS) ==
+            true
+        ) {
+            dbUnavailable(e)
+        } else {
+            unexpected(record, e::class.simpleName ?: "unknown")
+        }
     } catch (e: Exception) {
-        val type = e::class.simpleName ?: "unknown"
+        unexpected(record, e::class.simpleName ?: "unknown")
+    }
+
+/** DB に届かないのはメッセージの問題ではない。DLQ に隔離せず、未処理の位置から読み直す。 */
+private fun dbUnavailable(e: SQLException): Result<Handled, HandlingFailure> =
+    Result.Err(HandlingFailure.Unavailable(EventConsumer.UNEXPECTED_EXCEPTION, "DB に接続できません(${e::class.simpleName})"))
+
+private fun unexpected(
+    record: ConsumerRecord<ByteArray?, ByteArray?>,
+    type: String,
+): Result<Handled, HandlingFailure> =
+    run {
         // 例外のメッセージは値を含みうるため、型の名前だけを残す
         guardLogger.error("処理が想定しない例外を投げました({}。{} partition={} offset={})", type, record.topic(), record.partition(), record.offset())
         Result.Err(HandlingFailure.Transient(EventConsumer.UNEXPECTED_EXCEPTION, "処理が例外を投げました($type)"))
     }
+
+private const val SQLSTATE_CONNECTION_CLASS = "08"
 
 private val guardLogger = LoggerFactory.getLogger(EventConsumer::class.java)
 

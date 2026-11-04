@@ -41,6 +41,8 @@ import org.apache.kafka.common.errors.TimeoutException
 import org.apache.kafka.common.header.internals.RecordHeaders
 import org.apache.kafka.common.record.TimestampType
 import org.apache.kafka.common.serialization.ByteArraySerializer
+import java.sql.SQLException
+import java.sql.SQLTransientConnectionException
 import java.util.Optional
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Instant
@@ -257,6 +259,28 @@ class EventConsumerSpec :
             calls shouldBe 4
             f.deadLettered().single()["eiaf.dlq.reason"] shouldBe EventConsumer.UNEXPECTED_EXCEPTION
             f.deadLettered().single()["eiaf.dlq.detail"] shouldBe "処理が例外を投げました(IllegalStateException)"
+        }
+
+        test("処理が DB の接続の失敗を投げたら、Unavailable として DLQ に送らず、未処理の位置に戻す。接続以外の SQL の例外は DLQ に隔離する") {
+            listOf(SQLTransientConnectionException("x"), SQLException("x", "08006")).forEach { failure ->
+                var calls = 0
+                val f =
+                    fixture({ _ ->
+                        calls++
+                        throw failure
+                    })
+                f.consumer.addRecord(record(0, payload))
+
+                f.loop.pollOnce() shouldBe EventConsumer.UNEXPECTED_EXCEPTION
+
+                calls shouldBe 1
+                f.dlq.history().size shouldBe 0
+            }
+
+            val constraint = fixture({ _ -> throw SQLException("x", "23505") })
+            constraint.consumer.addRecord(record(0, payload))
+            constraint.loop.pollOnce().shouldBeNull()
+            constraint.deadLettered().single()["eiaf.dlq.reason"] shouldBe EventConsumer.UNEXPECTED_EXCEPTION
         }
 
         test("Unavailable は DLQ に送らず、処理を終えた分までをコミットして、未処理の位置に戻す") {

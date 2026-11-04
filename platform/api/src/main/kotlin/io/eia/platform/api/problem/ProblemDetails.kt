@@ -15,12 +15,16 @@ import io.ktor.server.plugins.UnsupportedMediaTypeException
 import io.ktor.server.plugins.statuspages.StatusPages
 import kotlinx.coroutines.CancellationException
 import org.slf4j.LoggerFactory
+import java.sql.SQLException
+import java.sql.SQLTransientConnectionException
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * エラーの応答を Problem Details(RFC 9457)に揃える(Framework 5。ADR-0022 §2)。
  *
  * | 状況 | 応答 |
  * |---|---|
+ * | DB に接続できない([SQLTransientConnectionException]・SQLSTATE のクラス 08) | 503 `service-unavailable`。`Result` に写されなかった経路(冪等の記録など)の備え |
  * | 想定外の例外 | 500 `internal-error`。例外のメッセージとスタックトレースは応答に出さず、Correlation ID の付いた ERROR ログにだけ残す |
  * | 本文を読めない(JSON の解析の失敗など。[BadRequestException]・[ContentTransformationException]) | 400 `bad-request`。パーサのメッセージ(本文の断片を含みうる)は出さない |
  * | [NotFoundException]・どのルートにも当たらない | 404 `not-found` |
@@ -36,6 +40,12 @@ import org.slf4j.LoggerFactory
  * 二重になる。`Plugins` の段階は `Monitoring` の内側なので、応答の状態コードとログが 1 回で正しく記録され、
  * `correlationId` もその処理のコンテキストから取れる。404 / 405(応答の状態コードだけの場合)は StatusPages で扱う。
  */
+private val DB_UNAVAILABLE_RETRY_AFTER = 1.seconds
+private const val SQLSTATE_CONNECTION_CLASS = "08"
+
+private fun SQLException.isConnectionFailure(): Boolean =
+    this is SQLTransientConnectionException || sqlState?.startsWith(SQLSTATE_CONNECTION_CLASS) == true
+
 public fun Application.installProblemDetails(configure: ProblemDetailsConfig.() -> Unit = {}) {
     attributes.put(ProblemDetailsConfigKey, ProblemDetailsConfig().apply(configure))
     intercept(ApplicationCallPipeline.Plugins) {
@@ -67,6 +77,12 @@ private suspend fun ApplicationCall.respondIfNotWritten(problem: Problem) {
 @Suppress("MagicNumber") // HTTP の状態コード
 private fun problemFor(cause: Throwable): Problem =
     when (cause) {
+        is SQLException if cause.isConnectionFailure() -> {
+            // DB に届かないのは実装の誤りではなく、一時的な障害。例外のメッセージは接続先を含みうるため、型だけを残す
+            logger.warn("DB に接続できないため 503 を返します(error.type={})", cause::class.qualifiedName)
+            Problem(ProblemType.SERVICE_UNAVAILABLE, retryAfter = DB_UNAVAILABLE_RETRY_AFTER)
+        }
+
         is BadRequestException, is ContentTransformationException -> {
             // 例外のメッセージは本文の断片を含みうるため、型だけを残す
             logger.debug("リクエストを読めないため 400 を返します exception={}", cause::class.qualifiedName)
