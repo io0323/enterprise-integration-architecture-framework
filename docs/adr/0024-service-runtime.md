@@ -35,6 +35,8 @@ P05 ④b-2 で、最初のサービス(order-service)を起動できる形にす
 - **DB 側の打ち切り**: `withTimeout` はコルーチンを打ち切るだけで、待ち状態の JDBC の問い合わせは止まらない。そこで、新しいトランザクションの最初に、`SET LOCAL statement_timeout` に「残り時間 + 余裕(0.5 秒)」を設定する(adapters の `newTransaction`)。
   - 余裕を足すのは、コルーチンの打ち切りを先に起こし、DB の打ち切りがそれを追う順にするため(応答は 503 `deadline-exceeded` になる)。DB の問い合わせは、遅くとも予算 + 余裕で止まる。
 - **ネットワークの遅延・切断には、接続と通信の上限で備える**(P14 ③ で追加)。`statement_timeout` は DB の側で効くので、DB に届かないときは止まらない。JDBC の呼び出しは止まったままで、コルーチンの打ち切りも効かず、Gateway のタイムアウト(504。結果は分からない)まで待っていた(`ResilienceE2E` で見つけた)。
+  - **打ち切りのときに JDBC の完了を待たない。** `newTransaction` は親の Job から切り離して動かし、呼び出し元が打ち切られたらすぐに戻る。処理は JDBC の呼び出しが返ると `ensureActive` で止まり、確定しない。接続と通信の上限は、止まったスレッドを手放すためのもの。
+  - **残る制限**: 打ち切りの後の後始末(冪等の記録の取り消し。`NonCancellable`)は DB を待つので、遅延の間の POST は Gateway の 504 になりうる。切断なら接続の上限(3 秒)で返る。
   - 接続の取得と TCP の接続の上限を 3 秒にする(Hikari の `connectionTimeout`・pgjdbc の `connectTimeout`)。
   - 通信の待ちの上限を「予算 + 1 秒」にする(pgjdbc の `socketTimeout`)。超えた接続は捨てられる。
   - 接続の失敗が `Result` に写されない経路(冪等の記録の取得など)でも 500 にせず、`installProblemDetails` が 503 `service-unavailable` にする(全サービス。SQLSTATE のクラス 08 と `SQLTransientConnectionException`)。
