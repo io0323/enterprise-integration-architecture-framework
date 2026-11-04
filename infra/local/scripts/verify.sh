@@ -1426,11 +1426,19 @@ verify_dashboard() {
 }
 
 # SLO のルールの式が、実際のメトリクスの名前とバケットの境界に合っている(promtool は合成のデータなので、ここで確かめる。ADR-0045 §3)
+slo_ratio_known() { # slo_ratio_known <SLO の名前>(誤りの割合が数値なら成功)
+  local value
+  value="$(prom_value "slo:error_ratio:rate5m{slo=\"$1\"}")"
+  [[ -n "$value" && "$value" != NaN ]]
+}
 verify_slo_rules() { # verify_slo_rules <SLO の名前...>
   local slo
   for slo in "$@"; do
-    check "Prometheus: SLO $slo の誤りの割合を計算できる" retry 12 10 bash -c \
-      "[[ -n \"\$(curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=slo:error_ratio:rate5m{slo=\"$slo\"}' | python3 -c 'import json,sys; r=json.load(sys.stdin)[\"data\"][\"result\"]; print(r[0][\"value\"][1] if r and r[0][\"value\"][1] != \"NaN\" else \"\")')\" ]]"
+    if retry 12 10 slo_ratio_known "$slo"; then
+      pass "Prometheus: SLO $slo の誤りの割合を計算できる"
+    else
+      fail "Prometheus: SLO $slo の誤りの割合を計算できない (値='$(prom_value "slo:error_ratio:rate5m{slo=\"$slo\"}")')"
+    fi
   done
 }
 
