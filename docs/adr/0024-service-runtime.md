@@ -34,6 +34,11 @@ P05 ④b-2 で、最初のサービス(order-service)を起動できる形にす
   - `withTimeoutOrNull(予算)`: 処理全体を打ち切り、503 `deadline-exceeded` を返す(次の「予算切れの応答」)。`withCallDeadline` は締め切りを伝えるだけで、打ち切らないため。
 - **DB 側の打ち切り**: `withTimeout` はコルーチンを打ち切るだけで、待ち状態の JDBC の問い合わせは止まらない。そこで、新しいトランザクションの最初に、`SET LOCAL statement_timeout` に「残り時間 + 余裕(0.5 秒)」を設定する(adapters の `newTransaction`)。
   - 余裕を足すのは、コルーチンの打ち切りを先に起こし、DB の打ち切りがそれを追う順にするため(応答は 503 `deadline-exceeded` になる)。DB の問い合わせは、遅くとも予算 + 余裕で止まる。
+- **ネットワークの遅延・切断には、接続と通信の上限で備える**(P14 ③ で追加)。`statement_timeout` は DB の側で効くので、DB に届かないときは止まらない。JDBC の呼び出しは止まったままで、コルーチンの打ち切りも効かず、Gateway のタイムアウト(504。結果は分からない)まで待っていた(`ResilienceE2E` で見つけた)。
+  - 接続の取得と TCP の接続の上限を 3 秒にする(Hikari の `connectionTimeout`・pgjdbc の `connectTimeout`)。
+  - 通信の待ちの上限を「予算 + 1 秒」にする(pgjdbc の `socketTimeout`)。超えた接続は捨てられる。
+  - **対象は order-service だけ。** 同じ形の接続は inventory・shipping ほかにもあるが、確かめていない。
+  - **副作用**: 同じ接続プールを使う裏の処理(監査のアンカー、消し込みなど)でも、1 回の通信の待ちが「予算 + 1 秒」を超えると失敗し、次の回にやり直す。
   - 呼び出し元のトランザクションに参加する処理は、外側のトランザクションの設定を引き継ぐ。
   - 打ち切られた後の後始末(冪等の処理中の記録の取り消し)には、予算を DB に設定しない。
 - **打ち切られた後に確定しない**: JDBC の呼び出しから戻った時点と、トランザクションを確定する直前に、コルーチンが打ち切られていないかを確かめる(`ensureActive()`)。打ち切られていれば、例外でトランザクションを取り消す。冪等の処理(ADR-0022 §3)は、例外のときに処理中の記録を取り消すので、同じキーで再試行すれば、二重にならずに 1 回だけ処理される。
@@ -127,3 +132,4 @@ P05 ④b-2 で、最初のサービス(order-service)を起動できる形にす
 - 2026-10-01: P05 ⑦a の前に、応答を返し始めた後に予算が切れた要求を、エラー(`error.type=timeout`)ではなく、別のカウンタ `eia.http.server.deadline_overruns` で数えることにした(§3。RED の Errors はクライアントが受け取った結果に合わせる)。
 - 2026-10-07: P06 ③a で、`migrate` が Outbox の表と publication も作るようにし(Debezium のロールは `ORDER_CDC_DB_USER`。既定 `debezium`)、`serve` に `ORDER_SCHEMA_REGISTRY_URL`(必須)を加えた。`/health/ready` は、DB に加えて書き込むイベントのスキーマ ID をすべて解決し終えたときだけ UP にする(§4。ADR-0025 §3)。解決は起動の後に繰り返すので、起動の直後は 503 のことがある。compose では `order-service` が `schema-publish`(契約の登録)の完了を待って起動する。
 - 2026-10-21: P10 ③ の前に、§6 の実装(`ServerTls`・`ClientCertificateAllowList`・コネクタの設定・ルートの分け方)を order の app から platform/security の `tls` パッケージに移した(webhook-receiver も同じ mTLS で受けるため)。環境変数の名前はサービスごとの接頭辞から作る(`{PREFIX}_TLS_CERT_FILE` など。order は `ORDER`)。キーストアの別名は `server` にした(プロセスの中だけで使う名前)。振る舞いは変えていない。テストの CA と証明書(`TestPki`)は platform/test-support に移した。
+- 2026-11-04: §3 に DB の接続と通信の上限を足した(P14 ③)。ネットワークの障害で予算が効かず、Gateway の 504 になっていた。
