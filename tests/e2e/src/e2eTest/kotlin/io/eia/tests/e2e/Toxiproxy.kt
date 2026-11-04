@@ -17,6 +17,9 @@ internal object Toxiproxy {
 
     /** bff-graphql → Gateway(注文の読み取り)。 */
     const val BFF_GATEWAY = "gateway-from-bff"
+
+    /** inventory-service → Kafka。 */
+    const val INVENTORY_KAFKA = "kafka-internal"
     private const val API = "http://localhost:19474"
     private const val TIMEOUT_SECONDS = 10L
     private val SUCCESS = 200..299

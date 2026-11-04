@@ -68,7 +68,8 @@ private fun cancelledReason(orderId: String): String? =
         ?.get("reason")
         ?.toString()
 
-private val infra: Path = Path.of(System.getProperty("eiaf.repo.root", ".")).resolve("infra/local")
+private val repoRoot: Path = Path.of(System.getProperty("eiaf.repo.root", "."))
+private val infra: Path = repoRoot.resolve("infra/local")
 
 /** 障害の注入(参加者のコンテナの停止・起動)。tests/e2e はサービスをブラックボックスとして扱い、compose の操作で止める。 */
 private fun compose(vararg args: String) {
@@ -82,6 +83,9 @@ private fun compose(vararg args: String) {
             infra.resolve("images.env").toString(),
             "--env-file",
             infra.resolve(".env").toString(),
+            // e2e.env がないと、起動し直したサービスの接続先が Toxiproxy から外れる(ADR-0044)
+            "--env-file",
+            repoRoot.resolve("tests/e2e/e2e.env").toString(),
             // 参加者は saga の profile のサービス。依存先(otel-collector など)の core も付けないと、compose が構成を読めない
             "--profile",
             "core",

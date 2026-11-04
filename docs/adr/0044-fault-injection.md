@@ -21,9 +21,11 @@ Toxiproxy は `chaos` profile で動いているが(P04b)、サービスの通�
 |---|---|---|
 | `postgres` | order-service → PostgreSQL | DB の遅延・切断 |
 | `gateway-from-bff` | bff-graphql → Gateway | 下流の遅延・切断と部分応答 |
+| `kafka-internal` | inventory-service → Kafka | Broker の切断・遅延(P14 ③) |
 
 - **マイグレーションと Debezium は直接つなぐ**(接続先を切り替えるのは `serve` のサービスだけ)。障害を注入している間も、ほかの経路の結果を確かめられるようにする。
-- 経路はシナリオに必要な分だけ足す。Kafka の経路(`kafka-internal`)は P14 ③ で通す。
+- 経路はシナリオに必要な分だけ足す。
+- **起動し直すときも `e2e.env` を渡す。** 渡さないと、compose がサービスを作り直して接続先が Toxiproxy から外れ、障害のシナリオが何も確かめずに成功する。
 - **gRPC は通さない。** クライアントはサーバ証明書の名前を接続先の名前で確かめるので、Toxiproxy を挟むには接続先の名前を上書きする設定が要る。本番にない設定を足さないよう、在庫と出荷の障害はコンテナの停止で確かめる(`BffE2E`)。
 
 ### 3. テストの部品
