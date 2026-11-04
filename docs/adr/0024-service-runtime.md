@@ -37,6 +37,8 @@ P05 ④b-2 で、最初のサービス(order-service)を起動できる形にす
 - **ネットワークの遅延・切断には、接続と通信の上限で備える**(P14 ③ で追加)。`statement_timeout` は DB の側で効くので、DB に届かないときは止まらない。JDBC の呼び出しは止まったままで、コルーチンの打ち切りも効かず、Gateway のタイムアウト(504。結果は分からない)まで待っていた(`ResilienceE2E` で見つけた)。
   - 接続の取得と TCP の接続の上限を 3 秒にする(Hikari の `connectionTimeout`・pgjdbc の `connectTimeout`)。
   - 通信の待ちの上限を「予算 + 1 秒」にする(pgjdbc の `socketTimeout`)。超えた接続は捨てられる。
+  - 接続の失敗が `Result` に写されない経路(冪等の記録の取得など)でも 500 にせず、`installProblemDetails` が 503 `service-unavailable` にする(全サービス。SQLSTATE のクラス 08 と `SQLTransientConnectionException`)。
+  - Kafka の処理が同じ例外を投げたら、`EventConsumer` は DLQ に隔離せず、未処理の位置から読み直す(全サービス)。
   - **対象は order-service だけ。** 同じ形の接続は inventory・shipping ほかにもあるが、確かめていない。
   - **副作用**: 同じ接続プールを使う裏の処理(監査のアンカー、消し込みなど)でも、1 回の通信の待ちが「予算 + 1 秒」を超えると失敗し、次の回にやり直す。
   - 呼び出し元のトランザクションに参加する処理は、外側のトランザクションの設定を引き継ぐ。

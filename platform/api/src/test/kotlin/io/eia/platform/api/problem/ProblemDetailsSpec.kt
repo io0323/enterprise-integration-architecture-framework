@@ -46,6 +46,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import org.slf4j.LoggerFactory
 import java.io.File
+import java.sql.SQLException
+import java.sql.SQLTransientConnectionException
 import kotlin.time.Duration.Companion.milliseconds
 
 private val RUNTIME_CONFIG =
@@ -171,6 +173,23 @@ class ProblemDetailsSpec :
         }
 
         context("例外") {
+            test("DB に接続できない例外は 503 service-unavailable + Retry-After。接続以外の SQL の例外は 500 のまま") {
+                testApplication {
+                    app {
+                        get("/down") { throw SQLTransientConnectionException(SECRET) }
+                        get("/broken") { throw SQLException(SECRET, "08006") }
+                        get("/constraint") { throw SQLException(SECRET, "23505") }
+                    }
+                    listOf("/down", "/broken").forEach { path ->
+                        val response = client.get(path)
+                        response.status shouldBe HttpStatusCode.ServiceUnavailable
+                        response.headers[HttpHeaders.RetryAfter] shouldBe "1"
+                        response.bodyAsText() shouldNotContain SECRET
+                    }
+                    client.get("/constraint").status shouldBe HttpStatusCode.InternalServerError
+                }
+            }
+
             test("想定外の例外は 500 internal-error。例外のメッセージとスタックトレースを応答に出さない") {
                 testApplication {
                     app { get("/orders") { throw IllegalStateException(SECRET) } }
