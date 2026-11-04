@@ -73,18 +73,23 @@ internal suspend fun <T> Database.newTransaction(
     block: suspend JdbcTransaction.() -> T,
 ): T {
     val remaining = if (applyDeadline) CallDeadline.current()?.remaining() else null
-    // 親の Job から切り離して動かす。withContext だと、止まった JDBC の呼び出しが返るまで呼び出し元の打ち切りも待たされ、予算の後も応答できない
-    val work =
-        CoroutineScope(currentCoroutineContext().minusKey(Job) + Dispatchers.IO).async {
-            suspendTransaction(this@newTransaction) {
-                remaining?.let { applyStatementTimeout(jdbcConnection(), it) }
-                block().also { currentCoroutineContext().ensureActive() }
-            }
+    return detachedFromCaller {
+        suspendTransaction(this@newTransaction) {
+            remaining?.let { applyStatementTimeout(jdbcConnection(), it) }
+            block().also { currentCoroutineContext().ensureActive() }
         }
+    }
+}
+
+/**
+ * [block] を呼び出し元の Job から切り離して IO で動かす。withContext だと、止まった JDBC の呼び出しが返るまで呼び出し元の打ち切りも待たされ、
+ * 予算の後も応答できない。呼び出し元が打ち切られたら、[block] の完了を待たずに戻る([block] もキャンセルする。JDBC の呼び出しが返ると止まる)。
+ */
+internal suspend fun <T> detachedFromCaller(block: suspend CoroutineScope.() -> T): T {
+    val work = CoroutineScope(currentCoroutineContext().minusKey(Job) + Dispatchers.IO).async(block = block)
     return try {
         work.await()
     } catch (e: CancellationException) {
-        // 呼び出し元の打ち切り。処理は JDBC の呼び出しが返ると ensureActive で止まり、確定しない
         work.cancel()
         throw e
     }
