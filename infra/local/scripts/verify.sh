@@ -1856,8 +1856,15 @@ verify_bff() {
     -H 'Content-Type: application/json' -d "$body" | json 'd["id"]' 2>/dev/null || true)"
   [[ -n "$order_id" ]] || fail "Gateway: 検査の注文を作れない"
   local full="{ order(id: \"$order_id\") { id status lines { sku stock { available } } shipment { status } } }"
-  response="$(storefront_query "$caller" "$full")"
-  if [[ "$(http_status <<<"$response")" == 200 && "$(response_body <<<"$response" | json 'd["data"]["order"]["id"] if not d.get("errors") else d["errors"]' 2>/dev/null)" == "$order_id" ]]; then
+  # 起動の直後は、下流の最初の呼び出しがタイムアウトして部分応答になることがある(ADR-0043 §6)。解消するまで待つ
+  local aggregated=""
+  for _ in $(seq 1 10); do
+    response="$(storefront_query "$caller" "$full")"
+    aggregated="$(response_body <<<"$response" | json 'd["data"]["order"]["id"] if not d.get("errors") else d["errors"]' 2>/dev/null || true)"
+    [[ "$aggregated" == "$order_id" ]] && break
+    sleep 3
+  done
+  if [[ "$(http_status <<<"$response")" == 200 && "$aggregated" == "$order_id" ]]; then
     pass "Gateway → BFF: 注文 + 在庫 + 出荷を 1 回で読める(エラーなし。REST と mTLS の gRPC を通る)"
   else
     fail "Gateway → BFF: 集約の応答が想定外 ($(response_body <<<"$response" | cut -c1-300))"

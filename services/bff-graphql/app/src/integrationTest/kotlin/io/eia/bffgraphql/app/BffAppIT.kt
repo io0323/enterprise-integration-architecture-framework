@@ -256,12 +256,16 @@ class BffAppIT :
         }
 
         test("Gateway の証明書で、注文 + 在庫 + 出荷を 1 回で返す。下流のトークンは下流ごとに必要なスコープだけ") {
-            orderCalls.clear()
-            val response = post(gateway, token())
-
-            response.statusCode() shouldBe 200
-            val body = Json.parseToJsonElement(response.body()).jsonObject
-            body["errors"] shouldBe null
+            // 起動の直後は、下流の最初の呼び出しがタイムアウトして部分応答になることがある(ADR-0043 §6)。解消するまで待つ
+            val body =
+                eventually(30.seconds) {
+                    orderCalls.clear()
+                    val response = post(gateway, token())
+                    response.statusCode() shouldBe 200
+                    val parsed = Json.parseToJsonElement(response.body()).jsonObject
+                    parsed["errors"] shouldBe null
+                    parsed
+                }
             val order =
                 body
                     .getValue("data")
