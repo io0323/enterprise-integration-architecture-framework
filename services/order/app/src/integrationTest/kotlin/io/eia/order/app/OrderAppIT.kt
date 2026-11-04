@@ -4,6 +4,7 @@ package io.eia.order.app
 
 import io.eia.shared.kernel.Result
 import io.kotest.assertions.fail
+import io.kotest.assertions.nondeterministic.eventually
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.longs.shouldBeLessThan
 import io.kotest.matchers.shouldBe
@@ -167,12 +168,13 @@ class OrderAppIT :
                     problem shouldContain "\"correlationId\":\"${timedOut.header("X-Correlation-Id")}\""
                     // 予算(2 秒)+ DB の打ち切りの余裕(0.5 秒)の後に、pg_sleep(30) を待たずに返る
                     started.elapsedNow().inWholeMilliseconds shouldBeLessThan 6_000
-                    // DB の問い合わせも打ち切られている(pg_sleep が残っていない)
-                    environment.count(
-                        db,
-                        "SELECT count(*) FROM pg_stat_activity WHERE query LIKE 'INSERT INTO orders%' AND state = 'active'",
-                    ) shouldBe
-                        0
+                    // 応答は予算で先に返り、DB の問い合わせは「残り時間 + 余裕」で後から止まる(pg_sleep の 30 秒を待たない。ADR-0024 §3)
+                    eventually(5.seconds) {
+                        environment.count(
+                            db,
+                            "SELECT count(*) FROM pg_stat_activity WHERE query LIKE 'INSERT INTO orders%' AND state = 'active'",
+                        ) shouldBe 0
+                    }
                     // 確定していない: 注文も冪等の記録(処理中は取り消した)も残らない
                     delay(500)
                     environment.count(db, "SELECT count(*) FROM orders") shouldBe 0

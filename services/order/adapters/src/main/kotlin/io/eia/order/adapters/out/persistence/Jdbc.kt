@@ -4,7 +4,11 @@ import io.eia.shared.kernel.DomainError
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.err
 import io.eia.shared.resilience.CallDeadline
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -61,6 +65,7 @@ internal val STATEMENT_TIMEOUT_MARGIN = 500.milliseconds
  *   `withTimeout` はコルーチンを打ち切るだけで、待ち状態の JDBC の問い合わせは止まらないため。
  * - **打ち切られた後に確定しない**: [block] の後、確定の前に `ensureActive()` で確かめる。打ち切られていれば例外でトランザクションを
  *   取り消す。
+ * - **打ち切りを待たせない**: 呼び出し元が打ち切られたら、JDBC の呼び出しの完了を待たずに戻る(DB に届かないときも予算で応答するため。ADR-0024 §3)。
  * - [applyDeadline] が false なら、締め切りを DB に設定しない(打ち切られた後の後始末。例: 冪等の処理中の記録の取り消し)。
  */
 internal suspend fun <T> Database.newTransaction(
@@ -68,11 +73,20 @@ internal suspend fun <T> Database.newTransaction(
     block: suspend JdbcTransaction.() -> T,
 ): T {
     val remaining = if (applyDeadline) CallDeadline.current()?.remaining() else null
-    return withContext(Dispatchers.IO) {
-        suspendTransaction(this@newTransaction) {
-            remaining?.let { applyStatementTimeout(jdbcConnection(), it) }
-            block().also { currentCoroutineContext().ensureActive() }
+    // 親の Job から切り離して動かす。withContext だと、止まった JDBC の呼び出しが返るまで呼び出し元の打ち切りも待たされ、予算の後も応答できない
+    val work =
+        CoroutineScope(currentCoroutineContext().minusKey(Job) + Dispatchers.IO).async {
+            suspendTransaction(this@newTransaction) {
+                remaining?.let { applyStatementTimeout(jdbcConnection(), it) }
+                block().also { currentCoroutineContext().ensureActive() }
+            }
         }
+    return try {
+        work.await()
+    } catch (e: CancellationException) {
+        // 呼び出し元の打ち切り。処理は JDBC の呼び出しが返ると ensureActive で止まり、確定しない
+        work.cancel()
+        throw e
     }
 }
 
