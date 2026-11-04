@@ -1,0 +1,161 @@
+# SLO のバーンレートのアラート(P14 ④。ADR-0045)。対応は docs/runbooks/slo.md。単体テストは slo.test.yml(make alerts-test。CI で動く)。
+#
+# - 目標はカタログ(contracts/catalog)の値。誤差の予算は 30 日あたり
+# - バーンレートは「予算を使う速さ」。14.4 倍で 1 時間続くと 30 日の予算の 2%、6 倍で 6 時間続くと 5% を使う(Google SRE Workbook の多重窓)
+# - 長い窓で「続いていること」を、短い窓で「今も起きていること」を確かめる。回復すると短い窓から先に消える
+# - 流量がないと割合は計算できず(NaN)、発火しない。止まっていることは、サービスごとのヘルスとアラートで見る
+groups:
+  - name: slo-budgets
+    rules:
+      # INT-SALES-001 の可用性 99.95%
+      - record: slo:error_budget
+        expr: vector(0.0005)
+        labels:
+          slo: order-api-availability
+      # INT-SALES-001 の p99 500ms(1% までが 500ms を超えてよい)
+      - record: slo:error_budget
+        expr: vector(0.01)
+        labels:
+          slo: order-api-latency
+      # INT-STOREFRONT-001 の可用性 99.9%
+      - record: slo:error_budget
+        expr: vector(0.001)
+        labels:
+          slo: storefront-availability
+      # INT-STOREFRONT-001 の p99 1s(1% までが 1s を超えてよい)
+      - record: slo:error_budget
+        expr: vector(0.01)
+        labels:
+          slo: storefront-latency
+      # INT-SALES-002 の可用性 99.99%(接続していて、最後のイベントの遅れが 5 秒以内である時間の割合)
+      - record: slo:error_budget
+        expr: vector(0.0001)
+        labels:
+          slo: order-events-publish
+
+  - name: slo-error-ratios
+    rules:
+      - record: slo:error_ratio:rate5m
+        expr: sum(rate(apisix_http_status{route="sales-order-api",code=~"5.."}[5m])) / sum(rate(apisix_http_status{route="sales-order-api"}[5m]))
+        labels:
+          slo: order-api-availability
+      - record: slo:error_ratio:rate30m
+        expr: sum(rate(apisix_http_status{route="sales-order-api",code=~"5.."}[30m])) / sum(rate(apisix_http_status{route="sales-order-api"}[30m]))
+        labels:
+          slo: order-api-availability
+      - record: slo:error_ratio:rate1h
+        expr: sum(rate(apisix_http_status{route="sales-order-api",code=~"5.."}[1h])) / sum(rate(apisix_http_status{route="sales-order-api"}[1h]))
+        labels:
+          slo: order-api-availability
+      - record: slo:error_ratio:rate6h
+        expr: sum(rate(apisix_http_status{route="sales-order-api",code=~"5.."}[6h])) / sum(rate(apisix_http_status{route="sales-order-api"}[6h]))
+        labels:
+          slo: order-api-availability
+      - record: slo:error_ratio:rate5m
+        expr: 1 - sum(rate(apisix_http_latency_bucket{route="sales-order-api",type="request",le="500"}[5m])) / sum(rate(apisix_http_latency_count{route="sales-order-api",type="request"}[5m]))
+        labels:
+          slo: order-api-latency
+      - record: slo:error_ratio:rate30m
+        expr: 1 - sum(rate(apisix_http_latency_bucket{route="sales-order-api",type="request",le="500"}[30m])) / sum(rate(apisix_http_latency_count{route="sales-order-api",type="request"}[30m]))
+        labels:
+          slo: order-api-latency
+      - record: slo:error_ratio:rate1h
+        expr: 1 - sum(rate(apisix_http_latency_bucket{route="sales-order-api",type="request",le="500"}[1h])) / sum(rate(apisix_http_latency_count{route="sales-order-api",type="request"}[1h]))
+        labels:
+          slo: order-api-latency
+      - record: slo:error_ratio:rate6h
+        expr: 1 - sum(rate(apisix_http_latency_bucket{route="sales-order-api",type="request",le="500"}[6h])) / sum(rate(apisix_http_latency_count{route="sales-order-api",type="request"}[6h]))
+        labels:
+          slo: order-api-latency
+      - record: slo:error_ratio:rate5m
+        expr: sum(rate(apisix_http_status{route="storefront-graphql",code=~"5.."}[5m])) / sum(rate(apisix_http_status{route="storefront-graphql"}[5m]))
+        labels:
+          slo: storefront-availability
+      - record: slo:error_ratio:rate30m
+        expr: sum(rate(apisix_http_status{route="storefront-graphql",code=~"5.."}[30m])) / sum(rate(apisix_http_status{route="storefront-graphql"}[30m]))
+        labels:
+          slo: storefront-availability
+      - record: slo:error_ratio:rate1h
+        expr: sum(rate(apisix_http_status{route="storefront-graphql",code=~"5.."}[1h])) / sum(rate(apisix_http_status{route="storefront-graphql"}[1h]))
+        labels:
+          slo: storefront-availability
+      - record: slo:error_ratio:rate6h
+        expr: sum(rate(apisix_http_status{route="storefront-graphql",code=~"5.."}[6h])) / sum(rate(apisix_http_status{route="storefront-graphql"}[6h]))
+        labels:
+          slo: storefront-availability
+      - record: slo:error_ratio:rate5m
+        expr: 1 - sum(rate(apisix_http_latency_bucket{route="storefront-graphql",type="request",le="1000"}[5m])) / sum(rate(apisix_http_latency_count{route="storefront-graphql",type="request"}[5m]))
+        labels:
+          slo: storefront-latency
+      - record: slo:error_ratio:rate30m
+        expr: 1 - sum(rate(apisix_http_latency_bucket{route="storefront-graphql",type="request",le="1000"}[30m])) / sum(rate(apisix_http_latency_count{route="storefront-graphql",type="request"}[30m]))
+        labels:
+          slo: storefront-latency
+      - record: slo:error_ratio:rate1h
+        expr: 1 - sum(rate(apisix_http_latency_bucket{route="storefront-graphql",type="request",le="1000"}[1h])) / sum(rate(apisix_http_latency_count{route="storefront-graphql",type="request"}[1h]))
+        labels:
+          slo: storefront-latency
+      - record: slo:error_ratio:rate6h
+        expr: 1 - sum(rate(apisix_http_latency_bucket{route="storefront-graphql",type="request",le="1000"}[6h])) / sum(rate(apisix_http_latency_count{route="storefront-graphql",type="request"}[6h]))
+        labels:
+          slo: storefront-latency
+      - record: slo:error_ratio:rate5m
+        expr: 1 - avg(avg_over_time((debezium_postgres_streaming_connected{server="order-outbox"} * on(server) (debezium_postgres_streaming_millisecondsbehindsource{server="order-outbox"} <= bool 5000))[5m:30s]))
+        labels:
+          slo: order-events-publish
+      - record: slo:error_ratio:rate30m
+        expr: 1 - avg(avg_over_time((debezium_postgres_streaming_connected{server="order-outbox"} * on(server) (debezium_postgres_streaming_millisecondsbehindsource{server="order-outbox"} <= bool 5000))[30m:30s]))
+        labels:
+          slo: order-events-publish
+      - record: slo:error_ratio:rate1h
+        expr: 1 - avg(avg_over_time((debezium_postgres_streaming_connected{server="order-outbox"} * on(server) (debezium_postgres_streaming_millisecondsbehindsource{server="order-outbox"} <= bool 5000))[1h:30s]))
+        labels:
+          slo: order-events-publish
+      - record: slo:error_ratio:rate6h
+        expr: 1 - avg(avg_over_time((debezium_postgres_streaming_connected{server="order-outbox"} * on(server) (debezium_postgres_streaming_millisecondsbehindsource{server="order-outbox"} <= bool 5000))[6h:30s]))
+        labels:
+          slo: order-events-publish
+
+  - name: slo-burn-rate
+    rules:
+      # 速い消費: 14.4 倍が 1 時間続いている(このままだと 2 日で予算を使い切る)
+      - alert: SloBurnRateFast
+        expr: |
+          (slo:error_ratio:rate1h > on(slo) group_left() (14.4 * slo:error_budget))
+          and on(slo)
+          (slo:error_ratio:rate5m > on(slo) group_left() (14.4 * slo:error_budget))
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SLO {{ $labels.slo }} の誤差の予算を 14.4 倍の速さで使っている(誤りの割合 {{ $value | humanizePercentage }})"
+          runbook: docs/runbooks/slo.md#予算を速く使っているとき
+
+      # 遅い消費: 6 倍が 6 時間続いている(このままだと 5 日で予算を使い切る)
+      - alert: SloBurnRateSlow
+        expr: |
+          (slo:error_ratio:rate6h > on(slo) group_left() (6 * slo:error_budget))
+          and on(slo)
+          (slo:error_ratio:rate30m > on(slo) group_left() (6 * slo:error_budget))
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SLO {{ $labels.slo }} の誤差の予算を 6 倍の速さで使っている(誤りの割合 {{ $value | humanizePercentage }})"
+          runbook: docs/runbooks/slo.md#予算をゆっくり使っているとき
+
+  - name: resilience-budget
+    rules:
+      # 依存先の呼び出しが、呼び出し元の締め切り(リクエストの予算)で打ち切られている。予算の配分が短すぎるか、依存先が遅い。
+      # Circuit Breaker には数えないので(ADR-0021 §12)、ほかのアラートでは気づけない。1% は測定の根拠がない初期値(ADR-0045 §4)
+      - alert: CallerDeadlineHigh
+        expr: |
+          sum by (job, eia_dependency_name) (rate(eia_resilience_timeouts_total{kind="caller_deadline"}[10m]))
+          / sum by (job, eia_dependency_name) (rate(eia_resilience_attempts_total[10m]))
+          > 0.01
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }} の {{ $labels.eia_dependency_name }} の呼び出しの {{ $value | humanizePercentage }} が、呼び出し元の締め切りで打ち切られている"
+          runbook: docs/runbooks/slo.md#呼び出し元の締め切りで打ち切られているとき

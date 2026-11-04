@@ -105,6 +105,7 @@ public class Resilience(
     ): Result<T, DomainError> {
         var attempt = 1
         while (true) {
+            listener.onAttempt(name)
             val result = attemptOnce(deadline, block)
             val error = (result as? Result.Err)?.error ?: return result
             if (policy == null || error is ResilienceRejection || error is DeadlineExceeded) return result

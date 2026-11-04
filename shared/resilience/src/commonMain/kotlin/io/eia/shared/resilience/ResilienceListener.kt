@@ -10,6 +10,9 @@ import kotlin.time.Duration
  * Circuit Breaker の状態の遷移は、内部のロックを外してから知らせる。
  */
 public interface ResilienceListener {
+    /** 1 回の試行を始める(Circuit Breaker と Bulkhead で断られた試行も含む)。打ち切られた試行の割合の分母に使う。 */
+    public fun onAttempt(name: String) {}
+
     /** [attempt] 回目(1 始まり)の試行が [error] で失敗し、[delay] 待ってリトライする。 */
     public fun onRetry(
         name: String,

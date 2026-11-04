@@ -1408,6 +1408,8 @@ verify_dashboard() {
     fail "Grafana: パネルの式が想定外: $result"
   fi
 
+  verify_slo_rules order-api-availability order-api-latency order-events-publish
+
   # CDC のダッシュボード(P06 ④)。アラートのパネルは平常時は空でよい
   dash="$(curl -fsS -u "admin:$GRAFANA_ADMIN_PASSWORD" http://localhost:19300/api/dashboards/uid/eiaf-cdc || true)"
   if [[ "$(json 'd["meta"]["folderTitle"] + "/" + d["dashboard"]["title"]' <<<"$dash" 2>/dev/null)" == "EIAF/CDC — Outbox" ]]; then
@@ -1421,6 +1423,15 @@ verify_dashboard() {
   else
     fail "Grafana: ダッシュボード eiaf-cdc を読み込めない"
   fi
+}
+
+# SLO のルールの式が、実際のメトリクスの名前とバケットの境界に合っている(promtool は合成のデータなので、ここで確かめる。ADR-0045 §3)
+verify_slo_rules() { # verify_slo_rules <SLO の名前...>
+  local slo
+  for slo in "$@"; do
+    check "Prometheus: SLO $slo の誤りの割合を計算できる" retry 12 10 bash -c \
+      "[[ -n \"\$(curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=slo:error_ratio:rate5m{slo=\"$slo\"}' | python3 -c 'import json,sys; r=json.load(sys.stdin)[\"data\"][\"result\"]; print(r[0][\"value\"][1] if r and r[0][\"value\"][1] != \"NaN\" else \"\")')\" ]]"
+  done
 }
 
 # ダッシュボード(Grafana の API の JSON)の全パネルの式を Prometheus で評価し、エラーがなくデータを返せば ok を出力する。
@@ -1910,6 +1921,8 @@ verify_bff() {
   else
     fail "Prometheus: BFF のアラートのルールがない"
   fi
+
+  verify_slo_rules storefront-availability storefront-latency
 
   # 複雑度の枠(ADR-0043 §9)。ほかの検査の枠を使わないよう最後に行う。1 回 140 で、大きさ 1000 を超えるまで続ける
   local heavy="{ orders(ids: [$(python3 -c 'print(",".join(chr(34) + "ord-none-" + str(i) + chr(34) for i in range(20)))')]) { orders { shipment { status } lines { stock { available } } } } }"
