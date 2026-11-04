@@ -81,6 +81,49 @@ tests:
       - eval_time: 40m
         alertname: SloBurnRateFast
         exp_alerts: []
+  - name: 5xx が 1 件もないとき、誤りの割合は「データなし」ではなく 0(本物の平常時の形)
+    interval: 1m
+    input_series:
+      - series: 'apisix_http_status{route="sales-order-api",code="200"}'
+        values: "0+1000x60"
+      - series: 'apisix_http_latency_bucket{route="sales-order-api",type="request",le="500.0"}'
+        values: "0+1000x60"
+      - series: 'apisix_http_latency_count{route="sales-order-api",type="request"}'
+        values: "0+1000x60"
+    promql_expr_test:
+      - expr: slo:error_ratio:rate5m{slo="order-api-availability"}
+        eval_time: 10m
+        exp_samples:
+          - labels: 'slo:error_ratio:rate5m{slo="order-api-availability"}'
+            value: 0
+      - expr: slo:error_ratio:rate5m{slo="order-api-latency"}
+        eval_time: 10m
+        exp_samples:
+          - labels: 'slo:error_ratio:rate5m{slo="order-api-latency"}'
+            value: 0
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: SloBurnRateFast
+        exp_alerts: []
+
+  - name: order のイベントの発行。累積の統計(MaxValue・P99)が大きくても、現在の遅れで判定する(本物の形)
+    interval: 1m
+    input_series:
+      - series: 'debezium_postgres_streaming_connected{job="kafka-connect",server="order-outbox"}'
+        values: "1x60"
+      - series: 'debezium_postgres_streaming_millisecondsbehindsource{job="kafka-connect",server="order-outbox",_objectname="debezium.postgres<type=connector-metrics, context=streaming, server=order-outbox><>MilliSecondsBehindSource"}'
+        values: "1000x60"
+      - series: 'debezium_postgres_streaming_millisecondsbehindsource{job="kafka-connect",server="order-outbox",_objectname="debezium.postgres<type=connector-metrics, context=streaming, server=order-outbox><>MilliSecondsBehindSourceMaxValue"}'
+        values: "86180x60"
+      - series: 'debezium_postgres_streaming_millisecondsbehindsource{job="kafka-connect",server="order-outbox",_objectname="debezium.postgres<type=connector-metrics, context=streaming, server=order-outbox><>MilliSecondsBehindSourceP99"}'
+        values: "77591x60"
+    promql_expr_test:
+      - expr: slo:error_ratio:rate5m{slo="order-events-publish"}
+        eval_time: 10m
+        exp_samples:
+          - labels: 'slo:error_ratio:rate5m{slo="order-events-publish"}'
+            value: 0
+
   - name: 流量がないと割合は計算できず、発火しない
     interval: 1m
     input_series:
@@ -95,7 +138,7 @@ tests:
   - name: order-api の遅延。500ms を超える割合が 20%(予算 1% の 20 倍)なら critical
     interval: 1m
     input_series:
-      - series: 'apisix_http_latency_bucket{route="sales-order-api",type="request",le="500"}'
+      - series: 'apisix_http_latency_bucket{route="sales-order-api",type="request",le="500.0"}'
         values: "0+800x100"
       - series: 'apisix_http_latency_count{route="sales-order-api",type="request"}'
         values: "0+1000x100"
@@ -114,7 +157,7 @@ tests:
         values: "0+1000x400"
       - series: 'apisix_http_status{route="storefront-graphql",code="503"}'
         values: "0+20x400"
-      - series: 'apisix_http_latency_bucket{route="storefront-graphql",type="request",le="1000"}'
+      - series: 'apisix_http_latency_bucket{route="storefront-graphql",type="request",le="1000.0"}'
         values: "0+800x100"
       - series: 'apisix_http_latency_count{route="storefront-graphql",type="request"}'
         values: "0+1000x100"
@@ -135,7 +178,7 @@ tests:
     input_series:
       - series: 'debezium_postgres_streaming_connected{server="order-outbox"}'
         values: "1x60"
-      - series: 'debezium_postgres_streaming_millisecondsbehindsource{server="order-outbox"}'
+      - series: 'debezium_postgres_streaming_millisecondsbehindsource{server="order-outbox",_objectname="x><>MilliSecondsBehindSource"}'
         values: "6000x60"
     alert_rule_test:
       - eval_time: 10m
@@ -151,7 +194,7 @@ tests:
     input_series:
       - series: 'debezium_postgres_streaming_connected{server="order-outbox"}'
         values: "0x60"
-      - series: 'debezium_postgres_streaming_millisecondsbehindsource{server="order-outbox"}'
+      - series: 'debezium_postgres_streaming_millisecondsbehindsource{server="order-outbox",_objectname="x><>MilliSecondsBehindSource"}'
         values: "100x60"
     alert_rule_test:
       - eval_time: 10m
@@ -167,7 +210,7 @@ tests:
     input_series:
       - series: 'debezium_postgres_streaming_connected{server="order-outbox"}'
         values: "1x60"
-      - series: 'debezium_postgres_streaming_millisecondsbehindsource{server="order-outbox"}'
+      - series: 'debezium_postgres_streaming_millisecondsbehindsource{server="order-outbox",_objectname="x><>MilliSecondsBehindSource"}'
         values: "1000x60"
     alert_rule_test:
       - eval_time: 30m
