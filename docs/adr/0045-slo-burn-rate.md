@@ -49,6 +49,18 @@ ROADMAP P14 は SLO のバーンレートのアラートを求めている。カ
 ### 5. カタログと Framework の差
 INT-SALES-001 のカタログは 99.95% / p99 500ms、Framework 18 章の Tier 1 は 99.99% / p99 300ms。**ここではカタログの値を使い、書き換えない。** 計測のあとで、どちらを直すかを決める(P14 ⑩)。
 
+### 6. ダッシュボード(P14 ⑤)
+全体の一覧 **EIAF — SLO & Resilience** を足す。既存のダッシュボードは複製せず、詳細はそちらで見る。
+
+| ROADMAP の項目 | ダッシュボード |
+|---|---|
+| RED | Order API — RED、Storefront — BFF |
+| Consumer Lag | 一覧、Order — Saga、CDC — Legacy、SaaS |
+| DLQ | 一覧、Order — Saga、CDC — Legacy |
+| Batch SLA | 一覧、Batch |
+| replication slot の遅延 | 一覧、CDC — Outbox |
+| SLO のバーンレート | 一覧 |
+
 ## Alternatives Considered
 - **カタログの全連携に設定する**: ローカルで確かめられないアラートが増える。不採用。
 - **サービスのメトリクスで測る**: Gateway 自身の 502 / 504 が入らず、クライアントの結果より良く見える。不採用。

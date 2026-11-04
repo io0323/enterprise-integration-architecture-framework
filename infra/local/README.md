@@ -141,9 +141,10 @@ curl -s -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token
   - コンテナは鍵(`certs/apisix.key`)を読むため、ホストの利用者の uid とグループ 0 で動く。証明書は起動時に読み込むので、作り直したら `make up` で入れ替える(`docs/runbooks/dev-certificates.md`)。
 - **Observability**: アプリは OTLP を `otel-collector` に送る。traces → Tempo、metrics → Prometheus、logs → Loki。Grafana のデータソースは provisioning 済み(trace ↔ log ↔ metric のリンクつき)。
   - アプリ(`platform/observability`。ADR-0018)の環境変数: `OTEL_SERVICE_NAME`、`OTEL_EXPORTER_OTLP_ENDPOINT`(OTLP/HTTP。ホストのアプリは `http://localhost:19318`、コンテナのアプリは `http://otel-collector:4318`。未設定なら OTLP に送らず標準出力だけ)、`OTEL_TRACES_SAMPLER_ARG`(起点のサンプリング率。既定 1.0)、`EIA_ENVIRONMENT`(既定 `local`)。
+  - **全体の一覧**: Grafana の **EIAF — SLO & Resilience**(SLO の消費、Circuit Breaker、タイムアウト、Consumer の lag、DLQ、Batch の SLA、スロットの遅延。ADR-0045 §6)。
   - **ダッシュボード**: `grafana/provisioning/dashboards/eiaf/*.json` を provisioning で読み込む(フォルダ EIAF。画面では編集できないので、JSON を直してコミットする)。
     - `Order API — RED`(uid `eiaf-order-red`。http://localhost:19300/d/eiaf-order-red): Gateway(状態コード別の件数・ゲートウェイ自身の 401 / 429 / 502 / 504・処理時間)と order-service(ルート別の件数・エラーの割合と error.type 別・p50 / p95 / p99)。処理時間のパネルの赤い線はカタログの SLO(p99 500ms)。
-    - 依存先の呼び出し: `eia.resilience.timeouts{kind=caller_deadline}`(呼び出し元の締め切りで打ち切った件数)。急増したらアラートの候補(しきい値は P14 で SLO と合わせて決める)。order-service は P05 では依存先を呼ばないので、P06・P07 までは空。
+    - 依存先の呼び出し: `eia.resilience.timeouts{kind=caller_deadline}`(呼び出し元の締め切りで打ち切った件数)。試行の 1% を超えて 10 分続くと `CallerDeadlineHigh`(ADR-0045 §4)。
     - `make verify PROFILE=order` は、ダッシュボードが読み込まれていることと、全パネルの式が Prometheus でデータを返すことを確かめる(caller_deadline は合成の値 `service_name=eiaf-verify` で確かめる)。
   - 標準出力のログの形式は `EIA_LOG_FORMAT` で切り替える。既定は `json`(Loki と同じ項目)。手元で読むときは `EIA_LOG_FORMAT=console ./gradlew :services:order:app:run` のように `console` にする。
 - **監査(ADR-0017)**: `seaweedfs-init`(file / b2b / order profile)が、`make up` のたびにバケット `eiaf-audit`(Object Lock)を作り、`seaweedfs/audit-bucket-policy.json` を設定し、完了のファイルを作って待機する(ヘルスチェックが完了を示すので、`make up` は初期化の完了まで待つ)。改竄の検査は `make audit-verify SERVICE=<name>`(終了コード 0 / 1 / 2。`docs/runbooks/audit-verify.md`)。

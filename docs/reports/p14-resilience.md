@@ -20,6 +20,15 @@ ROADMAP P14 の障害注入の記録。経路は ADR-0044、実行は `make e2e`
 | R6 | Broker への遅延 | inventory-service → Kafka に 1 秒の遅延 | 遅くなるだけで、欠けずに SHIPPED | 注文の状態 | 成功 |
 | R7 | Broker の停止 | Kafka のコンテナを停止 | 注文は受け付ける(Outbox)。再開すると欠けずに SHIPPED | HTTP の状態コード・注文の状態 | 成功 |
 
+## ダッシュボードでの見え方
+| シナリオ | Grafana |
+|---|---|
+| R1・R2(DB) | EIAF — SLO & Resilience の「誤りの割合」、Order API — RED の Errors |
+| R3・R4(下流) | EIAF — SLO & Resilience の「Circuit Breaker が開いている依存先」「タイムアウト」、Storefront — BFF の「部分応答」 |
+| R5・R6・R7(Kafka) | EIAF — SLO & Resilience の「Consumer の lag」、Order — Saga |
+
+**E2E は、ダッシュボードの表示そのものは確かめていない。** パネルの式が本物のメトリクスでデータを返すことを `make verify` で確かめ、Circuit Breaker のメトリクスの値は `ResilienceE2E` で確かめる。
+
 ## コンテナの停止で確かめるシナリオ(移さず参照する)
 遅延と片方の経路の切断が要らないものは、これまでの E2E のまま。
 
