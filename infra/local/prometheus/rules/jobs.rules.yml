@@ -1,0 +1,14 @@
+# 常駐のプロセスの繰り返しの仕事のアラート(platform/observability の RepeatingJobs。#191)。対応は docs/runbooks/repeating-jobs.md。単体テストは jobs.test.yml(make alerts-test)。
+#
+# - 仕事の中の失敗は Result で扱うので、ここに数えるのは想定していない例外(プログラムの誤りの疑い)だけ。1 件目で知らせる
+# - 間隔の長い仕事(1 時間ごとの消し込みなど)でも発火が続くよう、窓を 1 時間にする
+groups:
+  - name: repeating-jobs
+    rules:
+      - alert: RepeatingJobFailing
+        expr: sum by (job, eia_job_name) (increase(eia_job_unexpected_failures_total[1h])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }} の繰り返しの仕事 {{ $labels.eia_job_name }} が想定していない例外で失敗している"
+          runbook: docs/runbooks/repeating-jobs.md#仕事が想定していない例外で失敗しているとき

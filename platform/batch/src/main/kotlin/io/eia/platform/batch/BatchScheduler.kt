@@ -5,9 +5,11 @@ import io.eia.platform.filetransfer.FileTransferError
 import io.eia.platform.filetransfer.StoreRejected
 import io.eia.platform.filetransfer.StoreUnavailable
 import io.eia.platform.filetransfer.manifest.FileManifest
+import io.eia.platform.observability.jobs.RepeatingJobs
 import io.eia.shared.kernel.DomainError
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.ok
+import io.opentelemetry.api.OpenTelemetry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -46,6 +48,7 @@ public data class DueRun(
  * 決まるので、回しても失わない)。1 つの実行は、実行のロックの接続(実行の間ずっと持つ。ADR-0030 §2)と、ステップの中の読み書きの接続の
  * 2 本を使う。接続のプールは、`maxConcurrentRuns × 2` にほかの用途(見回り・ヘルスチェックなど)を足した大きさにする(#133)。
  */
+@Suppress("LongParameterList") // 省略できる設定が多い。呼び出し側は名前つきで渡す
 public class BatchScheduler(
     private val runner: BatchRunner,
     private val store: BatchStore,
@@ -53,6 +56,7 @@ public class BatchScheduler(
     private val clock: Clock = Clock.System,
     private val monitor: SlaMonitor? = null,
     private val settings: Settings = Settings(),
+    private val repeating: RepeatingJobs = RepeatingJobs(OpenTelemetry.noop().getMeter("batch-scheduler")),
 ) {
     /**
      * @property pollInterval 起動の条件を確かめる間隔
@@ -85,14 +89,15 @@ public class BatchScheduler(
     /** キャンセルされるまで、起動の条件を確かめて実行を動かす。実行中の実行もキャンセルされる(RUNNING のまま残り、次の起動で再開する)。 */
     public suspend fun run(): Unit =
         coroutineScope {
-            while (isActive) {
+            repeating.repeat("batch-scheduler", settings.pollInterval) {
                 // 上限に達したら、残りは次の回に回す(due は実行中のものを除くので、次の回に同じ実行が並ぶ)
                 for (due in due()) {
                     if (inFlight.size >= settings.maxConcurrentRuns) break
                     if (inFlight.add(due.key)) {
                         launch {
                             try {
-                                execute(due)
+                                // 1 つの実行の想定していない例外で、ほかの実行とスケジューラを止めない
+                                repeating.attempt("batch-run") { execute(due) }
                             } finally {
                                 inFlight.remove(due.key)
                             }
@@ -100,7 +105,6 @@ public class BatchScheduler(
                     }
                 }
                 monitor?.let { withContext(Dispatchers.IO) { it.evaluate() } }
-                delay(settings.pollInterval)
             }
         }
 

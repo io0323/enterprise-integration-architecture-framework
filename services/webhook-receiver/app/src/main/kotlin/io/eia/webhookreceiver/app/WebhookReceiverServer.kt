@@ -9,6 +9,7 @@ import io.eia.platform.api.problem.respondProblem
 import io.eia.platform.observability.Observability
 import io.eia.platform.observability.ObservabilityConfig
 import io.eia.platform.observability.ObservabilityRuntime
+import io.eia.platform.observability.jobs.RepeatingJobs
 import io.eia.platform.observability.ktor.server.ServerObservability
 import io.eia.platform.schemaregistry.SchemaIdBook
 import io.eia.platform.security.secret.EnvSecretProvider
@@ -171,17 +172,17 @@ internal class WebhookReceiverServer private constructor(
             }
             // 書き込むイベントのスキーマ ID を解決する。解決するまで /health/ready は 503(ADR-0025 §3)
             launch { schemaIds.resolveUntilReady() }
-            launchPurgeJob(koin.get(), config)
+            launchPurgeJob(koin, koin.get(), config)
         }
 
         /** 保持期間を過ぎた受け取りの記録を、[WebhookReceiverConfig.purgeInterval] ごとに消す。サーバの停止で止まる。 */
         private fun Application.launchPurgeJob(
+            koin: Koin,
             purge: PurgeReceiptsUseCase,
             config: WebhookReceiverConfig,
         ) {
             launch {
-                while (isActive) {
-                    delay(config.purgeInterval)
+                RepeatingJobs(koin.get<ObservabilityRuntime>().meter).repeat("purge-receipts", config.purgeInterval, delayFirst = true) {
                     when (val purged = purge()) {
                         is Result.Ok -> if (purged.value > 0) logger.info("保持期間を過ぎた受け取りの記録を {} 件消しました", purged.value)
                         is Result.Err -> logger.warn("受け取りの記録を消せません({})。次の間隔でやり直します", purged.error.code)

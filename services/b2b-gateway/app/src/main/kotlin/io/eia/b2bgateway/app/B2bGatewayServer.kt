@@ -13,6 +13,7 @@ import io.eia.platform.filetransfer.store.S3ObjectStore
 import io.eia.platform.observability.Observability
 import io.eia.platform.observability.ObservabilityConfig
 import io.eia.platform.observability.ObservabilityRuntime
+import io.eia.platform.observability.jobs.RepeatingJobs
 import io.eia.platform.security.secret.EnvSecretProvider
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.ValidationError
@@ -137,16 +138,17 @@ internal class B2bGatewayServer private constructor(
                 val running = AtomicBoolean(false)
                 val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
                 val intervals = config.intervals
+                val jobs = RepeatingJobs(runtime.meter)
                 scope.launch {
                     running.set(true)
-                    B2bGatewayJobs.repeatEvery("poll", intervals.poll) { B2bGatewayJobs.pollOnce(koin) }
+                    jobs.repeat("poll", intervals.poll) { B2bGatewayJobs.pollOnce(koin) }
                 }
-                scope.launch { B2bGatewayJobs.repeatEvery("send", intervals.send) { B2bGatewayJobs.sendOnce(koin) } }
-                scope.launch { B2bGatewayJobs.repeatEvery("submit", intervals.submit) { B2bGatewayJobs.submitOnce(koin) } }
-                scope.launch { B2bGatewayJobs.repeatEvery("metrics", intervals.metrics) { B2bGatewayJobs.refreshSnapshot(koin) } }
+                scope.launch { jobs.repeat("send", intervals.send) { B2bGatewayJobs.sendOnce(koin) } }
+                scope.launch { jobs.repeat("submit", intervals.submit) { B2bGatewayJobs.submitOnce(koin) } }
+                scope.launch { jobs.repeat("metrics", intervals.metrics) { B2bGatewayJobs.refreshSnapshot(koin) } }
                 if (koin.getOrNull<DeliverFilesUseCase>() != null) {
                     scope.launch {
-                        B2bGatewayJobs.repeatEvery("deliver-files", config.handoff.interval) { B2bGatewayJobs.deliverFilesOnce(koin) }
+                        jobs.repeat("deliver-files", config.handoff.interval) { B2bGatewayJobs.deliverFilesOnce(koin) }
                     }
                 } else {
                     logger.info("取引先に送るファイルの受け渡しの場所が設定されていないので、ファイルを送りません({})", B2bGatewayConfig.FILE_S3_ENDPOINT)
@@ -154,7 +156,7 @@ internal class B2bGatewayServer private constructor(
                 val anchorCycle = koin.getOrNull<AnchorCycle>()
                 if (anchorCycle != null) {
                     scope.launch {
-                        B2bGatewayJobs.repeatEvery("anchor", config.anchor.interval) { B2bGatewayJobs.anchorOnce(anchorCycle, dataSource) }
+                        jobs.repeat("anchor", config.anchor.interval) { B2bGatewayJobs.anchorOnce(anchorCycle, dataSource) }
                     }
                 } else {
                     logger.warn("監査のアンカーの保存は無効です({}=false)。末尾の記録の改竄と削除は検出できません", B2bGatewayConfig.ANCHOR_ENABLED)

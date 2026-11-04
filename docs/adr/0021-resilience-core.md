@@ -239,3 +239,4 @@ Framework 13.1 のタイムバジェットは、入口に配分した時間を�
 - 2026-10-01: P05 ⑥a で、`eia.resilience.timeouts{kind=caller_deadline}` を RED のダッシュボードのパネルにした(Prometheus では `eia_resilience_timeouts_total`)。急増したときのアラートの候補とし、しきい値は P14 で SLO と合わせて決める。
 - 2026-10-23: §3 の `HttpCallClassifier`・`HttpCallError`・`RetryAfter` を、`platform/reliability` から KMP の `shared/integration-sdk/http`(`io.eia.shared.sdk.http`)に移した(P11 ②a。ADR-0037 §2)。分類の規則は変えていない。`platform/reliability` は `ResilienceMetrics` だけになった。
 - 2026-11-03: §3 に `UncountedFailure` を足した(P13 ②。ADR-0042 §8)。証明書のエラーのように、NonRetryable だが依存先が応答したわけではないエラーを、Half-Open を閉じる「成功」に数えないため。
+- 2026-11-04: 常駐のサービスの繰り返しの仕事を `RepeatingJobs`(`platform/observability`)にまとめた(P14 ①。#191)。想定していない例外でも止めず、`eia.job.unexpected_failures` で数えて `RepeatingJobFailing` で知らせる。自前の `while (isActive)` は Konsist で禁止した(iot-bridge の接続のやり直しと、模擬の saas-mock を除く)。

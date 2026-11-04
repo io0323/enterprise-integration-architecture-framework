@@ -547,6 +547,27 @@ internal object ArchitectureRules {
             .filter { KAFKA_CONTAINER_CONSTRUCTOR.containsMatchIn(it.code.replace(IMPORT_OR_PACKAGE_LINE, "").replace(COMMENT, "")) }
             .map { Violation(KAFKA_CONTAINER_RULE, it.path, "KafkaContainer(...) を直接作っています(KafkaBrokerContainer を使う。#170)") }
 
+    private val UNGUARDED_LOOP = Regex("""while\s*\(\s*(currentCoroutineContext\(\)\.)?isActive\s*\)""")
+    private val OWN_LOOP_ALLOWED =
+        listOf(
+            // 接続の失敗をやり直すループで、例外はループの中で受けている
+            Regex("""^services/iot-bridge/app/.*/IotBridgeServer\.kt$"""),
+            // E2E の模擬の SaaS。本番では動かず、Observability も持たない
+            Regex("""^services/saas-mock/"""),
+        )
+
+    /**
+     * #191: 常駐のサービスの繰り返しの仕事は `RepeatingJobs` で動かす。自前のループは、想定していない例外で止まっても
+     * ヘルスチェックが UP のままで気づけない。
+     */
+    fun repeatingJobsThroughPlatform(codeBase: CodeBase): List<Violation> =
+        codeBase
+            .filesUnder("services/")
+            .filter { !TEST_SOURCE_SET.containsMatchIn(it.path) }
+            .filter { file -> OWN_LOOP_ALLOWED.none { it.containsMatchIn(file.path) } }
+            .filter { UNGUARDED_LOOP.containsMatchIn(it.code) }
+            .map { Violation("繰り返しの仕事", it.path, "自前の while (isActive) のループ(RepeatingJobs を使う。#191)") }
+
     /** [file] が [packageName] を import または完全修飾名で参照していれば、その違反。 */
     private fun packageUses(
         file: SourceFile,

@@ -157,6 +157,11 @@ class ArchitectureRulesSpec :
                     listOf("UsesGraphql.kt", "UsesDataLoader.kt")
             }
 
+            test("サービスが自前の while (isActive) のループを持つ") {
+                ArchitectureRules.repeatingJobsThroughPlatform(violations).fileNames() shouldContainExactlyInAnyOrder
+                    listOf("OwnRepeatingLoop.kt")
+            }
+
             test("BFF が DB と Kafka を使う") {
                 ArchitectureRules.bffHasNoPersistenceOrMessaging(violations).fileNames() shouldContainExactlyInAnyOrder
                     listOf("BffUsesExposed.kt", "BffUsesKafka.kt", "BffUsesKafka.kt")
@@ -253,6 +258,7 @@ class ArchitectureRulesSpec :
                 ArchitectureRules.grpcOnlyInAllowedModules(compliant).shouldBeEmpty()
                 ArchitectureRules.graphqlOnlyInAllowedModules(compliant).shouldBeEmpty()
                 ArchitectureRules.bffHasNoPersistenceOrMessaging(compliant).shouldBeEmpty()
+                ArchitectureRules.repeatingJobsThroughPlatform(compliant).shouldBeEmpty()
                 ArchitectureRules.grpcBuildersOnlyInPlatform(compliant).shouldBeEmpty()
                 ArchitectureRules.grpcReflectionForbidden(compliant).shouldBeEmpty()
                 ArchitectureRules.parquetOnlyInFileTransfer(compliant).shouldBeEmpty()

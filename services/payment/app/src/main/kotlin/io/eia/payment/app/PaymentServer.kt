@@ -7,6 +7,7 @@ import io.eia.platform.messagingkafka.OffsetCommitter
 import io.eia.platform.observability.Observability
 import io.eia.platform.observability.ObservabilityConfig
 import io.eia.platform.observability.ObservabilityRuntime
+import io.eia.platform.observability.jobs.RepeatingJobs
 import io.eia.platform.schemaregistry.SchemaIdBook
 import io.eia.platform.security.secret.EnvSecretProvider
 import io.eia.shared.kernel.Result
@@ -123,12 +124,11 @@ internal class PaymentServer private constructor(
                         consumer.run()
                     }
                     scope.launch(Dispatchers.IO) {
-                        while (isActive) {
+                        RepeatingJobs(runtime.meter).repeat("purge", config.purgeInterval) {
                             when (val purged = purge()) {
                                 is Result.Ok -> logger.info("保持期間を過ぎた記録を消しました({})", purged.value)
                                 is Result.Err -> logger.warn("保持期間を過ぎた記録を消せません({})。次の間隔でやり直します", purged.error.code)
                             }
-                            delay(config.purgeInterval)
                         }
                     }
                     val server =

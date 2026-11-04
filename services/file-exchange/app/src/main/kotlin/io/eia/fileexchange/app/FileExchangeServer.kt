@@ -7,6 +7,7 @@ import io.eia.platform.filetransfer.store.S3ObjectStore
 import io.eia.platform.observability.Observability
 import io.eia.platform.observability.ObservabilityConfig
 import io.eia.platform.observability.ObservabilityRuntime
+import io.eia.platform.observability.jobs.RepeatingJobs
 import io.eia.platform.security.secret.EnvSecretProvider
 import io.eia.platform.security.secret.Secret
 import io.eia.shared.kernel.Result
@@ -155,12 +156,11 @@ internal class FileExchangeServer private constructor(
         ) {
             val sweep = koin.get<SweepInboxUseCase>()
             val metrics = koin.get<FileExchangeMetrics>()
-            while (currentCoroutineContext().isActive) {
+            koin.get<RepeatingJobs>().repeat("sweep-inbox", config.sweepInterval) {
                 when (val report = sweep()) {
                     is Result.Ok -> metrics.swept(report.value)
                     is Result.Err -> logger.warn("受け口を見回れません({})", report.error.code)
                 }
-                delay(config.sweepInterval)
             }
         }
 

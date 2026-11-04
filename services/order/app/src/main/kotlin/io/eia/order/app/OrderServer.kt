@@ -20,6 +20,7 @@ import io.eia.platform.messagingkafka.EventConsumer
 import io.eia.platform.observability.Observability
 import io.eia.platform.observability.ObservabilityConfig
 import io.eia.platform.observability.ObservabilityRuntime
+import io.eia.platform.observability.jobs.RepeatingJobs
 import io.eia.platform.observability.ktor.server.ServerObservability
 import io.eia.platform.schemaregistry.SchemaIdBook
 import io.eia.platform.security.jwt.JwtVerifier
@@ -225,8 +226,9 @@ internal class OrderServer private constructor(
                     }
                 }
             }
-            launchPurgeJob(koin.get(), koin.get(), config)
-            launchSagaTimeoutJob(koin.get(), config)
+            val jobs = RepeatingJobs(koin.get<ObservabilityRuntime>().meter)
+            launchPurgeJob(koin.get(), koin.get(), config, jobs)
+            launchSagaTimeoutJob(koin.get(), config, jobs)
             // 書き込むイベントのスキーマ ID を解決する。解決するまで /health/ready は 503(ADR-0025 §3)
             val schemaIds = koin.get<SchemaIdBook>()
             launch { schemaIds.resolveUntilReady() }
@@ -234,7 +236,7 @@ internal class OrderServer private constructor(
             launch { koin.get<JwtVerifier>().prefetchUntilLoaded() }
             val anchorCycle = koin.getOrNull<AnchorCycle>()
             if (anchorCycle != null) {
-                launchAnchorJob(anchorCycle, koin.get(), config.anchor.interval)
+                launchAnchorJob(anchorCycle, koin.get(), config.anchor.interval, jobs)
             } else {
                 logger.warn("監査のアンカーの保存は無効です({}=false)。末尾の記録の改竄と削除は検出できません", AuditAnchorConfig.ENABLED)
             }
@@ -281,9 +283,10 @@ internal class OrderServer private constructor(
             cycle: AnchorCycle,
             dataSource: HikariDataSource,
             interval: Duration,
+            jobs: RepeatingJobs,
         ) {
             launch {
-                while (isActive) {
+                jobs.repeat("audit-anchor", interval) {
                     try {
                         val result = withContext(Dispatchers.IO) { dataSource.connection.use { cycle.run(it) } }
                         logAnchorResult(result)
@@ -294,7 +297,6 @@ internal class OrderServer private constructor(
                     ) {
                         logger.warn("監査のアンカーの検査を終えられませんでした(error.type={})", e::class.qualifiedName)
                     }
-                    delay(interval)
                 }
             }
         }
@@ -306,10 +308,10 @@ internal class OrderServer private constructor(
         private fun Application.launchSagaTimeoutJob(
             timeouts: TimeoutSagasUseCase,
             config: OrderConfig,
+            jobs: RepeatingJobs,
         ) {
             launch {
-                while (isActive) {
-                    delay(config.sagaScanInterval)
+                jobs.repeat("saga-timeouts", config.sagaScanInterval, delayFirst = true) {
                     when (val handled = timeouts()) {
                         is Result.Ok -> if (handled.value > 0) logger.info("期限切れの Saga を {} 件進めました", handled.value)
                         is Result.Err -> logger.warn("期限切れの Saga を進められません({})。次の間隔でやり直します", handled.error.code)
@@ -323,10 +325,10 @@ internal class OrderServer private constructor(
             store: IdempotencyStore,
             dataSource: HikariDataSource,
             config: OrderConfig,
+            jobs: RepeatingJobs,
         ) {
             launch {
-                while (isActive) {
-                    delay(config.purgeInterval)
+                jobs.repeat("purge-idempotency", config.purgeInterval, delayFirst = true) {
                     try {
                         val purged = store.purgeExpired(inProgressGrace = config.idempotencyLease)
                         if (purged > 0) logger.info("期限切れの冪等の記録を {} 件消しました", purged)
