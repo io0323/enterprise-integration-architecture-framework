@@ -48,6 +48,8 @@ P05 ④b-2 で、最初のサービス(order-service)を起動できる形にす
 |---|---|---|---|---|
 | リクエストの予算 | 10 秒 | `ORDER_REQUEST_BUDGET`(`installRequestDeadline`) | 冪等のリースより短い。設定の検証で強制する | 予算を超えた処理は打ち切られるので、リースが切れる前に処理中の記録は取り消されるか完了する。リースのほうが短いと、まだ処理中の要求を、同じキーの再送が引き継いで二重に処理しかける(フェンシングで確定は防げるが、無駄な処理になる) |
 | DB の文の上限 | 残り時間 + 0.5 秒 | `SET LOCAL statement_timeout` | 予算の後に来る | コルーチンの打ち切りを先にして、応答を 503 `deadline-exceeded` にそろえる |
+| DB の通信の待ちの上限 | 予算 + 1 秒 | pgjdbc の `socketTimeout` | DB の文の上限より後で、ゲートウェイより先 | DB に届かないときも、ゲートウェイの 504 より先に 503 を返す(P14 ③) |
+| DB の接続の取得の上限 | 3 秒 | Hikari の `connectionTimeout`・pgjdbc の `connectTimeout` | 予算より十分に短い | 切断のときに予算の間ずっと待たない(P14 ③) |
 | 冪等のリース | 60 秒 | `ORDER_IDEMPOTENCY_LEASE`(`IdempotencyConfig.lease`) | 予算より長い | 上のとおり |
 | ゲートウェイ(APISIX)の上流のタイムアウト | connect 2 秒・send / read 15 秒 | `infra/local/apisix/apisix.yaml` のルート(ADR-0023 §1) | 予算より長い | サービスが Problem Details(予算切れの 503 など)で応答する前に、ゲートウェイが接続を切らないようにする。ゲートウェイが先に切ると、サービスの処理は続くのに、クライアントには理由の分からない 504 が返る |
 

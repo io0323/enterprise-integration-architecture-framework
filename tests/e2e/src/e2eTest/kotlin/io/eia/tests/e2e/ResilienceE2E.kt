@@ -181,7 +181,8 @@ class ResilienceE2E :
             }
 
             test("切断が続くと Circuit Breaker が開き、メトリクスで分かる。戻すと閉じて読める") {
-                val open = """max(eia_resilience_circuit_breaker_state_ratio{job="bff-graphql",eia_dependency_name="order-api",state="open"})"""
+                val breaker = """job="bff-graphql",eia_dependency_name="order-api",state="open""""
+                val open = "max(eia_resilience_circuit_breaker_state_ratio{$breaker})"
                 Toxiproxy.whileCut(Toxiproxy.BFF_GATEWAY) {
                     withClue("切断の間に Circuit Breaker が開く") {
                         eventually(Duration.ofSeconds(120), Duration.ofSeconds(1)) {
