@@ -16,7 +16,6 @@ import io.eia.tests.e2e.E2eEnvironment.token
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
-import io.kotest.matchers.collections.shouldContainAll
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import kotlinx.serialization.json.JsonArray
@@ -341,10 +340,14 @@ class BffE2E :
                         found.map { it.second }.containsAll(listOf("bff-graphql", "inventory-service", "shipping-service", "order-service"))
                     }
                 }.shouldNotBeNull()
+            // 部分応答が解消するまで問い合わせ直すと、同じ X-Correlation-Id のトレースが複数できる。回数によらず、分かれ方を確かめる
             val servicesOf = all.groupBy({ it.first }, { it.second }).values.map { it.toSet() }
-            val front = servicesOf.single { "bff-graphql" in it }
-            front shouldContainAll setOf("apisix", "bff-graphql", "inventory-service", "shipping-service")
-            val orderTrace = servicesOf.single { "order-service" in it }
-            orderTrace shouldContainAll setOf("apisix", "order-service")
+            val front = setOf("apisix", "bff-graphql", "inventory-service", "shipping-service")
+            withClue("Gateway → BFF → 在庫と出荷が 1 つのトレース: $servicesOf") { servicesOf.any { it.containsAll(front) } shouldBe true }
+            withClue("order は BFF を含まない別のトレース: $servicesOf") {
+                val orderTraces = servicesOf.filter { "order-service" in it }
+                orderTraces.any { it.contains("apisix") } shouldBe true
+                orderTraces.none { "bff-graphql" in it } shouldBe true
+            }
         }
     })
