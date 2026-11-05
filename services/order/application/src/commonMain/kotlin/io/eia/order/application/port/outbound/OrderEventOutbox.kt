@@ -26,6 +26,15 @@ public interface OrderEventOutbox {
         from: OrderStatus,
     ): Result<Unit, DomainError>
 
+    /**
+     * 再発行(ADR-0046)。作成の時点の内容の `sales.order.created.v1` と、状態が変わっていれば今の状態への遷移(今の版)と、取消を、[mark] の目印を付けて書く。
+     * 途中の遷移は戻らない。
+     */
+    public suspend fun orderRepublished(
+        item: RepublishableOrder,
+        mark: RepublishMark,
+    ): Result<Unit, DomainError>
+
     /** 注文を取り消したこと(`sales.order.cancelled.v1`)を書く。[reason] は補償の理由(ADR-0029 §8)。 */
     public suspend fun orderCancelled(
         order: Order,

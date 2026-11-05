@@ -2,6 +2,8 @@ package io.eia.order.adapters.out.outbox
 
 import io.eia.order.adapters.out.persistence.currentTransaction
 import io.eia.order.application.port.outbound.OrderEventOutbox
+import io.eia.order.application.port.outbound.RepublishMark
+import io.eia.order.application.port.outbound.RepublishableOrder
 import io.eia.order.domain.Order
 import io.eia.order.domain.OrderStatus
 import io.eia.order.domain.SagaFailure
@@ -9,12 +11,14 @@ import io.eia.platform.messagingkafka.AvroEventSerializer
 import io.eia.platform.outbox.Outbox
 import io.eia.platform.outbox.OutboxEvents
 import io.eia.platform.outbox.OutboxMisuse
+import io.eia.platform.outbox.OutboxRepublish
 import io.eia.platform.outbox.appendOutbox
 import io.eia.shared.kernel.DomainError
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.err
 import io.eia.shared.kernel.flatMap
 import io.eia.shared.kernel.mapError
+import io.eia.shared.kernel.ok
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import org.jetbrains.exposed.v1.jdbc.Database
@@ -70,11 +74,48 @@ public class OutboxOrderEvents(
     ): Result<Unit, DomainError> =
         append(serializers.cancelled, order, OrderCancelledV1(order.id.value, clock.now(), reason?.name ?: UNKNOWN_REASON))
 
+    /** 再発行(ADR-0046)。同じ注文のイベントを順に書くので、受信側には作成 → 遷移 → 取消の順に届く。 */
+    override suspend fun orderRepublished(
+        item: RepublishableOrder,
+        mark: RepublishMark,
+    ): Result<Unit, DomainError> {
+        val order = item.order
+        val outboxMark = OutboxRepublish(mark.reason, mark.runId)
+        return OrderEventMapper
+            .orderCreated(order.asPlaced())
+            .mapError { it as DomainError }
+            .flatMap { event -> append(serializers.created, order, event, outboxMark) }
+            .flatMap {
+                if (order.status == OrderStatus.PLACED) {
+                    ok(Unit)
+                } else {
+                    val changed =
+                        OrderStatusChangedV1(
+                            orderId = order.id.value,
+                            status = OrderStatusV1.valueOf(order.status.name),
+                            // 途中の遷移は残っていない。遷移の前の状態は受け付けの時点の状態にする
+                            previousStatus = OrderStatusV1.PLACED,
+                            version = order.version,
+                            changedAt = item.updatedAt,
+                        )
+                    append(serializers.statusChanged, order, changed, outboxMark)
+                }
+            }.flatMap {
+                if (order.status == OrderStatus.CANCELLED) {
+                    val cancelled = OrderCancelledV1(order.id.value, item.updatedAt, item.failure?.name ?: UNKNOWN_REASON)
+                    append(serializers.cancelled, order, cancelled, outboxMark)
+                } else {
+                    ok(Unit)
+                }
+            }
+    }
+
     /** 今のトランザクション(注文の保存と同じ)で Outbox に書く。キーは注文 ID(同じ注文のイベントは同じパーティションに入る)。 */
     private suspend fun <T> append(
         serializer: AvroEventSerializer<T>,
         order: Order,
         event: T,
+        republish: OutboxRepublish? = null,
     ): Result<Unit, DomainError> {
         val transaction =
             database.currentTransaction()
@@ -83,7 +124,10 @@ public class OutboxOrderEvents(
             events
                 .create(serializer, AGGREGATE_TYPE, order.id.value, event)
                 .mapError { it.asDomainError() }
-                .flatMap { record -> outbox.appendOutbox(transaction, listOf(record)).mapError { it.asDomainError() } }
+                .flatMap { record ->
+                    val marked = republish?.let(record::republished) ?: record
+                    outbox.appendOutbox(transaction, listOf(marked)).mapError { it.asDomainError() }
+                }
         // JDBC の呼び出しはコルーチンの打ち切りでは止まらない。打ち切られていれば結果を使わずに伝える(ADR-0024 §3)
         currentCoroutineContext().ensureActive()
         return appended

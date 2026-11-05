@@ -34,6 +34,8 @@ import java.net.http.HttpResponse
 import java.nio.file.Path
 import java.time.Duration
 import kotlin.io.path.readText
+import kotlin.time.Clock
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 import kotlin.uuid.Uuid
@@ -132,6 +134,7 @@ class OrderOutboxCdcIT :
         fun consumeOrders(
             expected: Set<String>,
             timeout: kotlin.time.Duration = 120.seconds,
+            done: (List<ConsumerRecord<String, ByteArray>>) -> Boolean = { read -> read.map { it.key() }.toSet().containsAll(expected) },
         ): List<ConsumerRecord<String, ByteArray>> {
             val properties =
                 mapOf<String, Any>(
@@ -143,12 +146,14 @@ class OrderOutboxCdcIT :
             KafkaConsumer(properties, StringDeserializer(), ByteArrayDeserializer()).use { consumer ->
                 consumer.subscribe(listOf(TOPIC))
                 val deadline = TimeSource.Monotonic.markNow() + timeout
-                while (!received.map { it.key() }.toSet().containsAll(expected) && deadline.hasNotPassedNow()) {
+                while (!done(received) && deadline.hasNotPassedNow()) {
                     received += consumer.poll(Duration.ofMillis(500)).filter { it.key() in expected }
                 }
             }
             return received
         }
+
+        fun isRepublished(record: ConsumerRecord<String, ByteArray>) = record.headers().lastHeader("eiaf.republished")?.value() != null
 
         beforeSpec {
             kafka.start()
@@ -209,7 +214,23 @@ class OrderOutboxCdcIT :
                 ?.toString(Charsets.UTF_8) shouldBe metadata.id.toString()
             // 契約のヘッダ(StandardHeaders)と EventRouter の id だけ。Debezium の内部のヘッダ(__debezium.*)は付けない
             record.headers().map { it.key() }.toSet() shouldBe
-                setOf("id", "ce_id", "ce_source", "ce_type", "ce_time", "ce_specversion", "traceparent", "correlationid")
+                setOf(
+                    "id",
+                    "ce_id",
+                    "ce_source",
+                    "ce_type",
+                    "ce_time",
+                    "ce_specversion",
+                    "traceparent",
+                    "correlationid",
+                    "eiaf.republished",
+                    "eiaf.republish.reason",
+                    "eiaf.republish.run-id",
+                )
+            // 再発行の目印は、ふつうのイベントでは値が null(ADR-0046 §4)
+            listOf("eiaf.republished", "eiaf.republish.reason", "eiaf.republish.run-id").forEach { name ->
+                record.headers().lastHeader(name)?.value() shouldBe null
+            }
             val event =
                 HttpClient(CIO).use { client ->
                     val schemas =
@@ -223,7 +244,39 @@ class OrderOutboxCdcIT :
             environment.count(db, "SELECT count(*) FROM outbox.outbox") shouldBe 0
         }
 
+        test("再発行したイベントは、Debezium を通って目印のヘッダつきで届く。ce_id は元と違う(ADR-0046 §4)") {
+            val created = place("key-republish")
+            created.statusCode() shouldBe 201
+            val orderId = orderIdOf(created.body())
+            val original = consumeOrders(setOf(orderId)).firstOrNull() ?: fail("イベントが届きません($orderId)")
+            val originalId = EventMetadata.fromHeaders(original.headers()).ok().id
+
+            val now = Clock.System.now()
+            OrderCommands.run(
+                listOf("republish", "--from", (now - 1.hours).toString(), "--to", (now + 1.hours).toString()) +
+                    listOf("--reason", "slot-lost", "--operator", "ops-1", "--run-id", "run-cdc", "--execute"),
+                environment.serveEnv(db),
+            ) shouldBe OrderCommands.OK
+
+            val republished =
+                consumeOrders(setOf(orderId), done = { read -> read.any(::isRepublished) }).singleOrNull(::isRepublished)
+                    ?: fail("再発行のイベントが届きません($orderId)")
+
+            fun header(name: String) =
+                republished
+                    .headers()
+                    .lastHeader(name)
+                    ?.value()
+                    ?.toString(Charsets.UTF_8)
+            header("eiaf.republished") shouldBe "true"
+            header("eiaf.republish.reason") shouldBe "slot-lost"
+            header("eiaf.republish.run-id") shouldBe "run-cdc"
+            republished.key() shouldBe orderId
+            (EventMetadata.fromHeaders(republished.headers()).ok().id == originalId) shouldBe false
+        }
+
         test("Kafka を止めたまま注文を作っても、再開の後に欠けずに届く(DoD)。止めている間も注文は 201 で、Outbox に行は残らない") {
+            val ordersBefore = environment.count(db, "SELECT count(*) FROM orders")
             kafka.dockerClient.pauseContainerCmd(kafka.containerId).exec()
             val orderIds =
                 try {
@@ -235,7 +288,7 @@ class OrderOutboxCdcIT :
                         }.also {
                             environment.count(db, "SELECT count(*) FROM outbox.outbox") shouldBe 0
                             // 止めている間は発行されないので、slot が WAL を保持している(欠けない理由)
-                            environment.count(db, "SELECT count(*) FROM orders") shouldBe 6
+                            environment.count(db, "SELECT count(*) FROM orders") shouldBe ordersBefore + 5
                         }
                 } finally {
                     kafka.dockerClient.unpauseContainerCmd(kafka.containerId).exec()

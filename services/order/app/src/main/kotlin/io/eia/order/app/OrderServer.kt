@@ -164,7 +164,7 @@ internal class OrderServer private constructor(
             }
 
         /** serve の設定とアプリのロールのパスワード。所有者のパスワードがあれば、設定の誤りにする。 */
-        private fun serveInputs(env: Map<String, String>): Result<Pair<OrderConfig, Secret>, ValidationError> {
+        internal fun serveInputs(env: Map<String, String>): Result<Pair<OrderConfig, Secret>, ValidationError> {
             val forbidden = OrderCommands.FORBIDDEN_FOR_SERVE.filter { env.containsKey(it) }
             val violations =
                 forbidden.map { FieldViolation(it, "serve には所有者のパスワードを渡さないでください(migrate にだけ渡す)") } +

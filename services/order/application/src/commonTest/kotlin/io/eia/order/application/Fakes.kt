@@ -7,6 +7,8 @@ import io.eia.order.application.port.outbound.OrderIdGenerator
 import io.eia.order.application.port.outbound.OrderRepository
 import io.eia.order.application.port.outbound.OrderVersionConflict
 import io.eia.order.application.port.outbound.ProcessedReplies
+import io.eia.order.application.port.outbound.RepublishMark
+import io.eia.order.application.port.outbound.RepublishableOrder
 import io.eia.order.application.port.outbound.SagaCommandOutbox
 import io.eia.order.application.port.outbound.SagaIdGenerator
 import io.eia.order.application.port.outbound.SagaStore
@@ -24,6 +26,7 @@ import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.err
 import io.eia.shared.kernel.ok
 import kotlin.time.Duration
+import kotlin.time.Instant
 
 /**
  * メモリ上の保存先。[OrderRepository] の約束(ID の重複は ConflictError、楽観的ロック)どおりに振る舞う。
@@ -155,6 +158,21 @@ internal class FakeOrderAuditTrail(
         transaction.write { entries += Entry(order.id, requestedBy, requestDigest) }
         return ok(Unit)
     }
+
+    /** 再発行の監査(実行の ID・件数・誰が)。 */
+    val republished = mutableListOf<Triple<String, Long, RequestedBy>>()
+
+    override suspend fun eventsRepublished(
+        mark: RepublishMark,
+        from: Instant,
+        to: Instant,
+        orders: Long,
+        requestedBy: RequestedBy,
+    ): Result<Unit, DomainError> {
+        failWith?.let { return err(it) }
+        transaction.write { republished += Triple(mark.runId, orders, requestedBy) }
+        return ok(Unit)
+    }
 }
 
 /** メモリ上の Outbox。書いた注文の ID を、トランザクションが確定したときだけ残す。[failWith] で次の書き込みを失敗させる。 */
@@ -187,6 +205,18 @@ internal class FakeOrderEventOutbox(
     override suspend fun orderPlaced(order: Order): Result<Unit, DomainError> {
         failWith?.let { return err(it) }
         transaction.write { placed += order.id }
+        return ok(Unit)
+    }
+
+    /** 再発行(注文 ID と目印)。 */
+    val republished = mutableListOf<Pair<OrderId, RepublishMark>>()
+
+    override suspend fun orderRepublished(
+        item: RepublishableOrder,
+        mark: RepublishMark,
+    ): Result<Unit, DomainError> {
+        failWith?.let { return err(it) }
+        transaction.write { republished += item.order.id to mark }
         return ok(Unit)
     }
 

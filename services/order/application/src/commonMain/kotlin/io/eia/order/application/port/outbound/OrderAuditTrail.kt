@@ -4,6 +4,7 @@ import io.eia.order.application.port.inbound.RequestedBy
 import io.eia.order.domain.Order
 import io.eia.shared.kernel.DomainError
 import io.eia.shared.kernel.Result
+import kotlin.time.Instant
 
 /**
  * 注文の監査の記録(ADR-0017)。adapters が `platform/audit` で実装する(application は監査の部品に依存しない)。
@@ -12,6 +13,15 @@ import io.eia.shared.kernel.Result
  * 業務の更新が取り消されれば、記録も残らない。
  */
 public interface OrderAuditTrail {
+    /** イベントを再発行したこと(`order.republish`。ADR-0046)を記録する。 */
+    public suspend fun eventsRepublished(
+        mark: RepublishMark,
+        from: Instant,
+        to: Instant,
+        orders: Long,
+        requestedBy: RequestedBy,
+    ): Result<Unit, DomainError>
+
     /** 注文を受け付けたこと(`order.create`)を記録する。[requestDigest] は要求の本文の SHA-256(本文そのものは記録しない)。 */
     public suspend fun orderPlaced(
         order: Order,

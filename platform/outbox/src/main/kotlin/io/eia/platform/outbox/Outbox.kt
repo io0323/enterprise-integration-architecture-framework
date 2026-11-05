@@ -78,6 +78,9 @@ public class Outbox(
                 statement.setObject(++index, id)
                 statement.setString(++index, metadata.source)
                 statement.setTimestamp(++index, Timestamp.from(metadata.time.toJavaInstant()))
+                statement.setString(++index, record.republish?.let { REPUBLISHED })
+                statement.setString(++index, record.republish?.reason)
+                statement.setString(++index, record.republish?.runId)
                 statement.addBatch()
             }
             statement.executeBatch()
@@ -94,11 +97,13 @@ public class Outbox(
         }
 
     private companion object {
+        const val REPUBLISHED = "true"
         val INSERT =
             """
             INSERT INTO ${OutboxSchema.TABLE}
-                (id, topic, aggregate_type, aggregate_id, event_type, payload, traceparent, correlation_id, ce_id, ce_source, ce_time)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, topic, aggregate_type, aggregate_id, event_type, payload, traceparent, correlation_id, ce_id, ce_source, ce_time,
+                 republished, republish_reason, republish_run_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """.trimIndent()
         val DELETE = "DELETE FROM ${OutboxSchema.TABLE} WHERE id = ANY(?)"
         val TRANSIENT_CLASSES = setOf("08", "40", "53", "57")
