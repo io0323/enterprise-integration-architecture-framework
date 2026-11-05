@@ -163,6 +163,7 @@
    make batch-etl ARGS="run <日付> --restart"
    make batch-etl ARGS="reconcile <実行の日> --restart"
    ```
+   - 照合は 1 回で 38 日分を問い合わせる。続けて動かして `unavailable` で失敗したら、Gateway の枠(429)を超えている。1 分ほど待って動かし直す。
    - 再発行のイベントが Kafka に届くのを待ってから作り直す(`make logs SERVICE=kafka-connect`、またはトピックのヘッダ `eiaf.republished`)。
    - 31 日より前の日を作り直すときは、締めた後の数字が変わるので、先に分析の利用者に確かめる([遅れて届いたデータで古い日が変わったとき](#遅れて届いたデータで古い日が変わったとき))。
    - 注文の表にもない注文(削除された、など)は戻らない。その日は DRIFT のまま残るので、判断を記録して受け入れる。

@@ -79,6 +79,19 @@ private fun republish(args: List<String>): Pair<Int, String> =
 
 private fun batchEtl(vararg args: String): Pair<Int, String> = compose("run", "--rm", "--no-deps", "batch-etl", *args)
 
+/**
+ * 週次の照合の終了コード。1 回で 38 日分を問い合わせるので、続けて動かすと Gateway の枠(429)を超え、order-service に問い合わせられないとして失敗する
+ * (終了コード 1)。そのときは枠が戻るのを待って動かし直す(運用者と同じ。docs/runbooks/batch-rerun.md)。
+ */
+private fun reconcile(runDay: String): Pair<Int, String> {
+    repeat(3) {
+        val result = batchEtl("reconcile", runDay, "--restart")
+        if (result.first != 1) return result
+        Thread.sleep(Duration.ofSeconds(60).toMillis())
+    }
+    return batchEtl("reconcile", runDay, "--restart")
+}
+
 /** 管理者で読み書きする。テストの観察と、スロットの削除(運用者の操作。docs/runbooks/cdc-outbox-lag.md)のためだけに使う。 */
 private fun sql(
     database: String,
@@ -272,7 +285,7 @@ class EventRepublishE2E :
 
                 // 埋め戻す前は DRIFT(このシナリオが消えた状態を作れていることの確認)
                 batchEtl("run", day, "--restart").let { (exit, output) -> withClue(output) { exit shouldBe 0 } }
-                batchEtl("reconcile", runDay, "--restart").let { (exit, output) -> withClue(output) { exit shouldBe 3 } }
+                reconcile(runDay).let { (exit, log) -> withClue(log) { exit shouldBe 3 } }
                 reconcileOutcome() shouldBe "DRIFT"
 
                 val (executed, output) =
@@ -298,7 +311,7 @@ class EventRepublishE2E :
                 marked(CANCELLED, cancelled)
 
                 batchEtl("run", day, "--restart").let { (exit, log) -> withClue(log) { exit shouldBe 0 } }
-                batchEtl("reconcile", runDay, "--restart").let { (exit, log) -> withClue(log) { exit shouldBe 0 } }
+                reconcile(runDay).let { (exit, log) -> withClue(log) { exit shouldBe 0 } }
                 withClue("再発行の後の週次の照合") { reconcileOutcome() shouldBe "MATCH" }
                 withClue("途中の遷移は戻らない。今の状態への遷移の 1 件だけ") {
                     sql("batch_etl", "SELECT count(*), max(status) FROM raw.order_status_change WHERE order_id = '$shipped'") shouldBe
