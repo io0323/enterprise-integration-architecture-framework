@@ -49,8 +49,12 @@ internal object OrderCommands {
                 }
             }
 
+            "republish" -> {
+                OrderRepublishCommand.run(args.drop(1), env)
+            }
+
             else -> {
-                logger.error("使い方: order-service migrate | serve")
+                logger.error("使い方: order-service migrate | serve | republish")
                 USAGE
             }
         }

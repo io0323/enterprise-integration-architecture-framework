@@ -1,7 +1,7 @@
 # EIAF ローカル開発用コマンド(CLAUDE.md §7)
 GRADLE := ./gradlew
 
-.PHONY: help setup build check arch-test contract-check schemas alerts-test integration-test format env not-root certs pgp-keys order-dist legacy-dist saga-dist batch-dist file-dist b2b-dist saas-dist iot-dist up down logs ps verify stats clean e2e audit-verify legacy-simulate dlq-replay batch-etl file-exchange b2b-codes iot-reprocess-dlq
+.PHONY: order-republish help setup build check arch-test contract-check schemas alerts-test integration-test format env not-root certs pgp-keys order-dist legacy-dist saga-dist batch-dist file-dist b2b-dist saas-dist iot-dist up down logs ps verify stats clean e2e audit-verify legacy-simulate dlq-replay batch-etl file-exchange b2b-codes iot-reprocess-dlq
 
 # ローカル基盤(infra/local。ADR-0016)
 # PROFILE: core / cdc / iot / file / b2b / chaos / order / saga / batch / saas / bff。core は常に含まれる(積み上げ方式)。空白区切りで複数指定できる。
@@ -151,6 +151,9 @@ verify: ## profile ごとの検証(healthy・機能の疎通。例: make verify 
 
 audit-verify: ## 監査記録の改竄の検査(例: make audit-verify SERVICE=order。終了コード 0=正常 / 1=改竄の疑い / 2=実行できない。ADR-0017)
 	@$(INFRA)/scripts/audit-verify.sh $(SERVICE)
+
+order-republish: env order-dist ## 注文のイベントを再発行する。既定は dry-run(例: make order-republish ARGS="--from 2026-11-01T00:00:00Z --to 2026-11-02T00:00:00Z --reason slot-lost --operator ops-1 [--execute]"。ADR-0046)
+	@$(COMPOSE) --profile order run --rm --build --no-deps order-service republish $(ARGS)
 
 dlq-replay: ## DLQ のメッセージを元のトピックに戻す。既定は dry-run(例: make dlq-replay ARGS="--topic <topic>.dlq --limit 10 [--execute]"。docs/runbooks/event-dlq-replay.md)
 	@$(INFRA)/scripts/dlq-replay.sh $(ARGS)

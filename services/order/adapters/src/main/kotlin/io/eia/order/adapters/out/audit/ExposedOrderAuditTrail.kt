@@ -3,6 +3,7 @@ package io.eia.order.adapters.out.audit
 import io.eia.order.adapters.out.persistence.currentTransaction
 import io.eia.order.application.port.inbound.RequestedBy
 import io.eia.order.application.port.outbound.OrderAuditTrail
+import io.eia.order.application.port.outbound.RepublishMark
 import io.eia.order.domain.Order
 import io.eia.platform.audit.Actor
 import io.eia.platform.audit.ActorType
@@ -25,6 +26,9 @@ import io.eia.shared.kernel.ok
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import org.jetbrains.exposed.v1.jdbc.Database
+import java.security.MessageDigest
+import java.util.HexFormat
+import kotlin.time.Instant
 import kotlin.time.toJavaInstant
 
 /**
@@ -67,6 +71,41 @@ public class ExposedOrderAuditTrail(
         return appended
     }
 
+    /** イベントの再発行(ADR-0046)。誰が・いつ・どの実行か。 */
+    override suspend fun eventsRepublished(
+        mark: RepublishMark,
+        from: Instant,
+        to: Instant,
+        orders: Long,
+        requestedBy: RequestedBy,
+    ): Result<Unit, DomainError> {
+        val transaction =
+            database.currentTransaction()
+                ?: return err(AuditMisuse("再発行の監査は、トランザクションの中で記録してください"))
+        val trace = CurrentTrace.get()
+        // 本文の代わりに、範囲・件数・理由のハッシュを残す(実行の内容を後から確かめられる)
+        val digest = sha256("${mark.runId}|${mark.reason}|$from|$to|$orders")
+        val event =
+            AuditEvent(
+                occurredAt = java.time.Instant.now(),
+                actor = Actor(ActorType.SERVICE, requestedBy.clientId),
+                action = ACTION_REPUBLISH,
+                target = AuditTarget(TARGET_REPUBLISH, mark.runId),
+                outcome = AuditOutcome.SUCCESS,
+                payloadSha256 = digest,
+                correlationId = trace.correlationId,
+                traceparent = trace.traceParent,
+            )
+        val appended = log.appendAudit(transaction, event).mapError { it as DomainError }.map { }
+        currentCoroutineContext().ensureActive()
+        return appended
+    }
+
+    private fun sha256(text: String): ChainHash? {
+        val hex = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8)))
+        return (ChainHash.parse(hex) as? Result.Ok)?.value
+    }
+
     private fun digestOf(requestDigest: String?): Result<ChainHash?, DomainError> =
         when (val parsed = requestDigest?.let(ChainHash::parse)) {
             null -> ok(null)
@@ -93,6 +132,8 @@ public class ExposedOrderAuditTrail(
 
     private companion object {
         const val ACTION_CREATE = "order.create"
+        const val ACTION_REPUBLISH = "order.republish"
+        const val TARGET_REPUBLISH = "order-republish-run"
         const val TARGET_TYPE = "order"
     }
 }

@@ -7,6 +7,8 @@ info:
     Outbox + Debezium で発行する(ADR-0007)。パーティションキーは注文 ID。
     ヘッダは CloudEvents binary mode(`ce_*`)と `traceparent`・`correlationid`。
     処理できないメッセージは `{topic}.dlq` に隔離する(Framework 6.5)。
+    再発行したイベント(ADR-0046)にはヘッダ `eiaf.republished`(`true`)・`eiaf.republish.reason`・`eiaf.republish.run-id` が付き、`ce_id` は新しくなる。
+    受信側は業務のキー(注文 ID。状態の遷移は注文 ID と版)で重複を除く。ふつうのイベントでは、この 3 つのヘッダの値は null。
   contact:
     name: team-order
 defaultContentType: avro/binary

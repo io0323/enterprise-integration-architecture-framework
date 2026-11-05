@@ -9,6 +9,7 @@ import io.eia.order.adapters.out.outbox.OrderEventSchemas
 import io.eia.order.adapters.out.outbox.OutboxOrderEvents
 import io.eia.order.adapters.out.persistence.ExposedOrderRepository
 import io.eia.order.adapters.out.persistence.ExposedOrderSummaries
+import io.eia.order.adapters.out.persistence.ExposedRepublishableOrders
 import io.eia.order.adapters.out.persistence.ExposedTransactionBoundary
 import io.eia.order.adapters.out.persistence.ExposedTransactionRunner
 import io.eia.order.adapters.out.persistence.PostgresIdempotencyStore
@@ -24,6 +25,7 @@ import io.eia.order.application.port.inbound.GetOrderUseCase
 import io.eia.order.application.port.inbound.GetOrdersUseCase
 import io.eia.order.application.port.inbound.HandleSagaReplyUseCase
 import io.eia.order.application.port.inbound.PlaceOrderUseCase
+import io.eia.order.application.port.inbound.RepublishOrderEventsUseCase
 import io.eia.order.application.port.inbound.TimeoutSagasUseCase
 import io.eia.order.application.port.outbound.OrderAuditTrail
 import io.eia.order.application.port.outbound.OrderEventOutbox
@@ -38,6 +40,7 @@ import io.eia.order.application.usecase.GetOrderService
 import io.eia.order.application.usecase.GetOrdersService
 import io.eia.order.application.usecase.HandleSagaReplyService
 import io.eia.order.application.usecase.PlaceOrderService
+import io.eia.order.application.usecase.RepublishOrderEventsService
 import io.eia.order.application.usecase.SagaCoordinator
 import io.eia.order.application.usecase.TimeoutSagasService
 import io.eia.platform.api.idempotency.IdempotencyConfig
@@ -126,6 +129,10 @@ internal fun orderModule(
         single<GetOrderUseCase> { GetOrderService(get()) }
         single<GetOrdersUseCase> { GetOrdersService(get()) }
         // 日次の集計(分析の週次の照合用。ADR-0031 §3)
+        // イベントの再発行(ADR-0046)
+        single<RepublishOrderEventsUseCase> {
+            RepublishOrderEventsService(ExposedRepublishableOrders(get(), get()), get(), get(), get())
+        }
         single<GetDailyOrderSummaryUseCase> { GetDailyOrderSummaryService(ExposedOrderSummaries(get())) }
         single<IdempotencyStore> { PostgresIdempotencyStore(get()) }
         single { IdempotencyHandler(get(), IdempotencyConfig(lease = config.idempotencyLease)) }

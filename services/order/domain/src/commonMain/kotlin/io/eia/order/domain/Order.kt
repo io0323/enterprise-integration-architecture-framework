@@ -45,6 +45,10 @@ public class Order private constructor(
             else -> err(ConflictError("注文の状態を $status から $next には変えられません"))
         }
 
+    /** 受け付けの時点の内容(状態は PLACED、版は最初の版)。明細と金額は変わらないので、今の注文から作れる(イベントの再発行。ADR-0046)。 */
+    public fun asPlaced(): Order =
+        Order(id, customerId, OrderStatus.PLACED, orderedAt, lines, totalAmount, shippingAddress, INITIAL_VERSION)
+
     private fun copy(status: OrderStatus): Order = Order(id, customerId, status, orderedAt, lines, totalAmount, shippingAddress, version)
 
     override fun equals(other: Any?): Boolean =
