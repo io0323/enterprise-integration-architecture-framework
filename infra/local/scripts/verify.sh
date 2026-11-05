@@ -1962,7 +1962,11 @@ verify_bff() {
     fail "BFF: 複雑度の枠の応答が想定外 ($(http_status <<<"$response"))"
   fi
 
-  # SLO のルールの式(上の複雑度の検査で流量を流した後。流量がないと割合は 0 ÷ 0 になる)
+  # SLO のルールの式。スクレイプ(15 秒)をまたいで流す。短い間にまとめて流すと、Prometheus が増分を見られず、割合が 0 ÷ 0 になる
+  for _ in 1 2 3 4; do
+    storefront_query "$caller" '{ __typename }' >/dev/null || true
+    sleep 10
+  done
   verify_slo_rules storefront-availability storefront-latency
 
   # ダッシュボード(部分応答は平常時は空でよい。拒否と個人情報の読み取りは、上の検査で数を流している)
