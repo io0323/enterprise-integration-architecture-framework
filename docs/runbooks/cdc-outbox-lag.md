@@ -63,9 +63,9 @@ make logs SERVICE=kafka-connect                                # Debezium のエ
 `CdcSlotLost`(`wal_status = lost`)。**スロットは無効で、読まれていなかった WAL は消えている。その間のイベントは発行されない。**
 
 - Outbox は行を消す方式(ADR-0007 §2)なので、スロットとコネクタを作り直してスナップショットを取っても、**失われたイベントは戻らない**。業務の表(`orders`)には注文が残っている。
-- 作り直しの手段は Issue #80(まだない)。それまでは、下の手順で発行を再開し、失われた期間を記録して、受信側の担当者に知らせる。
+- 下の手順で発行を再開してから、失われた期間の注文のイベントを **再発行** で作り直す(ADR-0046)。
 
-1. **失われた期間を記録する**(Issue #80 の作り直しで使う)
+1. **失われた期間を記録する**(下の 4 の再発行で使う)
    - 始まり: 最後に届いたイベントの `ce_time`(`sales.order.created.v1` の各パーティションの末尾のレコードのうち、いちばん新しいもの)。
      ```bash
      compose=(docker compose -f infra/local/docker-compose.yml --env-file infra/local/images.env --env-file infra/local/.env)
@@ -88,8 +88,20 @@ make logs SERVICE=kafka-connect                                # Debezium のエ
    SELECT pg_drop_replication_slot('order_outbox');
    ```
 3. **発行を再開する**: `curl -X PUT localhost:19083/connectors/order-outbox/resume`(スロットは Debezium が作り直す。`snapshot.mode=no_data` なので、これから書かれる Outbox の行だけを発行する)。`CdcOutboxSlotMissing` が出ていれば解消する。
-4. 失われた期間の注文について、受信側の担当者(INT-SALES-002 の consumers)に知らせる。作り直しの手段ができたら(Issue #80)、その手順で発行し直す。
-5. 原因(なぜ上限まで止まっていたか、なぜ警告の段階で直せなかったか)を振り返り、上限・アラート・この手順を見直す。
+4. **イベントを再発行する**(ADR-0046)。既定は dry-run で、件数を数えるだけ。
+   ```bash
+   make order-republish ARGS="--from <始まり> --to <終わり> --reason slot-lost --operator <運用者>"            # 件数を確かめる
+   make order-republish ARGS="--from <始まり> --to <終わり> --reason slot-lost --operator <運用者> --execute"  # 発行する
+   ```
+   - 範囲は注文の受け付けの時刻(`ordered_at`)で決まる。**期間より前に受け付けた注文の遷移も失われているので、始まりは受け付けから完了までの時間の分だけ広めに取る。** 広すぎても、受信側は業務のキーで重複を除く。
+   - 途中で失敗したら、同じ範囲でやり直してよい。
+   - 再発行のイベントにはヘッダ `eiaf.republished`・`eiaf.republish.reason`・`eiaf.republish.run-id` が付く。付いていなければ、コネクタの設定が古い(`infra/local/scripts/connectors.sh order-outbox` で登録し直す)。
+5. 受信側の担当者(INT-SALES-002 の consumers)に、次のことを知らせる。
+   - 失われた期間と、再発行の実行の ID。
+   - **途中の遷移は戻らない。** 今の状態への遷移が、今の版で 1 件だけ届く(`previousStatus` は `PLACED`)。`ce_id` は元と違う。
+   - **Saga は動かし直さない。** 失われた間に Saga のコマンドが届かなかった注文は、段の期限で取り消される(`TIMED_OUT`。ADR-0046 §5)。取り消された注文の扱いは業務の担当者に確かめる。
+6. 分析の日次のパーティションは、31 日以内の日なら次の週次の照合で作り直される。すぐに確かめるなら docs/runbooks/batch-rerun.md の「照合でずれが見つかったとき」の 3。
+7. 原因(なぜ上限まで止まっていたか、なぜ警告の段階で直せなかったか)を振り返り、上限・アラート・この手順を見直す。
 
 ## スロットがない
 `CdcOutboxSlotMissing`。order-service が動いているのに、スロット `order_outbox` がない。**注文は Outbox に書かれるが、誰も WAL を読んでいないので、発行されない。** スロットがない間に書かれた Outbox の行は、後からスロットを作っても読めない(スロットは作った時点より後の WAL しか読まない)。
@@ -99,7 +111,7 @@ make logs SERVICE=kafka-connect                                # Debezium のエ
   - スロットが消された(手で `pg_drop_replication_slot` した、PostgreSQL のボリュームを作り直した)。
 1. コネクタの状態を確かめる(`curl -s localhost:19083/connectors/order-outbox/status`)。ない、または FAILED なら、[警告の段階](#警告の段階) の 1 で登録・再起動する。Debezium がスロットを作る。
 2. スロットができたこと(`select slot_name from pg_replication_slots`)と、アラートが解消したことを確かめる。
-3. スロットがなかった期間に注文があれば、そのイベントは失われている。[lost になったとき](#lost-になったとき) の 1・4 と同じく、期間を記録して知らせる(作り直しは Issue #80)。
+3. スロットがなかった期間に注文があれば、そのイベントは失われている。[lost になったとき](#lost-になったとき) の 1・4・5 と同じく、期間を記録し、再発行して知らせる。
 
 ## 監視が見えないとき
 `CdcMonitoringDown`。postgres-exporter・kafka-exporter・kafka-connect(JMX の `:9404`)のどれかから Prometheus が収集できない。**この間は、上のアラートが出ない(スロットが危なくても気づけない)。**

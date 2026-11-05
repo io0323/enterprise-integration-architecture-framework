@@ -64,4 +64,4 @@ Debezium Outbox Event Router で Avro(Apicurio)のイベントを発行する方
   - スロットの `wal_status` と `safe_wal_size`、保持している WAL(`pg_wal_lsn_diff` = 今の位置 − `restart_lsn`)を postgres-exporter で収集する。**閾値は上限(`max_slot_wal_keep_size`。`pg_settings_max_slot_wal_keep_size_bytes`)に対する割合**で書き(`safe_wal_size` が 25% を切る・遅延が 25% を超える)、上限を変えるとアラートも追従する(promtool のテストで確かめた)。
   - 無効になる前に気づくよう、`wal_status` が `extended` / `unreserved` か残りが 25% を切れば warning(`CdcSlotWalAtRisk`)、`lost` なら critical(`CdcSlotLost`)。
   - **あるはずのスロットがない**(コネクタが一度も起動していない・消された)場合は、スロットのメトリクス自体が出ず、ほかのアラートに当たらない。`absent()` で、order-service と postgres-exporter が動いているのに `order_outbox` がなければ critical(`CdcOutboxSlotMissing`)。
-  - スロットが無効になった期間のイベントは、Outbox が行を消すので戻らない。作り直しの手段は Issue #80。
+  - スロットが無効になった期間のイベントは、Outbox が行を消すので戻らない。作り直しの手段は注文の表からの再発行(ADR-0046)。

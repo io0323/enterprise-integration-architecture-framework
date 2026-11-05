@@ -97,11 +97,9 @@ ROADMAP P08 は、受注のデータを分析の DB(PostgreSQL を DWH と見立
   - 取り込みは黙って先に進まずに失敗する(§4)。
   - 運用者は消えた件数を確かめ、消えた範囲を飛ばして再開する(`batch-etl skip-lost-events --confirm`)。
   - 影響した日は週次の照合で DRIFT として見つける(docs/runbooks/batch-rerun.md の「保持期間を超えた回復」)。
-- **消えたイベントを埋め戻す手段は、今はない**(Issue #116)。
-  - order-service はイベントを再発行できない(Outbox は発行の後に消える)。
-  - 分析は order-service の DB を読まない。
-  - 日次の集計の API は件数とハッシュだけを返す。
-  - 影響した日は、手段ができるまで DRIFT のまま残る。
+- **消えたイベントは、order-service の再発行で埋め戻す**(ADR-0046。P14 で追加。#116)。
+  - 分析は order-service の DB を読まず、日次の集計の API は件数とハッシュだけを返す。この方針は変えない。
+  - 埋め戻した後に、その日を作り直して照合すると MATCH になる(`EventRepublishE2E`)。途中の遷移は戻らない。
 
 ### 8. 日次の売上ファイル(INT-SALES-004。P09 ④)
 - DAG `batch-etl.sales-file`(ステップ `export`)は、日次の DAG(`batch-etl.order-daily`)の **同じ業務の日が成功したら** 起動する(`Trigger.AfterDag`。ADR-0030 §4)。その日の `mart.order_daily` から、`contracts/files/sales_daily.v1.yaml` の売上ファイルを書いて置く(platform/file-transfer の `FilePublisher`。ADR-0032 §2)。SLA は業務の日の翌日 07:00 JST(日次の SLA の 06:00 の後。`BATCH_ETL_FILE_SLA_AT`)。

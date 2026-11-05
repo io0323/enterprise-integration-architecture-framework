@@ -31,7 +31,7 @@ groups:
           summary: "レプリケーションスロット {{ $labels.slot_name }} が保持できる WAL の上限に近づいている"
           runbook: docs/runbooks/cdc-outbox-lag.md#警告の段階
 
-      # スロットが無効になった。読まれていない WAL は消え、Outbox のイベントは戻らない(#80)
+      # スロットが無効になった。読まれていない WAL は消え、Outbox のイベントは戻らない。注文は再発行で作り直す(ADR-0046)
       - alert: CdcSlotLost
         expr: pg_replication_slots_wal_status{wal_status="lost"} == 1 and on(instance) (up == 1)
         labels:
