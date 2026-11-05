@@ -15,6 +15,10 @@ tasks.test {
                 include("**/*.kt")
                 // platform 間の依存の規則は platform/*/build.gradle.kts も読む
                 include("platform/*/build.gradle.kts")
+                // アラートと Runbook・カタログの SLO の規則(ADR-0045)
+                include("infra/local/prometheus/rules/*.rules.yml")
+                include("docs/runbooks/*.md")
+                include("contracts/catalog/*.yaml")
                 exclude("**/build/**", ".gradle/**", "**/.kotlin/**", "**/node_modules/**")
             },
         ).withPathSensitivity(PathSensitivity.RELATIVE)
