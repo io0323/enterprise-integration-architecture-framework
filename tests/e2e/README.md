@@ -25,6 +25,7 @@ make e2e                                            # ./gradlew :tests:e2e:e2eTe
 - GraphQL BFF(`BffE2E`。P13)は、Gateway 経由のクエリの結果と、在庫・出荷のコンテナの停止(部分応答)で確かめる。mTLS の拒否は gRPC のポートに直接つないで確かめる。
 - 障害の注入(`FaultInjectionE2E`。P14。ADR-0044)は、`E2E=1` のときだけ order-service → PostgreSQL、bff-graphql → Gateway、inventory-service → Kafka を Toxiproxy に通す(`make up E2E=1` は `chaos` の profile を足す)。
 - 障害のシナリオ(`ResilienceE2E`。P14)の期待挙動と結果は `docs/reports/p14-resilience.md`。サービスを `compose` で起動し直す部品には `e2e.env` を渡す(渡さないと接続先が Toxiproxy から外れる)。
+- イベントの再発行(`EventRepublishE2E`。P14。ADR-0046)は、Connect の REST とスロットの削除でスロットの失効を、`deleteRecords` で保持期間の超過を作る。トピックの今の末尾までを消すので、ほかのシナリオと同時には動かさない(E2E は順に動く)。
 - B2B / EDI(`B2bGatewayE2E`。P12)は、取引先 partner01 の側として、GnuPG(`make pgp-keys` と同じイメージ `eiaf-gnupg:local`)で
   署名・暗号化した受注の文書を、ホストの `sftp`(`infra/local/secrets/sftp-b2b` の鍵。ホスト鍵は known_hosts に固定)で sftp-b2b に置き、
   届いた応答(CONTRL・APERAK)を取り出して復号・署名の検証をする。受け付け(order の API に取り込んで肯定の APERAK)・業務・スキーマ・構文・
