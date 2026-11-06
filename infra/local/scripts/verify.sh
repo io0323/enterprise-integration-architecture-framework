@@ -23,6 +23,9 @@ compose=(docker compose -f "$here/docker-compose.yml")
 compose+=(--env-file "$here/images.env" --env-file "$here/.env")
 for p in "${profiles[@]}"; do compose+=(--profile "$p"); done
 
+# Kafka Connect の REST(secure profile では Basic 認証。ADR-0047 §7)。認証のない Connect は資格情報を無視するので、いつも付ける
+connect_url="http://eiaf-admin:${CONNECT_REST_PASSWORD:-}@localhost:19083"
+
 passed=0
 failed=0
 pass() { printf 'PASS [%s] %s\n' "$current" "$1"; passed=$((passed + 1)); }
@@ -210,7 +213,7 @@ print(d.get("iss"), ",".join(aud), " ".join(sorted(d.get("scope","").split())))'
 verify_cdc() {
   current="cdc"
   # 実行ごとに名前を変える(同じ名前だと Connect に残ったオフセットから再開し、スナップショットが走らない)
-  local run_id connect=http://localhost:19083
+  local run_id connect=$connect_url
   run_id="$(date +%s)"
   local connector="eiaf-verify-cdc-$run_id" prefix="eiaf-verify-$run_id" slot="eiaf_verify_$run_id"
   local topic="$prefix.public.verify_probe"
@@ -293,7 +296,7 @@ verify_cdc() {
 
 # レガシーの受注表の CDC(P06 ⑤。ADR-0026): legacy-sim → コネクタ legacy-juchu → 生の CDC のトピック(Avro。Apicurio のグループ cdc-raw)
 verify_legacy_cdc() {
-  local connect=http://localhost:19083 topic=_cdc.legacy.public.t_juchu
+  local connect=$connect_url topic=_cdc.legacy.public.t_juchu
   legacy_db() { "${compose[@]}" exec -T postgres psql -U postgres -d legacy_sim -tAc "$1"; }
   legacy_change_arrived() { # legacy_change_arrived <トピック> <受注番号>
     kafka_cli /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic "$1" --from-beginning \
@@ -1071,7 +1074,7 @@ verify_order_saga() {
 # 注文のイベントの発行(Outbox → Debezium → Kafka。ADR-0007・P06 ③b)
 # verify_order_cdc <上で POST した注文 ID> <ゲートウェイの証明書で API を呼ぶ curl...>
 verify_order_cdc() {
-  local order_id="$1" connect=http://localhost:19083 topic=sales.order.created.v1
+  local order_id="$1" connect=$connect_url topic=sales.order.created.v1
   shift
   local gw=("$@")
   check "CDC(order): コネクタ order-outbox とタスクが RUNNING" bash -c \
@@ -1147,7 +1150,7 @@ verify_cdc_monitoring() {
 # order の Outbox のスロットの監視とアラート(コネクタを止めると CdcConnectorDown が firing し、再開すると解消する)
 # verify_order_cdc_alerts <ゲートウェイの証明書で API を呼ぶ curl...>
 verify_order_cdc_alerts() {
-  local connect=http://localhost:19083 gw=("$@") alert
+  local connect=$connect_url gw=("$@") alert
   check "CDC の監視: order_outbox の wal_status・safe_wal_size・遅延を収集している" retry 20 3 bash -c \
     "[[ -n \"\$(curl -fsS -G http://localhost:19090/api/v1/query --data-urlencode 'query=pg_replication_slots_safe_wal_size_bytes{slot_name=\"order_outbox\"} and on(slot_name) pg_replication_slots_wal_status{slot_name=\"order_outbox\",wal_status=\"reserved\"} and on(slot_name) pg_replication_slots_pg_wal_lsn_diff' | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"data\"][\"result\"] or \"\")')\" ]]"
   for alert in CdcSlotWalAtRisk CdcSlotLost CdcSlotLagHigh CdcOutboxSlotMissing CdcConnectorDown CdcMonitoringDown; do
@@ -1556,7 +1559,7 @@ verify_query_grpcs() {
 
 verify_saga() {
   current="saga"
-  local connect=http://localhost:19083
+  local connect=$connect_url
   verify_query_grpcs
   local svc
   for svc in inventory payment shipping; do
@@ -1685,7 +1688,7 @@ verify_batch() {
 # 鍵は値ではなくファイル(secrets/crm-webhook/)。ここでは鍵を読まない(送り手の saas-mock に署名させる。拒否の検査は別の鍵で作る)
 verify_saas() {
   current="saas"
-  local crm=http://localhost:19280 gw=http://localhost:19080/sales/v1/webhooks/crm connect=http://localhost:19083 id
+  local crm=http://localhost:19280 gw=http://localhost:19080/sales/v1/webhooks/crm connect=$connect_url id
   wr_sql() { "${compose[@]}" exec -T postgres psql -U postgres -d webhook_receiver -tAc "$1"; }
   flow_sql() { "${compose[@]}" exec -T postgres psql -U postgres -d integration_flow -tAc "$1"; }
   prom_value() {
@@ -2052,6 +2055,38 @@ verify_secure() {
 
   # コンテナ間のリスナー(PLAINTEXT kafka:9092)は今までどおり(サービスの設定を変えない。ADR-0047 §3)
   check "Kafka: コンテナ間のリスナーは今までどおり使える" kafka_cli /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --describe --topic iot.telemetry.reported.v1
+
+  [[ " ${profiles[*]} " == *" iot "* ]] && verify_secure_mqtt
+  # grep -q は先に終わるので、pipefail で偽にならないよう、一覧を変数に受けてから探す
+  local services
+  services="$("${compose[@]}" config --services)"
+  if grep -qx kafka-connect <<<"$services"; then verify_secure_connect; fi
+}
+
+# MQTT(ADR-0047 §6): ホストの 19883 は TLS のリスナー 8883。書き込みは、デバイスの ACL の内側で iot-bridge が読まないトピックにする
+verify_secure_mqtt() {
+  local out pw
+  out="$(echo | openssl s_client -connect localhost:19883 -servername localhost -verify_hostname localhost -verify_return_error \
+    -CAfile "$here/certs/ca.crt" 2>&1 || true)"
+  if grep -q 'Verify return code: 0 (ok)' <<<"$out"; then pass "MQTT: 19883 は TLS(開発用の CA とホスト名で検証できる)"; else fail "MQTT: 19883 の TLS を検証できない"; fi
+  pw="$(awk '$1 == "t1/d-001" { print $2 }' "$here/secrets/mqtt/device-passwords")"
+  mqtt_tls() { # mqtt_tls <パスワード> [mosquitto_pub の追加の引数...]
+    "${compose[@]}" exec -T mosquitto mosquitto_pub -h localhost -p 8883 -V mqttv5 -q 1 -i "verify-secure-$$" -u t1/d-001 -P "$1" \
+      -t devices/t1/d-001/verify-secure -m x "${@:2}" 2>&1
+  }
+  check "MQTT: TLS とデバイスの資格情報で publish できる" mqtt_tls "$pw" --cafile /mosquitto/tls/ca.crt
+  if mqtt_tls "$pw" >/dev/null; then fail "MQTT: TLS のリスナーに平文でつながる"; else pass "MQTT: TLS のリスナーには平文でつながらない"; fi
+  if mqtt_tls wrong-password --cafile /mosquitto/tls/ca.crt >/dev/null; then fail "MQTT: 誤ったパスワードでつながる"; else pass "MQTT: 誤ったパスワードは拒否される"; fi
+}
+
+# Kafka Connect の REST(ADR-0047 §7): Basic 認証
+verify_secure_connect() {
+  local code
+  code="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:19083/connectors || true)"
+  if [[ "$code" == 401 ]]; then pass "Kafka Connect: 認証なしの REST は 401"; else fail "Kafka Connect: 認証なしの REST が $code"; fi
+  code="$(curl -s -o /dev/null -w '%{http_code}' -u eiaf-admin:wrong-password http://localhost:19083/connectors || true)"
+  if [[ "$code" == 401 ]]; then pass "Kafka Connect: 誤ったパスワードは 401"; else fail "Kafka Connect: 誤ったパスワードが $code"; fi
+  check "Kafka Connect: 資格情報つきの REST は使える" curl -fsS -o /dev/null "$connect_url/connectors"
 }
 
 verify_health

@@ -24,6 +24,8 @@ leaves=(
   "bff-graphql:bff-graphql"
   # Kafka の SASL_SSL のリスナー(secure profile。ADR-0047)。クライアントはホストから localhost、コンテナから kafka でつなぐ
   "kafka:kafka,localhost"
+  # Mosquitto の TLS のリスナー(secure profile。ADR-0047 §6)。デバイスはホストから localhost でつなぐ
+  "mosquitto:mosquitto,localhost"
 )
 
 if [[ "$(id -u)" == 0 ]]; then

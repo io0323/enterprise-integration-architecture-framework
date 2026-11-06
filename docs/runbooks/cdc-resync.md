@@ -9,6 +9,9 @@
 C="docker compose -f infra/local/docker-compose.yml --env-file infra/local/images.env --env-file infra/local/.env"
 ```
 
+
+> `secure` profile(ADR-0047 §7)では、Connect の REST は Basic 認証が要る。下の `curl` に `-u "eiaf-admin:$CONNECT_REST_PASSWORD"` を付ける(パスワードは `infra/local/.env`)。
+
 ## ずれを見つけたとき
 照合は、比べ直しても食い違うキーを「ずれ」として、種類ごとに数える(`eia_reconcile_drift_keys{kind}`、ACL のログの `照合: ずれ …`)。
 1. ずれのキーを全部見る(比べるだけ。取り直さない):

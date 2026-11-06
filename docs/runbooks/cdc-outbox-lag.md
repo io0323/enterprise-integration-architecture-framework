@@ -17,6 +17,8 @@
 仕組み: order-service は注文と同じトランザクションで Outbox(`outbox.outbox`)に書き、行はすぐに消える。Debezium(Kafka Connect のコネクタ `order-outbox`)が、レプリケーションスロット `order_outbox` で WAL を読んで発行する(ADR-0007)。**発行が止まっている間は、スロットが WAL を保持するので欠けない。** ただし、保持できる WAL には上限(`max_slot_wal_keep_size`。ローカルは 1GB)があり、超えるとスロットは無効になって、その間のイベントは戻らない。
 
 ## まず見るもの
+> `secure` profile(ADR-0047 §7)では、Connect の REST は Basic 認証が要る。下の `curl` に `-u "eiaf-admin:$CONNECT_REST_PASSWORD"` を付ける(パスワードは `infra/local/.env`)。
+
 ```bash
 make ps                                                        # kafka-connect・postgres・kafka が healthy か
 curl -s localhost:19083/connectors/order-outbox/status         # コネクタとタスクの状態(RUNNING か。FAILED なら trace に原因)

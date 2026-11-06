@@ -5,6 +5,7 @@ package io.eia.tests.e2e
 import io.eia.tests.e2e.E2eEnvironment.ORDERS
 import io.eia.tests.e2e.E2eEnvironment.http
 import io.eia.tests.e2e.E2eEnvironment.request
+import io.eia.tests.e2e.E2eEnvironment.secret
 import io.eia.tests.e2e.E2eEnvironment.sendRespectingRateLimit
 import io.eia.tests.e2e.SagaKafka.decode
 import io.eia.tests.e2e.SagaKafka.header
@@ -30,6 +31,7 @@ import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -105,7 +107,11 @@ private fun connector(
     http.send(
         HttpRequest
             .newBuilder(URI.create("$CONNECTOR$path"))
-            .method(method, HttpRequest.BodyPublishers.noBody())
+            // Connect の REST の Basic 認証(secure profile だけで有効。認証のない Connect は無視する。ADR-0047 §7)
+            .header(
+                "Authorization",
+                "Basic " + Base64.getEncoder().encodeToString("eiaf-admin:${secret("CONNECT_REST_PASSWORD")}".toByteArray()),
+            ).method(method, HttpRequest.BodyPublishers.noBody())
             .build(),
         HttpResponse.BodyHandlers.ofString(),
     )

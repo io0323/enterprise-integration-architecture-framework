@@ -7,6 +7,9 @@
 # - コンテナ間のリスナー(PLAINTEXT kafka:9092)と CONTROLLER は今までどおり。その principal(User:ANONYMOUS)を super user にする。
 #   サービス・Kafka Connect・exporter は設定を変えずに動く。この縮退の範囲は ADR-0047 §3。
 # - Toxiproxy 向けのリスナー(TOXI_*。chaos profile)は作らない(平文で super user になるため)。secure と chaos・E2E=1 は同時に使えない。
+#
+# MQTT(iot profile と並べたとき): ホストのポート 19883 を TLS のリスナー 8883 に向ける(ADR-0047 §6)。コンテナ間の 1883 は今までどおり。
+# Kafka Connect(cdc / order / saga / saas と並べたとき): REST を Basic 認証にする(ADR-0047 §7)。
 services:
   kafka:
     depends_on:
@@ -27,6 +30,20 @@ services:
       KAFKA_SUPER_USERS: User:ANONYMOUS
     volumes:
       - kafka-secure:/etc/kafka/secure:ro
+
+  mosquitto:
+    environment:
+      MQTT_TLS_CERTS: /mosquitto/certs
+    ports: !override
+      - 127.0.0.1:19883:8883
+    volumes:
+      - ./certs:/mosquitto/certs:ro
+
+  kafka-connect:
+    environment:
+      EIAF_CONNECT_REST_PASSWORD: ${CONNECT_REST_PASSWORD:?make env を実行してください}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null \"http://eiaf-admin:$${EIAF_CONNECT_REST_PASSWORD}@localhost:8083/connector-plugins\""]
 
   # 開発用の鍵(0600。ホストの利用者のもの)を、ブローカー(uid 1000)が読める形でボリュームに置く。1 回だけ動いて終わる。
   # 鍵をホストで読める権限に広げないため、root で読んでボリュームの中だけで所有者を変える

@@ -44,6 +44,19 @@ if ((${#missing[@]} > 0)); then
   exit 1
 fi
 
+# secure profile(ADR-0047 §7): REST を Basic 認証にする。パスワードは EIAF_CONNECT_REST_PASSWORD(CONNECT_ で始めないので、
+# 上の規則で設定のファイルに入らない)。ユーザーは eiaf-admin だけ。資格情報のファイルはコンテナの中だけに置く
+if [[ -n "${EIAF_CONNECT_REST_PASSWORD:-}" ]]; then
+  auth_dir=/tmp/connect-auth
+  mkdir -p "$auth_dir"
+  (umask 077 && printf 'eiaf-admin: %s\n' "$EIAF_CONNECT_REST_PASSWORD" >"$auth_dir/users.properties")
+  printf 'KafkaConnect {\n  org.apache.kafka.connect.rest.basic.auth.extension.PropertyFileLoginModule required\n  file="%s/users.properties";\n};\n' \
+    "$auth_dir" >"$auth_dir/jaas.conf"
+  props[rest.extension.classes]=org.apache.kafka.connect.rest.basic.auth.extension.BasicAuthSecurityRestExtension
+  export KAFKA_OPTS="${KAFKA_OPTS:-} -Djava.security.auth.login.config=$auth_dir/jaas.conf"
+  echo "Kafka Connect の REST を Basic 認証にしました(secure profile)"
+fi
+
 mkdir -p "$config_dir"
 : >"$config_file"
 for key in $(printf '%s\n' "${!props[@]}" | sort); do
