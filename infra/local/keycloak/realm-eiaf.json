@@ -199,6 +199,69 @@
       "fullScopeAllowed": false,
       "defaultClientScopes": [],
       "optionalClientScopes": ["sales.order:read", "order-api-audience", "inventory.stock:read", "inventory-grpc-audience", "shipping.shipment:read", "shipping-grpc-audience"]
+    },
+    {
+      "clientId": "eiaf-schema-publisher",
+      "name": "契約のスキーマの登録(schema-publish・Kafka Connect の Converter)。Apicurio の sr-developer(secure profile。ADR-0047 §9)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${EIAF_SCHEMA_PUBLISHER_CLIENT_SECRET}",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "fullScopeAllowed": false,
+      "defaultClientScopes": [],
+      "optionalClientScopes": [],
+      "protocolMappers": [
+        {
+          "name": "realm-roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": { "claim.name": "realm_access.roles", "multivalued": "true", "access.token.claim": "true", "id.token.claim": "false", "userinfo.token.claim": "false", "jsonType.label": "String" }
+        }
+      ]
+    },
+    {
+      "clientId": "eiaf-registry-admin",
+      "name": "Apicurio の管理(グローバルのルールの変更)。sr-admin(secure profile。ADR-0047 §9)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${EIAF_REGISTRY_ADMIN_CLIENT_SECRET}",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "fullScopeAllowed": false,
+      "defaultClientScopes": [],
+      "optionalClientScopes": [],
+      "protocolMappers": [
+        {
+          "name": "realm-roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": { "claim.name": "realm_access.roles", "multivalued": "true", "access.token.claim": "true", "id.token.claim": "false", "userinfo.token.claim": "false", "jsonType.label": "String" }
+        }
+      ]
     }
+  ],
+  "roles": {
+    "realm": [
+      { "name": "sr-admin", "description": "Apicurio Registry の管理(グローバルのルール。secure profile。ADR-0047 §9)" },
+      { "name": "sr-developer", "description": "Apicurio Registry へのスキーマの登録(secure profile。ADR-0047 §9)" },
+      { "name": "sr-readonly", "description": "Apicurio Registry の読み取り(secure profile。ADR-0047 §9)" }
+    ]
+  },
+  "scopeMappings": [
+    { "client": "eiaf-schema-publisher", "roles": ["sr-developer"] },
+    { "client": "eiaf-registry-admin", "roles": ["sr-admin"] }
+  ],
+  "users": [
+    { "username": "service-account-eiaf-schema-publisher", "enabled": true, "serviceAccountClientId": "eiaf-schema-publisher", "realmRoles": ["sr-developer"] },
+    { "username": "service-account-eiaf-registry-admin", "enabled": true, "serviceAccountClientId": "eiaf-registry-admin", "realmRoles": ["sr-admin"] }
   ]
 }

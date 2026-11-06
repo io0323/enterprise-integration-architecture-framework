@@ -61,7 +61,9 @@ docker compose -f infra/local/docker-compose.yml --env-file infra/local/images.e
 
 - `iot` と並べると、MQTT のホストのポート(19883)を TLS(8883)に向ける。`cdc`・`order`・`saga`・`saas` と並べると、Kafka Connect の REST(19083)を Basic 認証(`eiaf-admin` / `.env` の `CONNECT_REST_PASSWORD`)にする。
 - 普段の起動(`secure` なし)は平文のまま変わらない。コンテナ間のリスナー(`kafka:9092`・`mosquitto:1883`)は `secure` でも平文で、サービスの設定は変わらない。
+- Apicurio(19081)は、書き込みに Keycloak のトークン(`sr-developer`。クライアント `eiaf-schema-publisher`)、グローバルのルールの変更に `sr-admin`(`eiaf-registry-admin`)が要る。読み取りは認証なし。`make schemas PROFILE=secure` はトークンを付けて登録する(ADR-0047 §9)。
 - S3・Keycloak・APISIX・Prometheus・Loki・Tempo・OTel Collector・Toxiproxy は `secure` でも平文・未認証で、127.0.0.1 だけへの公開で代替する(ADR-0047 §8)。
+- Keycloak の realm は初回の起動でだけ読み込む。既にある基盤で `secure` を使うときは、先に `make clean` する。
 - `secure` は `chaos`・`E2E=1` と同時に使えない。ホストから平文でつなぐツール(E2E・`make dlq-replay`)も使えない。
 - 止めるときも `PROFILE=secure` を付ける(`make clean PROFILE=secure`。付けないと、証明書のボリューム `kafka-secure` が残る)。
 

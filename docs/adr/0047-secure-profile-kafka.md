@@ -77,9 +77,24 @@ P14 の計画では、`secure` を **任意の profile** にすると決めた�
 | S3(SeaweedFS)・Keycloak・APISIX | http | TLS(製品の機能か、前段の TLS の終端) |
 | Prometheus(OTLP・remote write の受信)・Loki・Tempo・OTel Collector の OTLP の受信 | 未認証 | TLS と認証(mTLS かトークン)。ネットワークも分ける |
 | Toxiproxy の API | 未認証 | 本番には置かない(障害の注入はローカルと CI だけ) |
-| Apicurio の REST | 未認証 | OIDC(P14 ⑨b で `secure` に足す) |
 
 TLS にしない理由: 対象が多く、それぞれの証明書・クライアントの設定(サービス・Grafana・Prometheus の scrape)が増える割に、ローカルで確かめられることが少ない。TLS の設定の仕方は、Kafka・MQTT・APISIX → サービスの mTLS(ADR-0024)・gRPC(ADR-0042)で示している。
+
+### 9. Apicurio の REST を Keycloak の OIDC で守る(#29)
+`secure` では、Apicurio の役割による認可を有効にする。役割は Keycloak のトークンの `realm_access.roles`。
+
+| 操作 | 必要なもの |
+|---|---|
+| 読み取り(スキーマ・ルール・内容からの版の検索) | なし(匿名で読める) |
+| 登録(版の追加・削除を含む) | `sr-developer`(Keycloak のクライアント `eiaf-schema-publisher`) |
+| グローバルのルールの変更などの管理 | `sr-admin`(Keycloak のクライアント `eiaf-registry-admin`) |
+
+- **読み取りを匿名で許す理由**: サービス・batch-etl・Connect の Converter は、起動時と読むときにスキーマを引く(内容からの検索は POST だが、読み取りとして扱われる)。全サービスにトークンの取得を足すと範囲が大きい。本番では、読み取りにも `sr-readonly` のトークンを求める。
+- 書き込む側は client credentials のトークンを取る:
+  - `schema-publish`(compose と `make schemas`): `SCHEMA_PUBLISH_TOKEN_URL`・`SCHEMA_PUBLISH_CLIENT_ID`・`SCHEMA_PUBLISH_CLIENT_SECRET`。3 つがそろわなければ止まる(黙って認証なしで送らない)。起動直後の Keycloak の遅い応答は再試行で待つ。
+  - Kafka Connect の Converter(`legacy-juchu` の生の CDC のスキーマの自動登録): `connectors.sh` が `secure` のときだけ `apicurio.registry.auth.*` を足す。Client Secret は Connect の環境変数を `${env:...}` で参照する。
+- Keycloak の realm に、役割(`sr-admin`・`sr-developer`・`sr-readonly`)と 2 つのクライアントを足した。realm は `secure` によらず同じ(役割とクライアントがあるだけで、普段の起動では使わない)。
+- 管理の UI(ブラウザのログイン)は扱わない。REST だけを守る。
 
 ## Alternatives Considered
 - **サービスも自分のユーザーで SASL_SSL につなぐ**: ACL の効き目をサービスの動作で確かめられる。全サービスの Kafka のクライアントと Connect・exporter・ツールの設定が変わり、範囲が大きい。今回は入れない(§3 の本番との違いとして残す)。
@@ -93,6 +108,8 @@ TLS にしない理由: 対象が多く、それぞれの証明書・クライ�
 - SCRAM のパスワードは、ユーザーを作るときにコンテナの中のコマンドの引数に一時的に出る(ホストのコマンドラインとログには出さない)。
 - compose のファイルが 2 つになる。`secure` のときは、両方を読む compose のコマンドで操作する(`make` を使う)。
 - MQTT のホストのポートは `!override` で入れ替える(Compose 2.24 以降の書き方)。
+- Keycloak は realm を初回の起動でだけ読み込む。既にあるローカルの基盤で `secure` の Apicurio を使うには、`make clean` で作り直す(realm にクライアントが足りないと、トークンを取れない)。
 
 ## 改訂履歴
 - 2026-11-06: MQTT の TLS(§6)、Kafka Connect の REST の Basic 認証(§7)、127.0.0.1 だけへの公開で代替する範囲(§8)を足した(P14 ⑨a。#29)。
+- 2026-11-06: Apicurio の REST の OIDC(§9)を足した(P14 ⑨b。#29 を閉じる)。

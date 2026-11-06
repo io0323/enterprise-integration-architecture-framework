@@ -10,6 +10,8 @@ application {
 
 dependencies {
     implementation(project(":platform:schema-registry"))
+    // secure profile の Apicurio の認証(client credentials のトークン。ADR-0047 §9)
+    implementation(project(":platform:security"))
     implementation(libs.jackson3.dataformat.yaml)
     implementation(libs.ktor.client.cio)
     implementation(libs.kotlinx.coroutines.core)

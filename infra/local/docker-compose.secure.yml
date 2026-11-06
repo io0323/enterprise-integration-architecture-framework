@@ -31,6 +31,29 @@ services:
     volumes:
       - kafka-secure:/etc/kafka/secure:ro
 
+  # Apicurio の REST を Keycloak の OIDC で守る(ADR-0047 §9)。読み取りは認証なしで許し、書き込みは sr-developer、
+  # グローバルのルールの変更などの管理は sr-admin。役割は Keycloak のトークンの realm_access.roles
+  apicurio:
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    environment:
+      QUARKUS_OIDC_TENANT_ENABLED: "true"
+      QUARKUS_OIDC_AUTH_SERVER_URL: http://keycloak:8080/realms/eiaf
+      APICURIO_AUTH_ROLE_BASED_AUTHORIZATION: "true"
+      APICURIO_AUTH_ROLE_SOURCE: token
+      APICURIO_AUTH_ANONYMOUS_READ_ACCESS_ENABLED: "true"
+
+  # 契約のスキーマの登録は、client credentials のトークンを付ける(Keycloak の eiaf-schema-publisher。sr-developer)
+  schema-publish:
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    environment:
+      SCHEMA_PUBLISH_TOKEN_URL: http://keycloak:8080/realms/eiaf/protocol/openid-connect/token
+      SCHEMA_PUBLISH_CLIENT_ID: eiaf-schema-publisher
+      SCHEMA_PUBLISH_CLIENT_SECRET: ${EIAF_SCHEMA_PUBLISHER_CLIENT_SECRET:?make env を実行してください}
+
   mosquitto:
     environment:
       MQTT_TLS_CERTS: /mosquitto/certs
@@ -42,6 +65,8 @@ services:
   kafka-connect:
     environment:
       EIAF_CONNECT_REST_PASSWORD: ${CONNECT_REST_PASSWORD:?make env を実行してください}
+      # Apicurio の Converter(legacy-juchu の生の CDC のスキーマの自動登録)のトークンの取得(connectors.sh が ${env:...} で参照する)
+      EIAF_SCHEMA_PUBLISHER_CLIENT_SECRET: ${EIAF_SCHEMA_PUBLISHER_CLIENT_SECRET:?make env を実行してください}
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null \"http://eiaf-admin:$${EIAF_CONNECT_REST_PASSWORD}@localhost:8083/connector-plugins\""]
 

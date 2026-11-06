@@ -18,7 +18,20 @@ connect_curl() { curl -K <(printf 'user = "eiaf-admin:%s"\n' "$password") "$@"; 
 for name in "$@"; do
   file="$here/kafka-connect/$name.json"
   [[ -f "$file" ]] || { echo "コネクタの設定がありません: $file" >&2; exit 1; }
-  config="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["name"]==sys.argv[2], "name が違います"; print(json.dumps(d["config"]))' "$file" "$name")"
+  # secure profile(EIAF_SECURE=1。Makefile が渡す)では、Apicurio の Converter に client credentials のトークンの取得を足す
+  # (Apicurio の書き込みは sr-developer だけ。ADR-0047 §9)。Client Secret は Connect の環境変数を ${env:...} で参照する
+  config="$(EIAF_SECURE="${EIAF_SECURE:-}" python3 -I -c '
+import json, os, sys
+d = json.load(open(sys.argv[1]))
+assert d["name"] == sys.argv[2], "name が違います"
+c = d["config"]
+if os.environ.get("EIAF_SECURE") == "1":
+    for side in ("key.converter", "value.converter"):
+        if (side + ".apicurio.registry.url") in c:
+            c[side + ".apicurio.registry.auth.service.token.endpoint"] = "http://keycloak:8080/realms/eiaf/protocol/openid-connect/token"
+            c[side + ".apicurio.registry.auth.client.id"] = "eiaf-schema-publisher"
+            c[side + ".apicurio.registry.auth.client.secret"] = "${env:EIAF_SCHEMA_PUBLISHER_CLIENT_SECRET}"
+print(json.dumps(c))' "$file" "$name")"
   connect_curl -fsS -o /dev/null -X PUT "$connect/connectors/$name/config" -H 'Content-Type: application/json' -d "$config"
   printf 'コネクタ %s を登録しました。RUNNING を待ちます' "$name"
   for ((i = 0; i < 60; i++)); do
