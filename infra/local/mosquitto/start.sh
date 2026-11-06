@@ -45,4 +45,22 @@ echo "MQTT のユーザー: デバイス ${count} 台・iot-bridge・eiaf-monito
 
 chown mosquitto:mosquitto "$passwd" "$acl"
 chmod 0700 "$passwd" "$acl"
-exec /docker-entrypoint.sh mosquitto -c /mosquitto/config/mosquitto.conf
+
+# secure profile(ADR-0047 §6): TLS のリスナー 8883 を足す。証明書は開発用の CA(make certs)。鍵はホストの利用者の 0600 なので、
+# root のうちに読んで mosquitto の所有で置き直す。コンテナ間のリスナー 1883(iot-bridge・監視)は今までどおり
+config=/mosquitto/config/mosquitto.conf
+if [ -n "${MQTT_TLS_CERTS:-}" ]; then
+  tls=/mosquitto/tls
+  mkdir -p "$tls"
+  cp "$MQTT_TLS_CERTS/ca.crt" "$MQTT_TLS_CERTS/mosquitto.crt" "$MQTT_TLS_CERTS/mosquitto.key" "$tls/"
+  chown -R mosquitto:mosquitto "$tls"
+  config=/mosquitto/run.conf
+  {
+    cat /mosquitto/config/mosquitto.conf
+    printf '\nlistener 8883\nprotocol mqtt\ncafile %s/ca.crt\ncertfile %s/mosquitto.crt\nkeyfile %s/mosquitto.key\ntls_version tlsv1.2\n' \
+      "$tls" "$tls" "$tls"
+  } >"$config"
+  chown mosquitto:mosquitto "$config"
+  echo "MQTT の TLS のリスナー 8883 を足しました(secure profile)"
+fi
+exec /docker-entrypoint.sh mosquitto -c "$config"

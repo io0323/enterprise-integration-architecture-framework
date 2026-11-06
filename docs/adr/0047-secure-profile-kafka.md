@@ -1,8 +1,8 @@
-# ADR-0047: secure profile(Kafka の SASL_SSL と ACL)
+# ADR-0047: secure profile(Kafka の SASL_SSL と ACL・MQTT の TLS・管理 API の認証)
 - Status: Accepted
 - Date: 2026-11-06
 - Framework 参照章: 6, 12, 16
-- 関連: ADR-0008(ローカルで縮退する範囲)、ADR-0016 §8(secure profile を P03 から外した)、ADR-0006(コマンド)、#26
+- 関連: ADR-0008(ローカルで縮退する範囲)、ADR-0016 §8(secure profile を P03 から外した)、ADR-0006(コマンド)、ADR-0039 §3(MQTT の認証)、#26、#29
 - 番号: P14 の計画で決めた番号(0044 障害注入 / 0045 SLO / 0046 イベントの再発行 / 0047 secure profile)
 
 ## Context
@@ -58,6 +58,29 @@ P14 の計画では、`secure` を **任意の profile** にすると決めた�
 - 書き込みの確認は、カタログに購読者のいない `iot.telemetry.reported.v1` に 1 件だけ書く(ほかの検査と分析に影響しない)。
 - カタログから ACL を作る規則は、単体テスト(`kafka_acls_test.py`)を CI の `build` で毎回動かす。カタログの変更で作れなくなれば、そこで分かる。
 
+### 6. MQTT のホスト向けのリスナーを TLS にする(#29)
+- `iot` と並べたとき、ホストのポート 19883 を TLS のリスナー 8883 に向ける。証明書は開発用の CA の `mosquitto.crt`(SAN `mosquitto`・`localhost`)。
+- 認証と ACL(デバイスごとの資格情報。ADR-0039 §3)は今までどおり。TLS の上で同じ資格情報を使う。
+- コンテナ間のリスナー 1883(iot-bridge・監視の Telegraf・ヘルスチェック)は平文のまま。Kafka と同じ縮退(§3)。
+- ホストのポートを入れ替えるので、ホストから平文でつなぐデバイスのシミュレータ(E2E)は `secure` では使えない。
+
+### 7. Kafka Connect の REST を Basic 認証にする(#29)
+- Connect の `BasicAuthSecurityRestExtension` を使う。ユーザーは `eiaf-admin` だけで、パスワードは `.env` の `CONNECT_REST_PASSWORD`。
+- `connectors.sh`・`verify.sh`・E2E は、profile によらず資格情報を送る(認証のない Connect は無視する)。運用者の `curl` は `-u eiaf-admin:...` が要る(Runbook)。
+- mTLS ではなく Basic 認証にしたのは、Connect の REST の利用者(スクリプトと運用者)が証明書を持たないため。TLS は付けず、127.0.0.1 だけへの公開で代替する(§8)。
+
+### 8. 残りの転送路と受信口は、127.0.0.1 だけへの公開で代替する(#29)
+次は `secure` でも平文・未認証のまま。どれも 127.0.0.1 にだけ公開する(ADR-0016 §6)。**本番ではすべての転送路を TLS にし、受信口に認証を付ける。**
+
+| 対象 | ローカル | 本番 |
+|---|---|---|
+| S3(SeaweedFS)・Keycloak・APISIX | http | TLS(製品の機能か、前段の TLS の終端) |
+| Prometheus(OTLP・remote write の受信)・Loki・Tempo・OTel Collector の OTLP の受信 | 未認証 | TLS と認証(mTLS かトークン)。ネットワークも分ける |
+| Toxiproxy の API | 未認証 | 本番には置かない(障害の注入はローカルと CI だけ) |
+| Apicurio の REST | 未認証 | OIDC(P14 ⑨b で `secure` に足す) |
+
+TLS にしない理由: 対象が多く、それぞれの証明書・クライアントの設定(サービス・Grafana・Prometheus の scrape)が増える割に、ローカルで確かめられることが少ない。TLS の設定の仕方は、Kafka・MQTT・APISIX → サービスの mTLS(ADR-0024)・gRPC(ADR-0042)で示している。
+
 ## Alternatives Considered
 - **サービスも自分のユーザーで SASL_SSL につなぐ**: ACL の効き目をサービスの動作で確かめられる。全サービスの Kafka のクライアントと Connect・exporter・ツールの設定が変わり、範囲が大きい。今回は入れない(§3 の本番との違いとして残す)。
 - **SASL/PLAIN**: 設定は簡単だが、パスワードそのものを送る。TLS の上でも、SCRAM より弱い。不採用。
@@ -69,5 +92,7 @@ P14 の計画では、`secure` を **任意の profile** にすると決めた�
 - ローカルでは、サービス自身は ACL の制限を受けない(§3)。カタログの ACL が足りなくても、サービスの動作では気づかない。
 - SCRAM のパスワードは、ユーザーを作るときにコンテナの中のコマンドの引数に一時的に出る(ホストのコマンドラインとログには出さない)。
 - compose のファイルが 2 つになる。`secure` のときは、両方を読む compose のコマンドで操作する(`make` を使う)。
+- MQTT のホストのポートは `!override` で入れ替える(Compose 2.24 以降の書き方)。
 
 ## 改訂履歴
+- 2026-11-06: MQTT の TLS(§6)、Kafka Connect の REST の Basic 認証(§7)、127.0.0.1 だけへの公開で代替する範囲(§8)を足した(P14 ⑨a。#29)。

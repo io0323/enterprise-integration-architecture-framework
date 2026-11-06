@@ -19,6 +19,7 @@
 | `shipping-service.crt` / `.key` | サーバ証明書(SAN `shipping-service`・`localhost`) | 30 日 | shipping-service の gRPC のポート(9443。ADR-0042 §5) |
 | `bff-graphql.crt` / `.key` | BFF のクライアント証明書(SAN `bff-graphql`) | 30 日 | BFF から gRPC のサービスへの接続(ADR-0042 §5) |
 | `kafka.crt` / `.key` | Kafka のホスト向けの SASL_SSL のリスナー(SAN `kafka`・`localhost`) | 30 日 | `secure` profile だけ(ADR-0047)。作り直したら `make up PROFILE=secure` で入れ替える |
+| `mosquitto.crt` / `.key` | MQTT の TLS のリスナー(SAN `mosquitto`・`localhost`) | 30 日 | `secure` profile を `iot` と並べたときだけ(ADR-0047 §6)。作り直したら `make up PROFILE="iot secure"` で入れ替える |
 
 - 鍵は EC P-256 の PKCS#8(`BEGIN PRIVATE KEY`)で、権限は 0600。コンテナは、`make certs` を実行した利用者の uid で動いて読む。**root(uid 0)では `make up` と `make certs` は止まる**(ADR-0024 §7)。root 以外の利用者で実行する。
 - order-service は、クライアント証明書を CA の署名に加えて SAN の許可の一覧(`ORDER_TLS_ALLOWED_CLIENTS`。既定 `apisix`)でも確かめる。
