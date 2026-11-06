@@ -22,6 +22,8 @@ leaves=(
   "inventory-service:inventory-service,localhost"
   "shipping-service:shipping-service,localhost"
   "bff-graphql:bff-graphql"
+  # Kafka の SASL_SSL のリスナー(secure profile。ADR-0047)。クライアントはホストから localhost、コンテナから kafka でつなぐ
+  "kafka:kafka,localhost"
 )
 
 if [[ "$(id -u)" == 0 ]]; then

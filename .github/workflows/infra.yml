@@ -51,6 +51,9 @@ jobs:
               --profile core --profile "$profile" config --quiet
             echo "::endgroup::"
           done
+          # secure は override のファイルを重ねる(ADR-0047)
+          docker compose -f infra/local/docker-compose.yml -f infra/local/docker-compose.secure.yml --env-file infra/local/images.env \
+            --env-file infra/local/.env --profile core --profile secure config --quiet
       - name: Every image is pinned by tag and digest
         run: |
           bad="$(grep -E '^[A-Z0-9_]+_IMAGE=' infra/local/images.env | grep -v -E '^[A-Z0-9_]+_IMAGE=[^@[:space:]]+:[^@[:space:]]+@sha256:[0-9a-f]{64}$' || true)"
@@ -87,7 +90,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        profile: [core, cdc, iot, file, b2b, chaos, order, saga, batch, saas, "order saga bff"]
+        profile: [core, cdc, iot, file, b2b, chaos, order, saga, batch, saas, "order saga bff", secure]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Docker versions

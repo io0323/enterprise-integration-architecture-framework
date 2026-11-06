@@ -11,14 +11,14 @@ CLAUDE.md §6 の「設計書と乖離する場合は ADR を書く」に従い�
 | 項目 | Framework の要求 | 本実装 | 本番での置き換え |
 |---|---|---|---|
 | Secrets(12.2) | Vault 型の集中管理と自動ローテーション | `platform/security` に `SecretProvider` Port を定義し、ローカルは環境変数と Docker secrets で実装する | Vault / OpenBao / クラウドの Secret Manager の Adapter を追加する |
-| mTLS(12.1) | 内部サービス間・B2B・高機密連携で必須 | `infra/local/certs/` の開発用 CA(スクリプトで生成し、コミットしない)で、**APISIX → サービス**(P05)と **gRPC**(P13)に適用する。Kafka の SSL / ACL は任意の `secure` profile とする | Service Mesh か証明書の自動ローテーション基盤 |
+| mTLS(12.1) | 内部サービス間・B2B・高機密連携で必須 | `infra/local/certs/` の開発用 CA(スクリプトで生成し、コミットしない)で、**APISIX → サービス**(P05)と **gRPC**(P13)に適用する。Kafka の SSL / ACL は任意の `secure` profile とする(ADR-0047。SASL_SSL + SCRAM、ACL はカタログから作る) | Service Mesh か証明書の自動ローテーション基盤 |
 | ワークフロー(7.2) | DAG オーケストレータ、完了起動、SLA の遅延予測 | `platform/batch` に軽量 DAG ランナーを作る(ADR-0030): DAG 定義(Kotlin DSL)、前段の完了イベント・ファイル到着での起動、Checkpoint、SLA 遅延予測のメトリクス | 汎用のワークフロー基盤(ADR で選定) |
 | Audit(14.1) | 改竄不能なストレージに記録 | `platform/audit`: PostgreSQL の追記専用テーブル(UPDATE / DELETE 権限を付けない)に、前のレコードのハッシュを含めるハッシュチェーンで記録する。日次でチェーンの先頭ハッシュを S3 互換ストレージ(SeaweedFS。ADR-0015)の Object Lock(Compliance モード)に保存する | WORM ストレージや監査専用基盤 |
 | B2B Protocol(11.1) | AS2(MDN)を既定、SFTP、OFTP2 | SFTP のみ。受領応答は CONTRL 相当のドキュメントで返す | AS2 / OFTP2 対応の B2B Gateway |
 | 保存データの暗号化(12.2) | Broker・キュー・ステージング・ファイル保管の暗号化、フィールドレベル暗号化 | **範囲外**。ファイルの PGP 暗号化(P09)とマスキングユーティリティのみ実装する | 各基盤の暗号化機能と KMS |
 | Service Mesh(17.2) | 内部同期は gRPC + Service Mesh(mTLS) | **範囲外**。mTLS は上記の範囲で直接設定する | Service Mesh |
 | Event Mesh(4.1) | 複数 Broker・リージョンの接続 | **範囲外**。単一の Kafka クラスタ | 必要時に ADR |
-| 転送路の暗号化(9, 12.2) | 全連携で TLS1.2+(平文禁止) | **ローカルは平文**: Kafka(PLAINTEXT。SASL_SSL は #26)、MQTT(1883)、S3(SeaweedFS の http)、Keycloak(`sslRequired: none`)、APISIX(http)。SFTP は SSH で暗号化される。すべて 127.0.0.1 にだけ公開する(ADR-0016 §6)。TLS 化は #29 | 各基盤の TLS と証明書の自動ローテーション |
+| 転送路の暗号化(9, 12.2) | 全連携で TLS1.2+(平文禁止) | **ローカルは平文**: Kafka(PLAINTEXT。任意の `secure` profile ではホスト向けを SASL_SSL。ADR-0047)、MQTT(1883)、S3(SeaweedFS の http)、Keycloak(`sslRequired: none`)、APISIX(http)。SFTP は SSH で暗号化される。すべて 127.0.0.1 にだけ公開する(ADR-0016 §6)。TLS 化は #29 | 各基盤の TLS と証明書の自動ローテーション |
 | 基盤の管理 API の認証(12.3) | 境界内でも認証必須 | **ローカルは未認証**: Apicurio の REST、Kafka Connect の REST、Toxiproxy の API、Prometheus の OTLP / remote write 受信、Loki、Tempo、OTel Collector の OTLP 受信。127.0.0.1 にだけ公開する。認証の追加は #29 | 各製品の認証(Apicurio は OIDC、Connect の REST は Basic 認証か mTLS など)とネットワーク分離 |
 
 ## Alternatives Considered
@@ -40,3 +40,4 @@ CLAUDE.md §6 の「設計書と乖離する場合は ADR を書く」に従い�
 - 2026-10-14: ワークフローの軽量 DAG ランナーを `platform/batch` に実装した(P08 ②。ADR-0030)。前段の完了は、イベントではなく実行の記録(DB)を見て判定する(ADR-0030 §4)。
 - 2026-11-03: gRPC の mTLS を `platform/grpc` に実装した(P13 ②。ADR-0042 §5)。
 - 2026-11-03: BFF の複雑度の枠はプロセスの中に持つ。本番で複数台にすると実質の枠が台数倍になる(P13 ⑧a・⑧b。ADR-0043 §9)。
+- 2026-11-06: Kafka の `secure` profile を作った(ADR-0047。#26)。ホスト向けのリスナーを SASL_SSL にし、ACL をカタログから作る。コンテナ間のリスナーは平文のままで、サービスは ACL の制限を受けない(ADR-0047 §3)。

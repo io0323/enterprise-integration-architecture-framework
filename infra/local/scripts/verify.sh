@@ -17,7 +17,10 @@ source "$here/images.env"
 source "$here/.env"
 set +a
 
-compose=(docker compose -f "$here/docker-compose.yml" --env-file "$here/images.env" --env-file "$here/.env")
+compose=(docker compose -f "$here/docker-compose.yml")
+# secure profile は override のファイルを重ねる(Makefile の COMPOSE と同じ。ADR-0047)
+[[ " $* " == *" secure "* ]] && compose+=(-f "$here/docker-compose.secure.yml")
+compose+=(--env-file "$here/images.env" --env-file "$here/.env")
 for p in "${profiles[@]}"; do compose+=(--profile "$p"); done
 
 passed=0
@@ -56,7 +59,7 @@ client_token() {
 header_value() { awk -v name="$(tr '[:upper:]' '[:lower:]' <<<"$1")" -F': ' 'tolower($1) == name { sub(/\r$/, "", $2); print $2; exit }'; }
 
 # 1 回だけ動いて終わるコンテナ(終了コード 0 で終わっていれば正常)
-oneshot_services=" order-migrate schema-publish legacy-migrate kafka-topics inventory-migrate payment-migrate shipping-migrate batch-etl-migrate file-exchange-migrate b2b-gateway-migrate webhook-receiver-migrate integration-flow-migrate "
+oneshot_services=" order-migrate schema-publish legacy-migrate kafka-topics kafka-secure-certs inventory-migrate payment-migrate shipping-migrate batch-etl-migrate file-exchange-migrate b2b-gateway-migrate webhook-receiver-migrate integration-flow-migrate "
 
 # ------------------------------------------------------------------ 共通: healthy
 verify_health() {
@@ -153,8 +156,14 @@ print(d.get("iss"), ",".join(aud), " ".join(sorted(d.get("scope","").split())))'
   "${compose[@]}" exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka $kbin/kafka-topics.sh --bootstrap-server kafka:9092 --delete --topic "$topic" >/dev/null 2>&1 || true
   check "Kafka: トピックを作成できる" \
     "${compose[@]}" exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka $kbin/kafka-topics.sh --bootstrap-server kafka:9092 --create --topic "$topic" --partitions 1 --replication-factor 1
-  check "Kafka: ホストのリスナー(localhost:19092)から produce できる" \
-    kafka_cli $kbin/kafka-console-producer.sh --bootstrap-server localhost:19092 --topic "$topic" <<<"verify-$$"
+  if [[ " ${profiles[*]} " == *" secure "* ]]; then
+    # secure profile ではホストのリスナーは SASL_SSL(verify_secure で確かめる)。ここはコンテナ間のリスナーで書く
+    check "Kafka: コンテナ間のリスナー(kafka:9092)から produce できる" \
+      kafka_cli $kbin/kafka-console-producer.sh --bootstrap-server kafka:9092 --topic "$topic" <<<"verify-$$"
+  else
+    check "Kafka: ホストのリスナー(localhost:19092)から produce できる" \
+      kafka_cli $kbin/kafka-console-producer.sh --bootstrap-server localhost:19092 --topic "$topic" <<<"verify-$$"
+  fi
   if grep -q -- "verify-$$" <<<"$(consume "$topic" 1 15000)"; then pass "Kafka: consume できる"; else fail "Kafka: consume できる"; fi
   "${compose[@]}" exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka $kbin/kafka-topics.sh --bootstrap-server kafka:9092 --delete --topic "$topic" >/dev/null 2>&1 || true
   local produce_output
@@ -1983,6 +1992,66 @@ verify_bff() {
   else
     fail "Grafana: ダッシュボード eiaf-bff を読み込めない"
   fi
+}
+
+# ------------------------------------------------------------------ secure(Kafka の SASL_SSL と ACL。ADR-0047)
+# クライアントの設定(パスワードを含む)をブローカーのコンテナの /tmp に置き、ホスト向けのリスナー(localhost:19092)につなぐ。
+# 書き込みの確認は、カタログに購読者のいない iot.telemetry.reported.v1 に 1 件だけ書く(ほかの検査と分析に影響しない)
+secure_client() { # secure_client <ユーザー> [パスワード](パスワードを省けば secrets/kafka/<ユーザー>)
+  local pw="${2:-$(cat "$here/secrets/kafka/$1")}"
+  printf 'security.protocol=SASL_SSL\nsasl.mechanism=SCRAM-SHA-512\nssl.truststore.type=PEM\nssl.truststore.location=/etc/kafka/secure/ca.crt\n%s\n%s\n' \
+    "sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username=\"$1\" password=\"$pw\";" \
+    'request.timeout.ms=10000' | "${compose[@]}" exec -T kafka sh -c "umask 077; cat > /tmp/verify-$1.properties"
+}
+secure_errors() { grep -E -o '(TopicAuthorization|GroupAuthorization|SaslAuthentication)Exception' | sort -u | tr '\n' ' '; }
+secure_produce() { # secure_produce <ユーザー> <トピック>(出力の例外の名前)
+  echo verify-secure | kafka_cli /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server localhost:19092 --topic "$2" \
+    --producer.config "/tmp/verify-$1.properties" --producer-property max.block.ms=15000 2>&1 | secure_errors || true
+}
+secure_consume() { # secure_consume <ユーザー> <トピック>(グループを使わずに読む。出力の例外の名前)
+  kafka_cli /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:19092 --topic "$2" --partition 0 --offset earliest \
+    --max-messages 1 --timeout-ms 15000 --consumer.config "/tmp/verify-$1.properties" 2>&1 | secure_errors || true
+}
+secure_group() { # secure_group <ユーザー> <グループ>(出力の例外の名前。許可されていれば GroupIdNotFound か一覧)
+  kafka_cli /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:19092 --describe --group "$2" \
+    --command-config "/tmp/verify-$1.properties" 2>&1 | secure_errors || true
+}
+
+verify_secure() {
+  current="secure"
+  local out
+  # TLS: ホストから、開発用の CA とホスト名(localhost)で検証できる
+  out="$(echo | openssl s_client -connect localhost:19092 -servername localhost -verify_hostname localhost -verify_return_error \
+    -CAfile "$here/certs/ca.crt" 2>&1 || true)"
+  if grep -q 'Verify return code: 0 (ok)' <<<"$out"; then pass "Kafka: 19092 は TLS(開発用の CA とホスト名で検証できる)"; else fail "Kafka: 19092 の TLS を検証できない"; fi
+
+  # 認証なし・誤ったパスワードは拒否される
+  printf 'security.protocol=PLAINTEXT\nrequest.timeout.ms=5000\ndefault.api.timeout.ms=10000\n' |
+    "${compose[@]}" exec -T kafka sh -c 'cat > /tmp/verify-plain.properties'
+  out="$(kafka_cli /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:19092 --list --command-config /tmp/verify-plain.properties 2>&1 || true)"
+  if ! grep -qx 'iot.telemetry.reported.v1' <<<"$out"; then pass "Kafka: 認証なし(平文)ではトピックの一覧を読めない"; else fail "Kafka: 認証なしでトピックを読めた"; fi
+  secure_client iot-bridge "wrong-password"
+  out="$(kafka_cli /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:19092 --list --command-config /tmp/verify-iot-bridge.properties 2>&1 | secure_errors || true)"
+  if [[ "$out" == *SaslAuthenticationException* ]]; then pass "Kafka: 誤ったパスワードは SASL の認証で拒否される"; else fail "Kafka: 誤ったパスワードの結果が想定外 ($out)"; fi
+
+  # ACL がカタログとそろっている(差がない)
+  out="$(kafka_cli /opt/kafka/bin/kafka-acls.sh --bootstrap-server kafka:9092 --list | python3 -I "$here/scripts/kafka-acls.py" --plan 2>&1 || true)"
+  if [[ -z "$out" ]]; then pass "Kafka: ACL がカタログ($(python3 -I "$here/scripts/kafka-acls.py" | wc -l | tr -d ' ') 件)とそろっている"; else fail "Kafka: ACL がカタログと違う ($(head -3 <<<"$out" | tr '\n' ' '))"; fi
+
+  # ACL の効き目(Framework 12.3): トピック単位の書き込み・読み取りと、Consumer Group
+  secure_client iot-bridge
+  secure_client batch-etl
+  secure_client order-service
+  check "Kafka: 提供側(iot-bridge)は自分のトピックに書ける" equals "" secure_produce iot-bridge iot.telemetry.reported.v1
+  check "Kafka: 提供側(iot-bridge)は他のトピックに書けない" equals "TopicAuthorizationException " secure_produce iot-bridge sales.order.created.v1
+  check "Kafka: 購読者(batch-etl)は購読するトピックを読める" equals "" secure_consume batch-etl sales.order.created.v1
+  check "Kafka: 提供側(order-service)は自分の発行するトピックを読めない" equals "TopicAuthorizationException " secure_consume order-service sales.order.created.v1
+  check "Kafka: 購読者(batch-etl)は自分の Consumer Group を使える" equals "" secure_group batch-etl batch-etl.order-ingest
+  check "Kafka: 購読者(batch-etl)は他の Consumer Group を使えない" equals "GroupAuthorizationException " secure_group batch-etl order.saga
+  "${compose[@]}" exec -T kafka sh -c 'rm -f /tmp/verify-*.properties'
+
+  # コンテナ間のリスナー(PLAINTEXT kafka:9092)は今までどおり(サービスの設定を変えない。ADR-0047 §3)
+  check "Kafka: コンテナ間のリスナーは今までどおり使える" kafka_cli /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --describe --topic iot.telemetry.reported.v1
 }
 
 verify_health
