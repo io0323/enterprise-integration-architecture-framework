@@ -14,3 +14,6 @@ b4cb46cfabcdb8b4591b8f8e12e8b53f18f80a9d:platform/security/src/test/kotlin/io/ei
 
 # 不正な traceparent の値(変数名が secretLike)。エラーに受信した値を含めないことの検査の入力
 14b8ecdbe836cad4aea2171f5aca42091849993f:shared/resilience/src/commonTest/kotlin/io/eia/shared/resilience/trace/TraceParentSpec.kt:generic-api-key:76
+
+# verify.sh の Kafka Connect の誤ったパスワードの検査のダミーの値(-u eiaf-admin:wrong-password)。次のコミットで書き方を変えた
+ab772732c800ccc9116c59db4b86aeb74a09c27a:infra/local/scripts/verify.sh:curl-auth-user:2085
