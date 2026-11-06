@@ -90,7 +90,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        profile: [core, cdc, iot, file, b2b, chaos, order, saga, batch, saas, "order saga bff", "order iot secure"]
+        profile: [core, cdc, iot, file, b2b, chaos, order, saga, batch, saas, "order saga bff", "order iot cdc secure"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Docker versions

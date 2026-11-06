@@ -6,10 +6,15 @@ import io.eia.platform.schemaregistry.SchemaRegistryConfig
 import io.eia.platform.schemaregistry.SchemaRegistryError
 import io.eia.platform.schemaregistry.SchemaRejected
 import io.eia.platform.schemaregistry.SchemaSubject
+import io.eia.platform.security.secret.EnvSecretProvider
+import io.eia.platform.security.token.ClientCredentialsConfig
+import io.eia.platform.security.token.ClientCredentialsTokenProvider
 import io.eia.shared.kernel.Jitter
 import io.eia.shared.kernel.Result
 import io.eia.shared.kernel.RetryDecision
 import io.eia.shared.kernel.RetryPolicy
+import io.eia.shared.sdk.http.token.AccessToken
+import io.eia.shared.sdk.http.token.TokenError
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import kotlinx.coroutines.delay
@@ -122,20 +127,73 @@ private suspend fun registerWithRetry(
 
 internal fun run(args: List<String>): Int {
     val options = Options.parse(args)
-    if (options == null) {
-        System.err.println(USAGE)
-        return ExitCode.CANNOT_RUN
-    }
-    val subjects = ContractSchemas.load(options.root.resolve("contracts"))
-    println("${subjects.size} 件のスキーマを ${options.registry} に登録します")
-    return HttpClient(CIO)
-        .use { http ->
-            // 1 回だけ実行する CLI なので、起動直後で応答の遅いレジストリも待てるよう、1 回の要求の上限を長めにする
-            val client = ApicurioRegistryClient(SchemaRegistryConfig(options.registry, requestTimeout = REQUEST_TIMEOUT), http)
-            runBlocking { publish(subjects, client, ::println) }
-        }.also { code ->
-            if (code == ExitCode.CANNOT_RUN) System.err.println("Schema Registry に接続できないか、応答が不正です(make up で起動しているか確認してください)")
+    val auth = RegistryAuth.setting(System.getenv())
+    return when {
+        options == null -> {
+            System.err.println(USAGE)
+            ExitCode.CANNOT_RUN
         }
+
+        auth is RegistryAuth.Setting.Invalid -> {
+            System.err.println(auth.message)
+            ExitCode.CANNOT_RUN
+        }
+
+        else -> {
+            publishAll(options, (auth as? RegistryAuth.Setting.Configured)?.config)
+        }
+    }.also { code ->
+        if (code == ExitCode.CANNOT_RUN && options != null && auth !is RegistryAuth.Setting.Invalid) {
+            System.err.println("Schema Registry に接続できないか、応答が不正です(make up で起動しているか確認してください)")
+        }
+    }
+}
+
+/**
+ * 最初のトークン。起動の直後の Keycloak は、ヘルスチェックが UP でも最初の発行が遅く、期限を超えることがある
+ * (compose の schema-publish が最初の取得で失敗した)。レジストリと同じ [RETRY] で待つ。
+ */
+internal suspend fun firstToken(
+    tokens: ClientCredentialsTokenProvider,
+    out: (String) -> Unit,
+    retry: RetryPolicy = RETRY,
+    sleep: suspend (Duration) -> Unit = { delay(it) },
+): Result<AccessToken, TokenError> {
+    var attempt = 1
+    while (true) {
+        val result = tokens.token()
+        val error = (result as? Result.Err)?.error ?: return result
+        val decision = retry.decide(attempt, error.asDomainError(), Random.Default)
+        if (decision !is RetryDecision.Retry) return result
+        out("WAIT トークン ${error.code}(${decision.delay} 後に再試行。$attempt 回目)")
+        sleep(decision.delay)
+        attempt++
+    }
+}
+
+/** 契約のスキーマをすべて登録する。[auth] があれば、client credentials のトークンを付ける(secure profile。ADR-0047 §9)。 */
+private fun publishAll(
+    options: Options,
+    auth: ClientCredentialsConfig?,
+): Int {
+    val subjects = ContractSchemas.load(options.root.resolve("contracts"))
+    println("${subjects.size} 件のスキーマを ${options.registry} に登録します${if (auth != null) "(${auth.clientId} のトークンを付ける)" else ""}")
+    return HttpClient(CIO).use { tokenHttp ->
+        val tokens = auth?.let { ClientCredentialsTokenProvider(it, tokenHttp, EnvSecretProvider()) }
+        val first = tokens?.let { runBlocking { firstToken(it, ::println) } }
+        if (first is Result.Err) {
+            System.err.println("トークンを取れません(${first.error.code}: ${first.error.message})")
+            ExitCode.CANNOT_RUN
+        } else {
+            HttpClient(CIO) {
+                if (tokens != null) install(bearerToken { (tokens.token() as? Result.Ok)?.value?.authorizationHeader() })
+            }.use { http ->
+                // 1 回だけ実行する CLI なので、起動直後で応答の遅いレジストリも待てるよう、1 回の要求の上限を長めにする
+                val client = ApicurioRegistryClient(SchemaRegistryConfig(options.registry, requestTimeout = REQUEST_TIMEOUT), http)
+                runBlocking { publish(subjects, client, ::println) }
+            }
+        }
+    }
 }
 
 fun main(args: Array<String>) {

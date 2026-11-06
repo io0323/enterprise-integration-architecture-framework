@@ -43,8 +43,12 @@ contract-check: ## 契約の検査(命名・カタログ・構造・main との�
 	git fetch --quiet origin main
 	$(GRADLE) :tools:contract-check:run
 
-schemas: ## 契約の Avro スキーマを Schema Registry(Apicurio)に登録する。make up の後に実行する(ADR-0025 §2)
-	$(GRADLE) -q :tools:schema-publish:run --args="--registry http://localhost:19081/apis/registry/v3 --root $(CURDIR)"
+schemas: ## 契約の Avro スキーマを Schema Registry(Apicurio)に登録する。make up の後に実行する(ADR-0025 §2。secure profile では PROFILE=secure を付ける)
+	@# secure profile では、Apicurio の書き込みに client credentials のトークンを付ける(ADR-0047 §9)。Client Secret は環境変数で渡す
+	@$(if $(filter secure,$(PROFILE)),set -a && . $(INFRA)/.env && set +a && \
+		SCHEMA_PUBLISH_TOKEN_URL=http://localhost:19180/realms/eiaf/protocol/openid-connect/token \
+		SCHEMA_PUBLISH_CLIENT_ID=eiaf-schema-publisher SCHEMA_PUBLISH_CLIENT_SECRET="$$EIAF_SCHEMA_PUBLISHER_CLIENT_SECRET" \
+		,)$(GRADLE) -q :tools:schema-publish:run --args="--registry http://localhost:19081/apis/registry/v3 --root $(CURDIR)"
 
 alerts-test: ## Prometheus のアラートのルールの検査と単体テスト(infra/local/prometheus/rules。promtool。P06 ④)
 	@$(INFRA)/scripts/alerts-test.sh
@@ -111,13 +115,13 @@ up: not-root env certs $(if $(filter order,$(PROFILE)),order-dist) $(if $(filter
 	fi
 	$(COMPOSE) $(COMPOSE_PROFILES_ARGS) up -d --build --wait --wait-timeout 420
 	@# 注文のイベントの発行(Outbox → Debezium。ADR-0007)。order-migrate が Outbox の表と publication を作った後に登録する
-	@if [ -n "$(filter order,$(PROFILE))" ]; then $(INFRA)/scripts/connectors.sh order-outbox; fi
+	@if [ -n "$(filter order,$(PROFILE))" ]; then EIAF_SECURE=$(if $(filter secure,$(PROFILE)),1) $(INFRA)/scripts/connectors.sh order-outbox; fi
 	@# レガシーの受注表の CDC(ADR-0026)。kafka-connect は legacy-migrate(publication・権限・signal 表)の成功を待って起動している
-	@if [ -n "$(filter cdc,$(PROFILE))" ]; then $(INFRA)/scripts/connectors.sh legacy-juchu; fi
+	@if [ -n "$(filter cdc,$(PROFILE))" ]; then EIAF_SECURE=$(if $(filter secure,$(PROFILE)),1) $(INFRA)/scripts/connectors.sh legacy-juchu; fi
 	@# 注文 Saga の参加者の返事の発行(Outbox → Debezium。ADR-0029)。各参加者の migrate が Outbox の表・publication・CONNECT を作った後に登録する
-	@if [ -n "$(filter saga,$(PROFILE))" ]; then $(INFRA)/scripts/connectors.sh inventory-outbox payment-outbox shipping-outbox; fi
+	@if [ -n "$(filter saga,$(PROFILE))" ]; then EIAF_SECURE=$(if $(filter secure,$(PROFILE)),1) $(INFRA)/scripts/connectors.sh inventory-outbox payment-outbox shipping-outbox; fi
 	@# SaaS 連携の取り込みのトピックと Canonical の顧客のイベントの発行(Outbox → Debezium。ADR-0035・ADR-0036)
-	@if [ -n "$(filter saas,$(PROFILE))" ]; then $(INFRA)/scripts/connectors.sh webhook-receiver-outbox integration-flow-outbox; fi
+	@if [ -n "$(filter saas,$(PROFILE))" ]; then EIAF_SECURE=$(if $(filter secure,$(PROFILE)),1) $(INFRA)/scripts/connectors.sh webhook-receiver-outbox integration-flow-outbox; fi
 	@# Kafka の SCRAM のユーザーと ACL をカタログにそろえる(ADR-0047)
 	@if [ -n "$(filter secure,$(PROFILE))" ]; then $(INFRA)/scripts/kafka-security.sh; fi
 

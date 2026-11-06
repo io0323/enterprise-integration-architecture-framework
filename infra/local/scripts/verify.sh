@@ -23,6 +23,15 @@ compose=(docker compose -f "$here/docker-compose.yml")
 compose+=(--env-file "$here/images.env" --env-file "$here/.env")
 for p in "${profiles[@]}"; do compose+=(--profile "$p"); done
 
+# Keycloak の client credentials のトークン(失敗したら空)。registry_token <クライアント ID> <シークレット>
+registry_token() {
+  curl -fsS -X POST http://localhost:19180/realms/eiaf/protocol/openid-connect/token -d grant_type=client_credentials \
+    -d client_id="$1" --data-urlencode "client_secret=$2" | json 'd["access_token"]' 2>/dev/null || true
+}
+# Apicurio の書き込み(secure profile では sr-developer のトークンが要る。ADR-0047 §9)。bash 3.2 の set -u でも空の配列を展開できる形で使う
+# (トークンは verify_core の始めに取る。ここでは json などの関数がまだない)
+registry_auth=()
+
 # Kafka Connect の REST(secure profile では Basic 認証。ADR-0047 §7)。認証のない Connect は資格情報を無視するので、いつも付ける
 connect_url="http://eiaf-admin:${CONNECT_REST_PASSWORD:-}@localhost:19083"
 
@@ -85,6 +94,9 @@ verify_health() {
 # ------------------------------------------------------------------ core
 verify_core() {
   current="core"
+  if [[ " ${profiles[*]} " == *" secure "* ]]; then
+    registry_auth=(-H "Authorization: Bearer $(registry_token eiaf-schema-publisher "${EIAF_SCHEMA_PUBLISHER_CLIENT_SECRET:-}")")
+  fi
   local registry=http://localhost:19081/apis/registry/v3
 
   # Apicurio: 既定のグローバル互換性ルール(ADR-0014)
@@ -100,13 +112,13 @@ verify_core() {
   body() { python3 -c 'import json,sys; print(json.dumps({"artifactId":sys.argv[1],"artifactType":"AVRO","firstVersion":{"content":{"content":sys.argv[2],"contentType":"application/json"}}}))' "$1" "$2"; }
   version_body() { python3 -c 'import json,sys; print(json.dumps({"content":{"content":sys.argv[1],"contentType":"application/json"}}))' "$1"; }
   check "Apicurio: スキーマ v1 を登録できる" \
-    curl -fsS -X POST "$registry/groups/$group/artifacts" -H 'Content-Type: application/json' -d "$(body "$artifact" "$v1")"
+    curl ${registry_auth[@]+"${registry_auth[@]}"} -fsS -X POST "$registry/groups/$group/artifacts" -H 'Content-Type: application/json' -d "$(body "$artifact" "$v1")"
   local code
-  code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$registry/groups/$group/artifacts/$artifact/versions" -H 'Content-Type: application/json' -d "$(version_body "$bad")")"
+  code="$(curl ${registry_auth[@]+"${registry_auth[@]}"} -sS -o /dev/null -w '%{http_code}' -X POST "$registry/groups/$group/artifacts/$artifact/versions" -H 'Content-Type: application/json' -d "$(version_body "$bad")")"
   if [[ "$code" == 409 || "$code" == 400 ]]; then pass "Apicurio: FULL 非互換の版(default のない項目の追加)を拒否する (HTTP $code)"; else fail "Apicurio: FULL 非互換の版が HTTP $code"; fi
   check "Apicurio: FULL 互換の版(default 付き項目の追加)を受理する" \
-    curl -fsS -X POST "$registry/groups/$group/artifacts/$artifact/versions" -H 'Content-Type: application/json' -d "$(version_body "$good")"
-  curl -sS -o /dev/null -X DELETE "$registry/groups/$group/artifacts/$artifact" || true
+    curl ${registry_auth[@]+"${registry_auth[@]}"} -fsS -X POST "$registry/groups/$group/artifacts/$artifact/versions" -H 'Content-Type: application/json' -d "$(version_body "$good")"
+  curl ${registry_auth[@]+"${registry_auth[@]}"} -sS -o /dev/null -X DELETE "$registry/groups/$group/artifacts/$artifact" || true
 
   # Keycloak: client credentials で sales.order:* のスコープと aud=order-api を持つトークンが取れる(Framework 12.3)
   local token claims
@@ -2056,6 +2068,7 @@ verify_secure() {
   # コンテナ間のリスナー(PLAINTEXT kafka:9092)は今までどおり(サービスの設定を変えない。ADR-0047 §3)
   check "Kafka: コンテナ間のリスナーは今までどおり使える" kafka_cli /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --describe --topic iot.telemetry.reported.v1
 
+  verify_secure_registry
   [[ " ${profiles[*]} " == *" iot "* ]] && verify_secure_mqtt
   # grep -q は先に終わるので、pipefail で偽にならないよう、一覧を変数に受けてから探す
   local services
@@ -2077,6 +2090,34 @@ verify_secure_mqtt() {
   check "MQTT: TLS とデバイスの資格情報で publish できる" mqtt_tls "$pw" --cafile /mosquitto/tls/ca.crt
   if mqtt_tls "$pw" >/dev/null; then fail "MQTT: TLS のリスナーに平文でつながる"; else pass "MQTT: TLS のリスナーには平文でつながらない"; fi
   if mqtt_tls wrong-password --cafile /mosquitto/tls/ca.crt >/dev/null; then fail "MQTT: 誤ったパスワードでつながる"; else pass "MQTT: 誤ったパスワードは拒否される"; fi
+}
+
+# Apicurio の REST(ADR-0047 §9): 読み取りは認証なし、書き込みは sr-developer、グローバルのルールの変更は sr-admin
+verify_secure_registry() {
+  local registry=http://localhost:19081/apis/registry/v3 dev admin code artifact="verify-secure-$$"
+  local schema='{"type":"record","name":"SecureProbe","namespace":"io.eia.verify","fields":[{"name":"id","type":"string"}]}'
+  local body rule='{"config":"FULL_TRANSITIVE"}'
+  body="$(python3 -c 'import json,sys; print(json.dumps({"artifactId":sys.argv[1],"artifactType":"AVRO","firstVersion":{"content":{"content":sys.argv[2],"contentType":"application/json"}}}))' "$artifact" "$schema")"
+  dev="$(registry_token eiaf-schema-publisher "${EIAF_SCHEMA_PUBLISHER_CLIENT_SECRET:-}")"
+  admin="$(registry_token eiaf-registry-admin "${EIAF_REGISTRY_ADMIN_CLIENT_SECRET:-}")"
+  status() { curl -s -o /dev/null -w '%{http_code}' "$@" || true; }
+
+  code="$(status "$registry/admin/rules/COMPATIBILITY")"
+  if [[ "$code" == 200 ]]; then pass "Apicurio: 認証なしで読める(サービスの起動時の読み取り)"; else fail "Apicurio: 認証なしの読み取りが $code"; fi
+  code="$(status -X POST "$registry/search/versions?canonical=true&artifactType=AVRO" -H 'Content-Type: application/json' -d "$schema")"
+  if [[ "$code" == 200 ]]; then pass "Apicurio: 認証なしで内容から版を探せる(POST の検索。サービスが contentId を引く)"; else fail "Apicurio: 認証なしの内容の検索が $code"; fi
+  code="$(status -X POST "$registry/groups/eiaf.verify/artifacts" -H 'Content-Type: application/json' -d "$body")"
+  if [[ "$code" == 401 ]]; then pass "Apicurio: 認証なしの登録は 401"; else fail "Apicurio: 認証なしの登録が $code"; fi
+  code="$(status -X POST "$registry/groups/eiaf.verify/artifacts" -H 'Authorization: Bearer not-a-token' -H 'Content-Type: application/json' -d "$body")"
+  if [[ "$code" == 401 ]]; then pass "Apicurio: 不正なトークンの登録は 401"; else fail "Apicurio: 不正なトークンの登録が $code"; fi
+  code="$(status -X POST "$registry/groups/eiaf.verify/artifacts" -H "Authorization: Bearer $dev" -H 'Content-Type: application/json' -d "$body")"
+  if [[ "$code" == 200 ]]; then pass "Apicurio: sr-developer(eiaf-schema-publisher)は登録できる"; else fail "Apicurio: sr-developer の登録が $code"; fi
+  code="$(status -X PUT "$registry/admin/rules/COMPATIBILITY" -H "Authorization: Bearer $dev" -H 'Content-Type: application/json' -d "$rule")"
+  if [[ "$code" == 403 ]]; then pass "Apicurio: sr-developer はグローバルのルールを変えられない(403)"; else fail "Apicurio: sr-developer のルールの変更が $code"; fi
+  # 管理者は変えられる(今と同じ値を入れ直す。状態は変わらない)
+  code="$(status -X PUT "$registry/admin/rules/COMPATIBILITY" -H "Authorization: Bearer $admin" -H 'Content-Type: application/json' -d "$rule")"
+  if [[ "$code" == 200 ]]; then pass "Apicurio: sr-admin(eiaf-registry-admin)はグローバルのルールを変えられる"; else fail "Apicurio: sr-admin のルールの変更が $code"; fi
+  status -X DELETE "$registry/groups/eiaf.verify/artifacts/$artifact" -H "Authorization: Bearer $dev" >/dev/null
 }
 
 # Kafka Connect の REST(ADR-0047 §7): Basic 認証

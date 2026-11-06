@@ -19,7 +19,7 @@ CLAUDE.md §6 の「設計書と乖離する場合は ADR を書く」に従い�
 | Service Mesh(17.2) | 内部同期は gRPC + Service Mesh(mTLS) | **範囲外**。mTLS は上記の範囲で直接設定する | Service Mesh |
 | Event Mesh(4.1) | 複数 Broker・リージョンの接続 | **範囲外**。単一の Kafka クラスタ | 必要時に ADR |
 | 転送路の暗号化(9, 12.2) | 全連携で TLS1.2+(平文禁止) | **ローカルは平文**: Kafka、MQTT、S3(SeaweedFS の http)、Keycloak(`sslRequired: none`)、APISIX(http)。SFTP は SSH で暗号化される。任意の `secure` profile では、Kafka(SASL_SSL)と MQTT(TLS)のホスト向けのリスナーを暗号化する(ADR-0047)。**残りは、ローカルは 127.0.0.1 だけへの公開で代替するが、本番ではすべての転送路を TLS にする**(ADR-0016 §6・ADR-0047 §8) | 各基盤の TLS と証明書の自動ローテーション |
-| 基盤の管理 API の認証(12.3) | 境界内でも認証必須 | **ローカルは未認証**: Apicurio の REST、Kafka Connect の REST、Toxiproxy の API、Prometheus の OTLP / remote write 受信、Loki、Tempo、OTel Collector の OTLP 受信。127.0.0.1 にだけ公開する。任意の `secure` profile では、Kafka Connect の REST を Basic 認証にする(ADR-0047 §7)。残りは 127.0.0.1 だけへの公開で代替する(ADR-0047 §8) | 各製品の認証(Apicurio は OIDC、Connect の REST は Basic 認証か mTLS など)とネットワーク分離 |
+| 基盤の管理 API の認証(12.3) | 境界内でも認証必須 | **ローカルは未認証**: Apicurio の REST、Kafka Connect の REST、Toxiproxy の API、Prometheus の OTLP / remote write 受信、Loki、Tempo、OTel Collector の OTLP 受信。127.0.0.1 にだけ公開する。任意の `secure` profile では、Kafka Connect の REST を Basic 認証にし(ADR-0047 §7)、Apicurio の REST の書き込みと管理を Keycloak の OIDC で守る(ADR-0047 §9。読み取りは匿名)。残りは 127.0.0.1 だけへの公開で代替する(ADR-0047 §8) | 各製品の認証(Apicurio は OIDC、Connect の REST は Basic 認証か mTLS など)とネットワーク分離 |
 
 ## Alternatives Considered
 - Vault(または OpenBao)をコンテナで追加する: ローカル負荷と起動手順が増える割に、Port 経由で差し替えられることは示せる。範囲を限定するために不採用。
@@ -42,3 +42,4 @@ CLAUDE.md §6 の「設計書と乖離する場合は ADR を書く」に従い�
 - 2026-11-03: BFF の複雑度の枠はプロセスの中に持つ。本番で複数台にすると実質の枠が台数倍になる(P13 ⑧a・⑧b。ADR-0043 §9)。
 - 2026-11-06: Kafka の `secure` profile を作った(ADR-0047。#26)。ホスト向けのリスナーを SASL_SSL にし、ACL をカタログから作る。コンテナ間のリスナーは平文のままで、サービスは ACL の制限を受けない(ADR-0047 §3)。
 - 2026-11-06: MQTT の TLS と Kafka Connect の REST の Basic 認証を `secure` profile に足した(ADR-0047 §6・§7。#29)。残りの転送路と受信口は、ローカルは 127.0.0.1 だけへの公開で代替するが、本番ではすべての転送路を TLS にする(ADR-0047 §8)。
+- 2026-11-06: Apicurio の REST の書き込みと管理を、`secure` profile で Keycloak の OIDC で守るようにした(ADR-0047 §9。#29)。
