@@ -51,6 +51,9 @@ jobs:
           cache-disabled: true
       - name: Build (ktlint, detekt, Konsist, jvm / js / linuxX64 tests, Kover)
         run: ./gradlew build
+      # secure profile の Kafka の ACL はカタログから作る(ADR-0047)。カタログの変更で作れなくならないことを、毎回確かめる
+      - name: Kafka ACL from the catalog (secure profile)
+        run: python3 -I infra/local/scripts/kafka_acls_test.py
       # P11 の DoD: デバイスのシミュレータの native の実行ファイル(linuxX64)を CI で組み立てる(macosArm64 は macos ジョブ)
       - name: Device simulator (linuxX64 release executable)
         run: ./gradlew :tools:device-simulator:linkReleaseExecutableLinuxX64

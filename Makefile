@@ -4,12 +4,13 @@ GRADLE := ./gradlew
 .PHONY: order-republish help setup build check arch-test contract-check schemas alerts-test integration-test format env not-root certs pgp-keys order-dist legacy-dist saga-dist batch-dist file-dist b2b-dist saas-dist iot-dist up down logs ps verify stats clean e2e audit-verify legacy-simulate dlq-replay batch-etl file-exchange b2b-codes iot-reprocess-dlq
 
 # ローカル基盤(infra/local。ADR-0016)
-# PROFILE: core / cdc / iot / file / b2b / chaos / order / saga / batch / saas / bff。core は常に含まれる(積み上げ方式)。空白区切りで複数指定できる。
+# PROFILE: core / cdc / iot / file / b2b / chaos / order / saga / batch / saas / bff / secure。core は常に含まれる(積み上げ方式)。空白区切りで複数指定できる。
 PROFILE ?= core
 INFRA := infra/local
 # E2E=1: E2E 用の設定(tests/e2e/e2e.env。待ち時間を短くする)を足して起動する(例: make up PROFILE="order cdc saga batch file b2b saas iot bff" E2E=1)
 E2E ?=
-COMPOSE := docker compose -f $(INFRA)/docker-compose.yml --env-file $(INFRA)/images.env --env-file $(INFRA)/.env $(if $(E2E),--env-file tests/e2e/e2e.env)
+# PROFILE に secure があれば、docker-compose.secure.yml を重ねる(Kafka の SASL_SSL と ACL。ADR-0047)
+COMPOSE := docker compose -f $(INFRA)/docker-compose.yml $(if $(filter secure,$(PROFILE)),-f $(INFRA)/docker-compose.secure.yml) --env-file $(INFRA)/images.env --env-file $(INFRA)/.env $(if $(E2E),--env-file tests/e2e/e2e.env)
 # E2E=1 は、サービスの接続先を Toxiproxy に切り替える(e2e.env)ので chaos の profile を足す(ADR-0044)
 COMPOSE_PROFILES_ARGS := --profile core $(foreach p,$(filter-out core,$(PROFILE)),--profile $(p)) $(if $(E2E),--profile chaos)
 SERVICE ?=
@@ -19,7 +20,7 @@ EIAF_UID := $(shell id -u)
 EIAF_GID := $(shell id -g)
 export EIAF_UID EIAF_GID
 # 開発用の証明書(infra/local/certs)を読むコンテナ。証明書を作り直したら(certs/.renewed)、make up で作り直す
-CERT_CONSUMERS := order-service apisix webhook-receiver inventory-service shipping-service bff-graphql
+CERT_CONSUMERS := order-service apisix webhook-receiver inventory-service shipping-service bff-graphql $(if $(filter secure,$(PROFILE)),kafka-secure-certs kafka)
 
 help: ## コマンド一覧
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -101,6 +102,9 @@ iot-dist: ## IoT の橋渡し(iot-bridge)と schema-publish のイメージの�
 	$(GRADLE) :services:iot-bridge:app:installDist :tools:schema-publish:installDist
 
 up: not-root env certs $(if $(filter order,$(PROFILE)),order-dist) $(if $(filter cdc,$(PROFILE)),legacy-dist) $(if $(filter saga,$(PROFILE)),saga-dist) $(if $(filter bff,$(PROFILE)),bff-dist) $(if $(filter batch,$(PROFILE)),batch-dist) $(if $(filter file,$(PROFILE)),file-dist) $(if $(filter b2b,$(PROFILE)),b2b-dist pgp-keys) $(if $(filter saas,$(PROFILE)),saas-dist) $(if $(filter iot,$(PROFILE)),iot-dist) ## ローカル基盤を起動し、全コンテナが healthy になるまで待つ(例: make up PROFILE=cdc)
+	@if [ -n "$(filter secure,$(PROFILE))" ] && [ -n "$(filter chaos,$(PROFILE))$(E2E)" ]; then \
+		echo "secure は chaos・E2E=1 と同時に使えません(Toxiproxy のリスナーを作らないため。ADR-0047)" >&2; exit 2; \
+	fi
 	@if [ -f $(INFRA)/certs/.renewed ]; then \
 		$(COMPOSE) --profile '*' rm --stop --force $(CERT_CONSUMERS) >/dev/null 2>&1 || true; \
 		rm -f $(INFRA)/certs/.renewed; \
@@ -114,6 +118,8 @@ up: not-root env certs $(if $(filter order,$(PROFILE)),order-dist) $(if $(filter
 	@if [ -n "$(filter saga,$(PROFILE))" ]; then $(INFRA)/scripts/connectors.sh inventory-outbox payment-outbox shipping-outbox; fi
 	@# SaaS 連携の取り込みのトピックと Canonical の顧客のイベントの発行(Outbox → Debezium。ADR-0035・ADR-0036)
 	@if [ -n "$(filter saas,$(PROFILE))" ]; then $(INFRA)/scripts/connectors.sh webhook-receiver-outbox integration-flow-outbox; fi
+	@# Kafka の SCRAM のユーザーと ACL をカタログにそろえる(ADR-0047)
+	@if [ -n "$(filter secure,$(PROFILE))" ]; then $(INFRA)/scripts/kafka-security.sh; fi
 
 down: env ## ローカル基盤を停止する(全 profile。データは残す)
 	$(COMPOSE) --profile '*' down --remove-orphans

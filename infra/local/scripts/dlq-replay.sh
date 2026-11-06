@@ -2,7 +2,7 @@
 # DLQ のメッセージを元のトピックに戻す(Replay。Framework 13.1。ADR-0028 §6)。`make dlq-replay ARGS="..."` から呼ぶ。
 # 手順は docs/runbooks/event-dlq-replay.md。既定は dry-run(一覧だけ)で、送るのは --execute を付けたときだけ。
 # tools/dlq-replay の終了コードをそのまま返す: 0 = 終えた / 1 = 戻せなかった対象がある / 2 = 実行できない
-# ローカル基盤の Kafka(ホスト用のリスナー localhost:19092)に接続する。秘密情報は使わない(認証は secure profile の #26)。
+# ローカル基盤の Kafka(ホスト用のリスナー localhost:19092)に接続する。秘密情報は使わない。secure profile(SASL_SSL。ADR-0047)では使えない(運用者の資格情報を持たないため)。
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")/.." && pwd)"

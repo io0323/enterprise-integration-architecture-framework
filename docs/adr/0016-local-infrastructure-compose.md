@@ -92,6 +92,7 @@ Docker のヘルスチェックはコンテナの中で実行されるため、�
 ### 8. secure profile は P03 の範囲から外す
 - ADR-0008 の「Kafka の SSL / ACL は任意の `secure` profile」は P03 では作らない。範囲を絞るためで、フォローアップの Issue #26 で扱う(開発用 CA の生成、SASL_SSL リスナー、ACL、verify、CI)。
 - それまでの Kafka はすべて PLAINTEXT で、127.0.0.1 にだけ公開する。
+- P14 で ADR-0047 として作った。profile だけでは既にあるサービスの設定を変えられないので、`docker-compose.secure.yml` を重ねる(積み上げ方式の例外)。
 
 ### 9. 例外: Kafka Connect のイメージは自分たちで組み立てる
 - **理由**: Debezium の公式イメージ(`quay.io/debezium/connect`)は、ダイジェストで固定できない。
@@ -186,3 +187,4 @@ Docker のヘルスチェックはコンテナの中で実行されるため、�
   - 生の CDC の Envelope の `source` の項目は、3.6.3 と同じ(両方の jar の `PostgresSourceInfoStructMaker`・`AbstractSourceInfoStructMaker` で比べた)。既にあるローカルの `cdc-raw` のスキーマとの互換性は変わらない。
   - 確かめたこと: `LegacyCdcIT`(9)・`OrderOutboxCdcIT`(3)・`LegacyOrderAclIT`(5)・`ReconcileIT`(7)・`InfraContainersIT`(2) が成功。Apicurio の Converter(3.3.3)はそのまま。
 - 2026-10-28: iot profile に、iot-bridge(P11)と、Mosquitto の `$SYS` を Prometheus に出す Telegraf(`TELEGRAF_IMAGE`。コンテナ `mosquitto-exporter`)を足した。エクスポーターの選び方は ADR-0039 §9(当初の候補 sapcc/mosquitto-exporter は linux/amd64 だけで §2 を満たさないため不採用)。Mosquitto のパスワードと ACL は、デバイスの一覧(`mosquitto/devices.txt`)と `secrets/mqtt/device-passwords` から起動のたびに作る(ADR-0039 §3)。共有のデバイスの資格情報(`MQTT_USERNAME`・`MQTT_PASSWORD`)はやめた。
+- 2026-11-06: secure profile を作った(ADR-0047。#26)。`make up PROFILE=secure` は `docker-compose.secure.yml` を重ねる(§8)。

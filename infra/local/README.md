@@ -55,7 +55,13 @@ docker compose -f infra/local/docker-compose.yml --env-file infra/local/images.e
 | `batch` | batch-etl-migrate・kafka-topics・schema-publish(1 回だけ動いて終わる), batch-etl, kafka-exporter, seaweedfs, seaweedfs-init | 注文の分析のバッチ(P08。ADR-0030・ADR-0031)。注文のイベントを書くのは order-service(`make up PROFILE="order batch"` で両方を動かす)。週次の照合は Gateway 経由で order-service を読む。日次の売上ファイルを SeaweedFS の受け口に置く(P09。置き場が止まっても取り込みの DAG には影響しない) |
 | `saas` | webhook-receiver-migrate・integration-flow-migrate・kafka-topics・schema-publish(1 回だけ動いて終わる), saas-mock, webhook-receiver, integration-flow, kafka-connect, postgres-exporter, kafka-exporter | SaaS(CRM)の顧客の連携(P10。ADR-0035・ADR-0036)。saas-mock が署名した Webhook を Gateway(`/sales/v1/webhooks/crm`)経由で webhook-receiver に送り、取り込みのトピック → integration-flow → `sales.customer.changed.v1`。integration-flow は CRM の API も定期に同期する。発行はコネクタ `webhook-receiver-outbox`・`integration-flow-outbox` |
 
-Kafka の SSL / ACL を有効にする `secure` profile は未実装(Issue #26)。
+`secure` profile(ADR-0047)は、Kafka のホスト向けのリスナー(19092)を SASL_SSL(SCRAM-SHA-512 + 開発用の CA の TLS)にし、ACL を有効にする。
+`make up PROFILE=secure` は `docker-compose.secure.yml` を重ね、カタログ(`contracts/catalog`)から作った SCRAM のユーザーと ACL をそろえる
+(`scripts/kafka-security.sh`。パスワードは `secrets/kafka/<ユーザー>`)。
+
+- 普段の起動(`secure` なし)は平文のまま変わらない。コンテナ間のリスナー(`kafka:9092`)は `secure` でも平文で、サービスの設定は変わらない。
+- `secure` は `chaos`・`E2E=1` と同時に使えない。ホストから平文でつなぐツール(E2E・`make dlq-replay`)も使えない。
+- 止めるときも `PROFILE=secure` を付ける(`make clean PROFILE=secure`。付けないと、証明書のボリューム `kafka-secure` が残る)。
 
 ## ポート一覧
 

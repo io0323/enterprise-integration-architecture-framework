@@ -1,0 +1,53 @@
+# secure profile(ADR-0047。Issue #26)。make up PROFILE=secure のときだけ、docker-compose.yml に重ねて読む(Makefile の COMPOSE)。
+# 普段の起動(この profile なし)は平文のまま変わらない。
+#
+# Kafka のホスト向けのリスナー(EXTERNAL。127.0.0.1:19092)を SASL_SSL(SCRAM-SHA-512 + TLS)にし、ACL(StandardAuthorizer)を有効にする。
+# - 証明書は開発用の CA(make certs。infra/local/certs の kafka.crt。SAN は kafka・localhost)。
+# - ユーザーと ACL は、カタログから kafka-security.sh が作る(make up が呼ぶ)。
+# - コンテナ間のリスナー(PLAINTEXT kafka:9092)と CONTROLLER は今までどおり。その principal(User:ANONYMOUS)を super user にする。
+#   サービス・Kafka Connect・exporter は設定を変えずに動く。この縮退の範囲は ADR-0047 §3。
+# - Toxiproxy 向けのリスナー(TOXI_*。chaos profile)は作らない(平文で super user になるため)。secure と chaos・E2E=1 は同時に使えない。
+services:
+  kafka:
+    depends_on:
+      kafka-secure-certs:
+        condition: service_completed_successfully
+    environment:
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:19092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:19092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:SASL_SSL
+      KAFKA_SASL_ENABLED_MECHANISMS: SCRAM-SHA-512
+      # listener.name.external.scram-sha-512.sasl.jaas.config(イメージの変換: _ → .、___ → -)。ブローカーの側に資格情報は書かない
+      KAFKA_LISTENER_NAME_EXTERNAL_SCRAM___SHA___512_SASL_JAAS_CONFIG: org.apache.kafka.common.security.scram.ScramLoginModule required;
+      KAFKA_SSL_KEYSTORE_TYPE: PEM
+      KAFKA_SSL_KEYSTORE_LOCATION: /etc/kafka/secure/kafka.pem
+      KAFKA_SSL_TRUSTSTORE_TYPE: PEM
+      KAFKA_SSL_TRUSTSTORE_LOCATION: /etc/kafka/secure/ca.crt
+      KAFKA_AUTHORIZER_CLASS_NAME: org.apache.kafka.metadata.authorizer.StandardAuthorizer
+      KAFKA_SUPER_USERS: User:ANONYMOUS
+    volumes:
+      - kafka-secure:/etc/kafka/secure:ro
+
+  # 開発用の鍵(0600。ホストの利用者のもの)を、ブローカー(uid 1000)が読める形でボリュームに置く。1 回だけ動いて終わる。
+  # 鍵をホストで読める権限に広げないため、root で読んでボリュームの中だけで所有者を変える
+  kafka-secure-certs:
+    image: ${KAFKA_IMAGE:?}
+    profiles: [secure]
+    user: "0:0"
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        set -e; umask 077;
+        cat /certs/kafka.key /certs/kafka.crt > /secure/kafka.pem;
+        cp /certs/ca.crt /secure/ca.crt;
+        chown 1000:1000 /secure/kafka.pem /secure/ca.crt;
+        chmod 644 /secure/ca.crt
+    volumes:
+      - ./certs:/certs:ro
+      - kafka-secure:/secure
+    mem_limit: 64m
+    restart: "no"
+
+volumes:
+  kafka-secure:

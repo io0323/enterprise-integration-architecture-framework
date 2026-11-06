@@ -228,8 +228,8 @@ services:
     image: ${KAFKA_IMAGE:?}
     # cdc: ACL の出力と DLQ。order: 注文 Saga のコマンド・返信と DLQ。saga: 参加者のコマンドの DLQ(ADR-0028・ADR-0029)。
     # batch: 注文のイベント(保持 14 日)と DLQ(ADR-0031 §7)。saas: 取り込みのトピック(保持 7 日)・Canonical の顧客のイベントと DLQ(ADR-0035 §3)。
-    # iot: テレメトリのイベントと DLQ(ADR-0039)
-    profiles: [cdc, order, saga, batch, saas, iot]
+    # iot: テレメトリのイベントと DLQ(ADR-0039)。secure: ACL を確かめるトピック(ADR-0047)
+    profiles: [cdc, order, saga, batch, saas, iot, secure]
     entrypoint: ["/bin/bash", "/topics/create-topics.sh", "kafka:9092", "/topics/topics.conf"]
     depends_on:
       kafka:
