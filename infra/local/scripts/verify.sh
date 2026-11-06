@@ -2084,7 +2084,8 @@ verify_secure_connect() {
   local code
   code="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:19083/connectors || true)"
   if [[ "$code" == 401 ]]; then pass "Kafka Connect: 認証なしの REST は 401"; else fail "Kafka Connect: 認証なしの REST が $code"; fi
-  code="$(curl -s -o /dev/null -w '%{http_code}' -u eiaf-admin:wrong-password http://localhost:19083/connectors || true)"
+  # 誤ったパスワードも、正しいパスワードと同じく URL の資格情報として渡す
+  code="$(curl -s -o /dev/null -w '%{http_code}' "${connect_url/:${CONNECT_REST_PASSWORD:-}@/:not-the-password@}/connectors" || true)"
   if [[ "$code" == 401 ]]; then pass "Kafka Connect: 誤ったパスワードは 401"; else fail "Kafka Connect: 誤ったパスワードが $code"; fi
   check "Kafka Connect: 資格情報つきの REST は使える" curl -fsS -o /dev/null "$connect_url/connectors"
 }
