@@ -115,7 +115,6 @@ internal fun loadStorefront(
     seconds: Int,
 ): StorefrontResults {
     val results = StorefrontResults()
-    val tokens = clients.associateWith { E2eEnvironment.token(it, CALLER_SCOPES) }
     val interval = (1_000_000_000 / rate).toLong()
     val executor = Executors.newVirtualThreadPerTaskExecutor()
     val start = System.nanoTime()
@@ -125,8 +124,9 @@ internal fun loadStorefront(
         val wait = planned - System.nanoTime()
         if (wait > 0) Thread.sleep(wait / 1_000_000, (wait % 1_000_000).toInt())
         clients.forEach { client ->
-            // トークンは期限の前に取り直す(E2eEnvironment がクライアントごとに使い回す)
-            val token = if (i % 100 == 0) E2eEnvironment.token(client, CALLER_SCOPES) else tokens.getValue(client)
+            // 送るたびに取る(E2eEnvironment がクライアントごとにキャッシュし、期限の前に取り直す)。間隔で取り直すと、
+            // 送る件数の少ない LIST20(0.4 件 / 秒)では取り直さないまま期限(300 秒)が切れ、401 になる
+            val token = E2eEnvironment.token(client, CALLER_SCOPES)
             executor.execute { sendQuery(query, ids, token, results) }
         }
     }
