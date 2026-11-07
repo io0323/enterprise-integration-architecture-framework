@@ -1,6 +1,11 @@
 # Enterprise Integration Architecture Framework 設計書
 
-Version 1.0 | Cloud Agnostic | 10年以上の利用を前提としたEnterprise Integration標準フレームワーク
+Version 1.1 | Cloud Agnostic | 10年以上の利用を前提としたEnterprise Integration標準フレームワーク
+
+1.1(2026-11): 参照実装(P00〜P14)で分かったことを、各章の「参照実装の知見」と付録の「章と ADR の対応表」に足した。
+
+各章の「参照実装の知見」は、参照実装(このリポジトリの P00〜P14)で分かったことを、根拠(ADR・Issue・レポート)とともに書く。章の本文の標準は変えない。
+「未決」は決めていないこと、「改訂の候補」は本文の標準を見直すべきだと分かったこと(見直すときは ADR を書く)。
 
 設計思想: API First / Event First / Loose Coupling / Contract First / Asynchronous First / Observable Integration / Secure Integration / Reusable Integration / Standardization / Evolutionary Architecture
 
@@ -257,6 +262,14 @@ flowchart LR
 - **代替案**: 分散トランザクションに2PC(可用性低下・Legacy/SaaS非対応のため不採用)。
 - **アンチパターン**: ESBへの業務ロジック集中(再モノリス化)、Saga無しの多システム更新、Queueのブロードキャスト流用。
 
+## 4.5 参照実装の知見
+
+- **補償は必ず終える。** 参加者の返事が来なければ同じコマンドを送り直し、回数が上限を超えたらアラートを出すが、送り直しは止めない(参加者が戻れば、冪等なので同じ結果で完了する)。ADR-0029 §3。
+- **段の期限は DB の時計で持つ。** 複数のインスタンスの時計のずれで、期限の判定が割れないようにする。ADR-0029 §6。
+- **参加者は「取消済み」の印を残す。** 期限切れの補償の後に元のコマンドが遅れて届いても、実行しない。ADR-0029 §5。
+- **未決: 段の期限と、イベントの発行の経路が止まる時間の関係。** Outbox + Debezium では、Kafka のブローカーが切り離されると、Kafka Connect の割り当て直しの待ち(既定 5 分)の間、発行が止まる。段の期限(30 秒)がこれより短いと、基盤の回復を待つだけで注文が取り消される(手元で 196 件)。発行が止まっている間も送り直しは Outbox に積まれ、回復の直後にまとめて流れる。#215。
+- **注文が集中すると、Orchestrator が流れの細いところになる。** 3,000 件を一度に受けた直後、返事を受けて次のコマンドを出す段が p99 12〜19 秒になった(参加者の側は 1.2〜1.9 秒)。段の期限は通常の処理時間の p99 より十分に長くする(ADR-0029 §6)ので、集中したときの待ち行列も期限の決め方に入れる。#222、`docs/reports/p14-nfr.md`。
+
 ---
 
 # 5. API Integration
@@ -297,6 +310,13 @@ flowchart LR
 - **トレードオフ**: Gateway経由の遅延(数ms)と引き換えに統制を得る。URIバージョニングはRESTfulness純度より運用容易性を優先。
 - **代替案**: ヘッダ/メディアタイプバージョニング(可視性が低く不採用)、クライアント直接接続(統制不能で不採用)。
 - **アンチパターン**: 無バージョン破壊的変更、GETでの状態変更、リトライ無制限、全社共通の一律Rate Limit値。
+
+## 5.8 参照実装の知見
+
+- **Gateway は外部の `traceparent` を捨て、Gateway でトレースを始める**(外部の呼び出し元に、こちらのトレースの量と ID を決めさせない)。そのため、社内のサービスが Gateway 経由で呼ぶとトレースが分かれ(bff-graphql・b2b-gateway → order)、`X-Correlation-Id` でたどる。ADR-0023 §4、ADR-0043 §9、#223。**改訂の候補**: 14.1 の「`traceparent` を全チャネルで伝搬」に、外部との境界の扱いを書く。
+- **時間の予算は入口で決めて下流に配る。** リクエスト全体の予算・依存先ごとの取り分・1 回の試行の上限の 3 段にする(例: 画面は全体 5 秒、注文の取り分 2 秒、試行 1.5 秒)。ADR-0024 §3、ADR-0043 §6。
+- **冪等の記録は、業務の更新と同じトランザクションで確定する。** 応答を保存しないときは、業務のトランザクションを取り消してから応答し、「保存しない = 副作用なし」にする。これが成り立つのは、副作用がすべて同じトランザクションの中にある場合に限る(外部の呼び出しは二重に実行されうるので、イベントの発行は Outbox を通す)。処理中の記録のリースは、DB の時刻(`clock_timestamp()`)で判定する。ADR-0022 §3。
+- **Rate Limit は 2 段にする。** Gateway のクライアントごとの件数の枠と、BFF のクエリの複雑度のトークンバケット。計測で、枠が設計どおりに効くことを確かめた。ADR-0043 §9、ADR-0048 §7.2。
 
 ---
 
@@ -349,6 +369,13 @@ flowchart LR
 - **代替案**: DBポーリング(遅延・負荷で不採用)、同期API連鎖(可用性連鎖で不採用)。
 - **アンチパターン**: スキーマ無しJSON垂れ流し、DLQ無し(Poison Messageで全停止)、トピックの用途混在、イベントへの巨大ペイロード格納(Claim Check未使用)。
 
+## 6.8 参照実装の知見
+
+- **コマンドのトピックは、受ける側の 1 つの Consumer Group だけが購読する。** コマンドは宛先が 1 つで、購読者を増やせるイベントとは使い方が違う。ADR-0006。
+- **書き込みに使うスキーマの ID は、起動時に解決してメモリに持つ。** リクエストの処理中は Schema Registry に問い合わせないので、Schema Registry が止まっても送信は続く。ADR-0025 §3。
+- **リトライで直らない失敗は DLQ に直行し、DLQ からの Replay を運用のコマンドにする。** ADR-0028 §2・§6。
+- **失った発行は、業務の表から作り直して再発行する。** 作り直したイベントには目印のヘッダを付け、消費者が区別できるようにする。途中の遷移は戻らない。Saga のコマンドは再発行しない。ADR-0046 §2・§4・§5。
+
 ---
 
 # 7. Batch & ETL Integration
@@ -381,6 +408,12 @@ flowchart LR
 - **トレードオフ**: 差分方式は効率的だが削除・遡及更新の検知が弱い → 定期Full照合で補完(二重コスト受容)。
 - **代替案**: 全件日次洗替え(小規模のみ許容)、バッチ廃止の全Event化(締め処理・集計に不適で不採用)。
 - **アンチパターン**: 再実行不能ジョブ、cron時刻依存の暗黙連鎖、Checkpoint無しの長時間ジョブ、エラー行の黙殺スキップ。
+
+## 7.6 参照実装の知見
+
+- **取り出し元は、他のサービスの DB ではなく、そのサービスのイベントにする**(Shared Database にしない)。ADR-0031 §2。
+- **Watermark は時刻ではなく、確定した順の位置にする**(トピック・パーティションごとの次のオフセット)。取り込んだ行と位置を 1 つのトランザクションで確定するので、途中で落ちても重複しない。ADR-0031 §4。
+- **日次の区切りは、出す側と集計する側でそろえる**(日本時間の 1 日)。照合の元(件数とハッシュ)も同じ区切りで出す。ADR-0031 §1・§3。
 
 ---
 
@@ -423,6 +456,13 @@ flowchart LR
 - **代替案**: 二重書込み(アプリがDBとBrokerに別々に書く。不整合が必然のため禁止)、ポーリング(遅延・削除不可)。
 - **アンチパターン**: 内部テーブルをそのままトピック公開、Snapshotなしの途中開始、適用位置を持たない再開不能Sync。
 
+## 8.5 参照実装の知見
+
+- **Outbox + Debezium の発行は、Kafka Connect のコネクタの割り当てに依存する。** ブローカーが切り離されると、割り当て直しの待ち(`scheduled.rebalance.max.delay.ms`、既定 5 分)の間、発行が止まる。Outbox の行は WAL に残り、回復の後に欠けずに発行された(本物の障害で確かめた)。Saga の期限との関係は 4.5・#215。
+- **発行の遅延(Outbox → Kafka)は p99 約 0.5 秒にそろった。** Debezium の poll の間隔(既定 500ms)によると見ている(確かめてはいない)。`docs/reports/p14-nfr.md`。
+- **Outbox の行は、書いたのと同じトランザクションで消す**(WAL から発行し、表を育てない)。行を残す方式は、必要になったときに実装する。ADR-0007 §2、#76。
+- **レガシーの CDC の Anti-Corruption Layer は、状態を持たない変換にした**(1 つの変更から 1 つの出力)。複数の表をまたぐ結合は状態を持つことになるので、必要になったときに決める。ずれは定期の照合と再同期で補う。ADR-0026、ADR-0027、#82。
+
 ---
 
 # 9. File Integration
@@ -451,6 +491,11 @@ flowchart LR
 - **代替案**: ファイル連携のAPI/Event全面置換(相手都合・大容量で非現実的)、共有フォルダ直接参照(統制不能で禁止)。
 - **アンチパターン**: チェックサム無し授受、書込み途中ファイルの取込、文字コード/改行規則の未契約、暗号鍵のメール共有。
 
+## 9.4 参照実装の知見
+
+- **S3 互換のストレージには改名(rename)がない。** 「一時名 → リネーム」の代わりに、データファイルを置いてから最後にマニフェストを置き、マニフェストを完了の合図にする。ADR-0032 §2。**改訂の候補**: 9.2 の完了の通知の方式に、オブジェクトストレージの場合を書く。
+- **移動(コピーしてから消す)は原子的でない。** 移動の決定を DB に「移動中」として記録してから移し、落ちたら記録した移動を続ける(ファイルの一覧と有無だけでは、途中の状態を見分けられない)。ADR-0032 §4・§5。
+
 ---
 
 # 10. SaaS / iPaaS Integration
@@ -478,6 +523,12 @@ iPaaS採用: SaaS同士/SaaS-基幹の定型連携、標準Connectorあり、変
 - **トレードオフ**: iPaaSは速度と引き換えにロックイン・従量コスト。Flow/マッピングの外部保存(Export・IaC管理)で緩和。
 - **代替案**: 各アプリがSaaS APIを直接呼ぶ(N×SaaS本数の密結合で不採用)。
 - **アンチパターン**: iPaaS内業務ロジック実装、SaaS間ポイント直結マッピング、無統制市民開発、Webhook署名未検証。
+
+## 10.5 参照実装の知見
+
+- **Webhook は、受信と処理を分ける。** 受け取りの記録と取り込みの Outbox の行を同じトランザクションで書いてから 204 を返し、処理は非同期にする。重複は Webhook のイベント ID で判定する。署名の鍵を差し替える間は、新旧の両方の鍵を受け付ける。ADR-0035 §1〜§3。
+- **SaaS の API の呼び出し(Connector)は、ページングと相手の Rate Limit を前提にする。** ADR-0035 §6。
+- **外部の SaaS の性能は、参照実装では測れない。** 相手は模擬(saas-mock)で、性能と SLO はベンダーの契約で決まる。INT-SALES-006、ADR-0048。
 
 ---
 
@@ -508,6 +559,13 @@ flowchart LR
 - **トレードオフ**: Gateway・TPA整備はコスト高だが、証跡・再送・パートナー追加の標準化で回収。
 - **代替案**: パートナー個別直結(監査不能で不採用)、メール添付授受(禁止)。
 - **アンチパターン**: 原本保管なし、証明書期限切れ放置、取引先別の社内フォーマット分岐増殖、997/MDN未確認運用。
+
+## 11.4 参照実装の知見
+
+- **受領の応答の読み替え。** 構文とスキーマの段階は CONTRL、業務の段階は APERAK で返す。ADR-0041 §9。
+- **暗号文の原本を後から読むには、復号の鍵を保持期間のあいだ残す必要がある。** やり取りの鍵を長く持たないよう、復号した交換を保管用の鍵で暗号化して別に置き、保管用の秘密鍵をサービスの外で保持期間のあいだ残す。ADR-0040 §8。
+- **重複は、復号した交換の SHA-256 で判定する**(PGP の暗号文は送るたびに変わる)。ADR-0040 §8、ADR-0041 §11。
+- **参照実装の範囲は SFTP だけ**(AS2・OFTP2 は範囲外)。ADR-0008。
 
 ---
 
@@ -540,6 +598,13 @@ flowchart LR
 - **代替案**: IP制限のみ(クラウドで破綻)、Basic認証(禁止)、長期静的キー(漏洩時被害大で禁止)。
 - **アンチパターン**: Secretsのハードコード、JWT無検証受入れ、全消費者共有の1クレデンシャル、内部だからと平文通信。
 
+## 12.5 参照実装の知見
+
+- **ローカルの縮退と、任意の secure profile。** 普段の起動は平文のままにし、Kafka の SASL_SSL と ACL・MQTT の TLS・管理 API の認証は、任意の `secure` profile で確かめる。コンテナ間のリスナーは平文で、サービス自身は ACL の制限を受けない(本番では、すべてのクライアントが自分の principal で認証する)。ADR-0047 §3、ADR-0008、#224。
+- **ACL はカタログから作る**(16.3)。ADR-0047 §4。
+- **暗号化した原本の鍵の保持期間**(11.4)。ADR-0040 §8。
+- **サプライチェーン。** イメージはタグとダイジェストで固定する。上流がタグを付け直し、古いダイジェストを消すことがある(Kafka Connect の Debezium のイメージは、毎日付け直され、前のダイジェストが取得できなくなった)。そのため、Kafka Connect のイメージは自前で組み立て、固定したものを毎日確かめる。ADR-0016 §2・§9、#35。
+
 ---
 
 # 13. Reliability Architecture
@@ -566,6 +631,12 @@ flowchart LR
 - **代替案**: 分散トランザクション(2PC)による厳密一貫性(可用性低下で不採用、Sagaを採用)。
 - **アンチパターン**: タイムアウト未設定(無限待ち)、Breaker無しRetry(Retry Storm)、DLQの放置(隔離して終わり)、再実行不能バッチ。
 
+## 13.4 参照実装の知見
+
+- **`withTimeout` はコルーチンを止めるだけで、待ち状態の JDBC の問い合わせは止まらない。** DB は `statement_timeout`(残り時間 + 余裕)でも打ち切り、ネットワークの遅延・切断には接続と通信の上限で備える。ADR-0024 §3。**改訂の候補**: 13.1 の Timeout に、DB の側の打ち切りを書く。
+- **障害注入は、E2E のときだけ Toxiproxy の経路に切り替えて行う**(普段の構成に障害点を増やさない)。ADR-0044 §1・§2。
+- **起動の直後は、依存先の最初の呼び出しが遅く、Circuit Breaker が開いて部分応答が続くことがある。** 起動時に接続を始め、計測では慣らしてから測る。#199、ADR-0043 §6、ADR-0048 §4。
+
 ---
 
 # 14. Observability
@@ -587,6 +658,14 @@ flowchart LR
 - **トレードオフ**: 計装・テレメトリ保管コスト増 → サンプリング(トレース)と保持期間階層化で制御。
 - **代替案**: 各システム個別監視のみ(境界の障害が不可視で不採用)。
 - **アンチパターン**: ペイロード全文ログ(機密漏洩)、IDが途中で途切れる伝搬漏れ、アラートの狼少年化、監視の後付け。
+
+## 14.3 参照実装の知見
+
+- **未決: 部分応答はアラートに映らない。** 部分応答(速い 200)は、可用性(5xx)にも遅延の SLI にも数えられない(遅延が大きいとき、画面の 68〜94% が部分応答になった)。#221、ADR-0048 §7.3。
+- **`caller_deadline` は診断の信号。** 呼び出し元の締め切りで打ち切られた試行の割合は、予算の配分が依存先の遅さに合っていない帯でだけ増え、利用者への影響の大きさは表さない。ADR-0048 §7.3。
+- **すべてのアラートを Runbook に結び、ビルドのテストで確かめる**(Runbook とアンカーの実在、SLO のルールの目標とカタログの SLO の一致)。ADR-0045。
+- **ログの正規表現の伏せ字は多層防御の 1 つ。** 主な対策は、本文をログに出さないことと、出す項目を許可リストで固定すること。ADR-0018 §3。
+- **トレースが分かれる経路は、Correlation ID でたどる**(5.8)。ADR-0043 §9。
 
 ---
 
@@ -614,6 +693,11 @@ flowchart LR
 - **代替案**: 全社単一Canonical(合意不能・硬直化で不採用)、都度直接マッピング(N×M爆発で不採用)。
 - **アンチパターン**: 変換ロジックの各所コピペ、スキーマ変更の無通知リリース、タイムゾーン・通貨の暗黙前提、Excelだけに存在するマッピング仕様。
 
+## 15.5 参照実装の知見
+
+- **サービスの domain と application は Canonical Model に依存しない。** domain はサービスの業務のルールで変わり、Canonical Model は全サービスの合意と互換性の規則で変わる(変わる理由と速さが違う)。変換は adapters で行う。ADR-0010(7)。
+- **時刻は、永続化とイベントでマイクロ秒に切り捨てる**(Avro の `timestamp-micros`。Debezium が PostgreSQL の時刻をマイクロ秒で出すのとそろえ、送信側と受信側で値がずれないようにする)。ADR-0012 §3。
+
 ---
 
 # 16. Integration Governance
@@ -635,6 +719,12 @@ flowchart LR
 - **トレードオフ**: ガバナンスは速度低下リスク → 承認をパターン準拠で自動化・軽量化し、逸脱のみ人が見る。
 - **代替案**: 全件重量審査(開発停滞・シャドーIT誘発で不採用)、無統制(スパゲッティ再発で不採用)。
 - **アンチパターン**: 台帳が現実と乖離、退役連携の放置(ゾンビ連携)、Ownerの個人紐付け(異動で消失)、レビューの形骸化。
+
+## 16.3 参照実装の知見
+
+- **カタログを単一の真実にして、そこから検査を作る。** ライフサイクルの遷移(ADR-0034)・Kafka の ACL(ADR-0047 §4)・SLO のルールとの一致(ADR-0045)・NFR のレポートの連携の一覧(ADR-0048 §5)。
+- **CI の必須チェック。** ワークフローの `paths` の条件で起動しないワークフローは、チェックを報告しないので必須にできない。ジョブの `if` でスキップされるジョブは成功に数えられるので、必須にできる(条件を決めるジョブも必須にして、抜け道を塞ぐ)。ADR-0020 §3。
+- **固定した依存の定期確認**(12.5)。ADR-0016 §2、#35。
 
 ---
 
@@ -713,6 +803,13 @@ flowchart LR
 - **代替案**: 案件別フルスクラッチ構成(不採用)。
 - **アンチパターン**: 参照構成の全部盛り採用(小規模案件への過剰適用)。規模に応じた縮退(単一Broker・iPaaSのみ等)を許容する。
 
+## 17.7 参照実装の知見(IoT)
+
+- **ブリッジ(MQTT → Kafka)は、Kafka の確認の後に PUBACK を返す**(At-Least-Once を崩さない)。そのため重複が入りうるので、デバイスの起動ごとの乱数のセッション ID と番号から ce_id を作り、何度届いても同じ ce_id にして、消費者が取り除く。ADR-0039 §2・§5。
+- **順序を守るため、キーはデバイスにし、ブリッジは 1 台で購読する**(共有サブスクリプションで台数を増やすと、同じデバイスのメッセージが分かれて順序が崩れる)。ADR-0039 §6。
+- **デバイスの時刻と受け取った時刻を両方持つ。** 通信が切れていた間の分は、過去のデバイスの時刻のまま、まとめて遅れて届く。ADR-0039 §7・§8。
+- **`traceparent` は MQTT v5 のユーザープロパティで運ぶ。** ADR-0039 §10。
+
 ---
 
 # 18. 非機能要件
@@ -735,6 +832,12 @@ flowchart LR
 - トレードオフ: Tier誤設定は過剰投資/リスク放置を生む → 年次見直しを義務化。
 - 代替案: 連携ごとの個別交渉(比較不能で不採用)。
 - アンチパターン: SLO未定義の連携、測定していない目標値、Tier1指定の乱発。
+
+## 18.1 参照実装の知見
+
+- **計測の環境の条件。** 共有の手元の 1 台(メモリ 8 GiB)では、スワップと Kafka の切り離しで測れなかった。主な値は、ジョブごとに別の仮想マシンになる CI のランナーで、手動で取る。合否には使わない。ADR-0048 §1。
+- **計測の手順。** 計測の前後に確かめる(ほかの負荷・何もしていないときの負荷の落ち着き・発行の経路の健全さ)、各 2 回以上測る、慣らしてから測る、Gateway の枠は計測の間だけ上げる。ADR-0048 §2〜§4。
+- **参照実装の値は目安で、本番の性能値ではない。** Tier 1 の API p99 300ms は本番の目標として残す(参照実装のカタログは 500ms)。ADR-0048 §7.1、`docs/reports/p14-nfr.md`。
 
 ---
 
@@ -780,5 +883,78 @@ flowchart LR
 | Mermaid構成図 | 2.1、4.3、6.6、8.3、11.2、17.1、17.3 |
 | 10年利用可能性 | Cloud Agnostic(1.9)・標準プロトコル限定(3章)・Evolutionary Architecture(16章Lifecycle/年次改訂) |
 
+# 付録: 章と ADR の対応表
+各 ADR の「Framework 参照章」から作った(節の番号は章にまとめた)。
 
+| 章 | ADR |
+|---|---|
+| 1 | [0001](../adr/0001-kotlin-kmp-clean-architecture.md)、[0003](../adr/0003-local-reference-stack.md)、[0004](../adr/0004-kmp-targets-and-jvm-boundary.md)、[0015](../adr/0015-s3-compatible-storage-seaweedfs.md) |
+| 2 | [0006](../adr/0006-command-channel-on-kafka.md)、[0016](../adr/0016-local-infrastructure-compose.md)、[0039](../adr/0039-mqtt-kafka-bridge-and-device-telemetry.md) |
+| 3 | [0035](../adr/0035-webhook-and-saas-connector.md)、[0042](../adr/0042-grpc-internal-queries.md)、[0043](../adr/0043-graphql-bff.md) |
+| 4 | [0006](../adr/0006-command-channel-on-kafka.md)、[0029](../adr/0029-order-saga-orchestration.md) |
+| 5 | [0005](../adr/0005-api-path-convention.md)、[0011](../adr/0011-kernel-and-canonical-model-conventions.md)、[0013](../adr/0013-contract-check.md)、[0021](../adr/0021-resilience-core.md)、[0022](../adr/0022-api-problem-details-and-idempotency.md)、[0023](../adr/0023-api-gateway.md)、[0024](../adr/0024-service-runtime.md)、[0035](../adr/0035-webhook-and-saas-connector.md)、[0037](../adr/0037-integration-sdk-http.md)、[0042](../adr/0042-grpc-internal-queries.md)、[0043](../adr/0043-graphql-bff.md) |
+| 6 | [0006](../adr/0006-command-channel-on-kafka.md)、[0007](../adr/0007-outbox-payload-and-cleanup.md)、[0012](../adr/0012-avro-physical-representation.md)、[0013](../adr/0013-contract-check.md)、[0014](../adr/0014-event-schema-compatibility-mode.md)、[0025](../adr/0025-kafka-producer-avro-serde-and-schema-registry.md)、[0026](../adr/0026-legacy-cdc-and-anti-corruption-layer.md)、[0028](../adr/0028-kafka-consumer-idempotency-and-dlq.md)、[0029](../adr/0029-order-saga-orchestration.md)、[0038](../adr/0038-mqtt-v5-client.md)、[0039](../adr/0039-mqtt-kafka-bridge-and-device-telemetry.md)、[0046](../adr/0046-event-republish.md)、[0047](../adr/0047-secure-profile-kafka.md) |
+| 7 | [0008](../adr/0008-local-scope-reductions.md)、[0009](../adr/0009-roadmap-restructure.md)、[0027](../adr/0027-legacy-cdc-reconciliation-and-resync.md)、[0030](../adr/0030-platform-batch-dag-runner.md)、[0031](../adr/0031-batch-etl-order-analytics.md) |
+| 8 | [0007](../adr/0007-outbox-payload-and-cleanup.md)、[0025](../adr/0025-kafka-producer-avro-serde-and-schema-registry.md)、[0026](../adr/0026-legacy-cdc-and-anti-corruption-layer.md)、[0027](../adr/0027-legacy-cdc-reconciliation-and-resync.md)、[0031](../adr/0031-batch-etl-order-analytics.md)、[0046](../adr/0046-event-republish.md) |
+| 9 | [0015](../adr/0015-s3-compatible-storage-seaweedfs.md)、[0030](../adr/0030-platform-batch-dag-runner.md)、[0032](../adr/0032-file-transfer.md)、[0033](../adr/0033-parquet-writer.md) |
+| 10 | [0035](../adr/0035-webhook-and-saas-connector.md)、[0036](../adr/0036-integration-flow-definition.md) |
+| 11 | [0008](../adr/0008-local-scope-reductions.md)、[0015](../adr/0015-s3-compatible-storage-seaweedfs.md)、[0040](../adr/0040-b2b-gateway-and-trading-partner-ledger.md)、[0041](../adr/0041-edifact-subset-and-acknowledgements.md) |
+| 12 | [0008](../adr/0008-local-scope-reductions.md)、[0009](../adr/0009-roadmap-restructure.md)、[0013](../adr/0013-contract-check.md)、[0016](../adr/0016-local-infrastructure-compose.md)、[0017](../adr/0017-audit-hash-chain-and-anchor.md)、[0018](../adr/0018-observability-instrumentation.md)、[0019](../adr/0019-security-jwt-and-token.md)、[0020](../adr/0020-public-repository-and-main-protection.md)、[0022](../adr/0022-api-problem-details-and-idempotency.md)、[0023](../adr/0023-api-gateway.md)、[0024](../adr/0024-service-runtime.md)、[0031](../adr/0031-batch-etl-order-analytics.md)、[0032](../adr/0032-file-transfer.md)、[0033](../adr/0033-parquet-writer.md)、[0035](../adr/0035-webhook-and-saas-connector.md)、[0037](../adr/0037-integration-sdk-http.md)、[0039](../adr/0039-mqtt-kafka-bridge-and-device-telemetry.md)、[0040](../adr/0040-b2b-gateway-and-trading-partner-ledger.md)、[0042](../adr/0042-grpc-internal-queries.md)、[0043](../adr/0043-graphql-bff.md)、[0047](../adr/0047-secure-profile-kafka.md) |
+| 13 | [0004](../adr/0004-kmp-targets-and-jvm-boundary.md)、[0006](../adr/0006-command-channel-on-kafka.md)、[0007](../adr/0007-outbox-payload-and-cleanup.md)、[0009](../adr/0009-roadmap-restructure.md)、[0011](../adr/0011-kernel-and-canonical-model-conventions.md)、[0014](../adr/0014-event-schema-compatibility-mode.md)、[0016](../adr/0016-local-infrastructure-compose.md)、[0018](../adr/0018-observability-instrumentation.md)、[0019](../adr/0019-security-jwt-and-token.md)、[0021](../adr/0021-resilience-core.md)、[0024](../adr/0024-service-runtime.md)、[0025](../adr/0025-kafka-producer-avro-serde-and-schema-registry.md)、[0026](../adr/0026-legacy-cdc-and-anti-corruption-layer.md)、[0027](../adr/0027-legacy-cdc-reconciliation-and-resync.md)、[0028](../adr/0028-kafka-consumer-idempotency-and-dlq.md)、[0029](../adr/0029-order-saga-orchestration.md)、[0032](../adr/0032-file-transfer.md)、[0035](../adr/0035-webhook-and-saas-connector.md)、[0037](../adr/0037-integration-sdk-http.md)、[0038](../adr/0038-mqtt-v5-client.md)、[0039](../adr/0039-mqtt-kafka-bridge-and-device-telemetry.md)、[0040](../adr/0040-b2b-gateway-and-trading-partner-ledger.md)、[0042](../adr/0042-grpc-internal-queries.md)、[0044](../adr/0044-fault-injection.md)、[0046](../adr/0046-event-republish.md)、[0048](../adr/0048-nfr-measurement.md) |
+| 14 | [0004](../adr/0004-kmp-targets-and-jvm-boundary.md)、[0007](../adr/0007-outbox-payload-and-cleanup.md)、[0008](../adr/0008-local-scope-reductions.md)、[0009](../adr/0009-roadmap-restructure.md)、[0015](../adr/0015-s3-compatible-storage-seaweedfs.md)、[0016](../adr/0016-local-infrastructure-compose.md)、[0017](../adr/0017-audit-hash-chain-and-anchor.md)、[0018](../adr/0018-observability-instrumentation.md)、[0019](../adr/0019-security-jwt-and-token.md)、[0022](../adr/0022-api-problem-details-and-idempotency.md)、[0023](../adr/0023-api-gateway.md)、[0024](../adr/0024-service-runtime.md)、[0025](../adr/0025-kafka-producer-avro-serde-and-schema-registry.md)、[0026](../adr/0026-legacy-cdc-and-anti-corruption-layer.md)、[0027](../adr/0027-legacy-cdc-reconciliation-and-resync.md)、[0028](../adr/0028-kafka-consumer-idempotency-and-dlq.md)、[0030](../adr/0030-platform-batch-dag-runner.md)、[0037](../adr/0037-integration-sdk-http.md)、[0038](../adr/0038-mqtt-v5-client.md)、[0039](../adr/0039-mqtt-kafka-bridge-and-device-telemetry.md)、[0040](../adr/0040-b2b-gateway-and-trading-partner-ledger.md)、[0042](../adr/0042-grpc-internal-queries.md)、[0045](../adr/0045-slo-burn-rate.md)、[0048](../adr/0048-nfr-measurement.md) |
+| 15 | [0011](../adr/0011-kernel-and-canonical-model-conventions.md)、[0012](../adr/0012-avro-physical-representation.md)、[0013](../adr/0013-contract-check.md)、[0014](../adr/0014-event-schema-compatibility-mode.md)、[0025](../adr/0025-kafka-producer-avro-serde-and-schema-registry.md)、[0033](../adr/0033-parquet-writer.md)、[0036](../adr/0036-integration-flow-definition.md)、[0041](../adr/0041-edifact-subset-and-acknowledgements.md)、[0042](../adr/0042-grpc-internal-queries.md)、[0043](../adr/0043-graphql-bff.md) |
+| 16 | [0002](../adr/0002-monorepo.md)、[0005](../adr/0005-api-path-convention.md)、[0010](../adr/0010-architecture-test-rules.md)、[0013](../adr/0013-contract-check.md)、[0020](../adr/0020-public-repository-and-main-protection.md)、[0026](../adr/0026-legacy-cdc-and-anti-corruption-layer.md)、[0027](../adr/0027-legacy-cdc-reconciliation-and-resync.md)、[0032](../adr/0032-file-transfer.md)、[0034](../adr/0034-integration-lifecycle-check.md)、[0035](../adr/0035-webhook-and-saas-connector.md)、[0036](../adr/0036-integration-flow-definition.md)、[0040](../adr/0040-b2b-gateway-and-trading-partner-ledger.md)、[0041](../adr/0041-edifact-subset-and-acknowledgements.md)、[0045](../adr/0045-slo-burn-rate.md)、[0047](../adr/0047-secure-profile-kafka.md)、[0048](../adr/0048-nfr-measurement.md) |
+| 17 | [0003](../adr/0003-local-reference-stack.md)、[0008](../adr/0008-local-scope-reductions.md)、[0015](../adr/0015-s3-compatible-storage-seaweedfs.md)、[0016](../adr/0016-local-infrastructure-compose.md)、[0038](../adr/0038-mqtt-v5-client.md)、[0039](../adr/0039-mqtt-kafka-bridge-and-device-telemetry.md) |
+| 18 | [0009](../adr/0009-roadmap-restructure.md)、[0044](../adr/0044-fault-injection.md)、[0045](../adr/0045-slo-burn-rate.md)、[0048](../adr/0048-nfr-measurement.md) |
+| 19 | [0001](../adr/0001-kotlin-kmp-clean-architecture.md)、[0004](../adr/0004-kmp-targets-and-jvm-boundary.md)、[0010](../adr/0010-architecture-test-rules.md)、[0013](../adr/0013-contract-check.md)、[0020](../adr/0020-public-repository-and-main-protection.md) |
 
+| ADR | 題名 |
+|---|---|
+| [0001](../adr/0001-kotlin-kmp-clean-architecture.md) | Kotlin / KMP / Clean Architecture の採用 |
+| [0002](../adr/0002-monorepo.md) | モノレポ構成 |
+| [0003](../adr/0003-local-reference-stack.md) | ローカル参照実装のミドルウェア選定 |
+| [0004](../adr/0004-kmp-targets-and-jvm-boundary.md) | KMP ターゲット構成と JVM 専用ライブラリの境界 |
+| [0005](../adr/0005-api-path-convention.md) | API パス規約(Gateway 公開パスとサービス内部パス) |
+| [0006](../adr/0006-command-channel-on-kafka.md) | Command / Queue チャネルを Kafka のコマンドトピックで実装する |
+| [0007](../adr/0007-outbox-payload-and-cleanup.md) | Outbox のペイロード形式とテーブルのクリーンアップ |
+| [0008](../adr/0008-local-scope-reductions.md) | ローカル参照実装で設計書から縮退する範囲 |
+| [0009](../adr/0009-roadmap-restructure.md) | ROADMAP の構成変更(P00 キックオフレビュー) |
+| [0010](../adr/0010-architecture-test-rules.md) | アーキテクチャテスト(Konsist)の検査方式と例外 |
+| [0011](../adr/0011-kernel-and-canonical-model-conventions.md) | Shared Kernel と Canonical Model の表現規約 |
+| [0012](../adr/0012-avro-physical-representation.md) | Canonical Model の Avro での物理表現と一致検査 |
+| [0013](../adr/0013-contract-check.md) | 契約検査(contract-check)の方式 |
+| [0014](../adr/0014-event-schema-compatibility-mode.md) | イベントスキーマの互換性モード |
+| [0015](../adr/0015-s3-compatible-storage-seaweedfs.md) | S3 互換ストレージに SeaweedFS を使う(MinIO の置き換え) |
+| [0016](../adr/0016-local-infrastructure-compose.md) | ローカル基盤の Docker Compose 構成 |
+| [0017](../adr/0017-audit-hash-chain-and-anchor.md) | 監査記録のハッシュチェーン・アンカー・audit 専用の S3 資格情報 |
+| [0018](../adr/0018-observability-instrumentation.md) | 可観測性の計装方式・Correlation ID の伝搬・ログの経路 |
+| [0019](../adr/0019-security-jwt-and-token.md) | JWT の検証・スコープの認可・Client Credentials のトークン取得・SecretProvider |
+| [0020](../adr/0020-public-repository-and-main-protection.md) | リポジトリの公開と main の保護 |
+| [0021](../adr/0021-resilience-core.md) | 回復性の部品(Timeout / Retry / Circuit Breaker / Bulkhead / Fallback)の仕様 |
+| [0022](../adr/0022-api-problem-details-and-idempotency.md) | API の共通部品(`platform/api`): Problem Details と Idempotency-Key |
+| [0023](../adr/0023-api-gateway.md) | API Gateway(APISIX)のルート・JWT・mTLS・トレース・Rate Limit |
+| [0024](../adr/0024-service-runtime.md) | サービスの実行時の構成(エンジン・コマンドと資格情報・予算と打ち切り・ヘルスチェック・設定・mTLS・イメージ) |
+| [0025](../adr/0025-kafka-producer-avro-serde-and-schema-registry.md) | Kafka の Producer・Avro の Serde・Schema Registry の使い方 |
+| [0026](../adr/0026-legacy-cdc-and-anti-corruption-layer.md) | レガシーの CDC と Anti-Corruption Layer |
+| [0027](../adr/0027-legacy-cdc-reconciliation-and-resync.md) | レガシーの CDC の照合と再同期 |
+| [0028](../adr/0028-kafka-consumer-idempotency-and-dlq.md) | Kafka の Consumer・冪等消費・リトライと DLQ |
+| [0029](../adr/0029-order-saga-orchestration.md) | 注文 Saga(Orchestration)・補償・期限・取消済みの印 |
+| [0030](../adr/0030-platform-batch-dag-runner.md) | 軽量 DAG ランナー(platform/batch) |
+| [0031](../adr/0031-batch-etl-order-analytics.md) | 注文の分析(batch-etl)のデータの流れ・日の区切り・照合 |
+| [0032](../adr/0032-file-transfer.md) | ファイル連携の部品(platform/file-transfer) |
+| [0033](../adr/0033-parquet-writer.md) | Parquet の書き出しと読み取りの手段 |
+| [0034](../adr/0034-integration-lifecycle-check.md) | 連携のライフサイクルの検査 |
+| [0035](../adr/0035-webhook-and-saas-connector.md) | Webhook の受信と SaaS の Connector |
+| [0036](../adr/0036-integration-flow-definition.md) | iPaaS 風の Flow の定義 |
+| [0037](../adr/0037-integration-sdk-http.md) | KMP の連携クライアント SDK(HTTP の部分)と、JVM の platform との共有 |
+| [0038](../adr/0038-mqtt-v5-client.md) | MQTT v5 のクライアント(デバイスの側は ktor-network での最小限の実装、ブリッジの側は HiveMQ MQTT Client) |
+| [0039](../adr/0039-mqtt-kafka-bridge-and-device-telemetry.md) | MQTT から Kafka への橋渡しと、デバイスのテレメトリの前提 |
+| [0040](../adr/0040-b2b-gateway-and-trading-partner-ledger.md) | B2B Gateway と取引先の台帳(TPA) |
+| [0041](../adr/0041-edifact-subset-and-acknowledgements.md) | EDIFACT のサブセットの仕様・構文と文字セット・受領の応答(CONTRL と APERAK) |
+| [0042](../adr/0042-grpc-internal-queries.md) | 社内の照会の gRPC(契約・接続・締め切り・状態コード・認証) |
+| [0043](../adr/0043-graphql-bff.md) | GraphQL BFF(ライブラリ・契約・制限・部分応答・認可・線引き) |
+| [0044](../adr/0044-fault-injection.md) | 障害注入の経路(Toxiproxy) |
+| [0045](../adr/0045-slo-burn-rate.md) | SLO のバーンレートのアラート |
+| [0046](../adr/0046-event-republish.md) | イベントの再発行 |
+| [0047](../adr/0047-secure-profile-kafka.md) | secure profile(Kafka の SASL_SSL と ACL・MQTT の TLS・管理 API の認証) |
+| [0048](../adr/0048-nfr-measurement.md) | Tier 別の NFR の計測(方法・環境・判断) |
