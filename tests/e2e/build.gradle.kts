@@ -33,6 +33,21 @@ val simulatorTarget: String? =
         else -> null
     }
 
+// NFR の計測(P14 ⑩。docs/reports/p14-nfr.md・ADR-0048)。時間を測るので build と CI には含めない(ROADMAP P14)。
+// `make nfr-measure SCENARIO=...` で手動で実行する。E2E の部品(E2eEnvironment・SagaKafka・Toxiproxy)を使う。
+// コンパイルだけは check に含め、計測のコードが壊れたままにならないようにする。
+val measurement: SourceSet = sourceSets.create("measurement")
+configurations.named(measurement.implementationConfigurationName) {
+    extendsFrom(configurations.getByName(e2eTest.implementationConfigurationName))
+}
+configurations.named(measurement.runtimeOnlyConfigurationName) {
+    extendsFrom(configurations.getByName(e2eTest.runtimeOnlyConfigurationName))
+}
+kotlin.target.compilations.run {
+    getByName("measurement").associateWith(getByName("e2eTest"))
+}
+tasks.named("check") { dependsOn(tasks.named(measurement.classesTaskName)) }
+
 // 本番のコードがないモジュールなので、Kover を無効にする(行が 0 のモジュールの閾値の検証が失敗するため)。
 // 加えて、e2eTest を計測から外す。Kover は既定で全 Test タスクを成果物の生成の依存に加えるので、disable() だけでは
 // build が起動した基盤の要る e2eTest まで実行してしまう
@@ -42,6 +57,27 @@ kover {
         instrumentation {
             disabledForTestTasks.add("e2eTest")
         }
+    }
+}
+
+tasks.register<JavaExec>("measureNfr") {
+    description = "NFR の計測(手動。make nfr-measure SCENARIO=...)。起動したローカル基盤に負荷をかけ、遅延の分位を出す。"
+    group = "measurement"
+    classpath = measurement.runtimeClasspath
+    mainClass.set("io.eia.tests.e2e.nfr.NfrMeasurementKt")
+    // 結果は基盤の状態で決まるので、毎回実行する
+    outputs.upToDateWhen { false }
+    systemProperty("eiaf.repo.root", rootProject.layout.projectDirectory.asFile.absolutePath)
+    systemProperty(
+        "eiaf.nfr.out",
+        layout.buildDirectory
+            .dir("nfr")
+            .get()
+            .asFile.absolutePath,
+    )
+    // 条件(-Pnfr.scenario=order-api -Pnfr.requests=3000 など)。構成キャッシュが値の変化を追えるよう、項目ごとに providers で読む
+    listOf("scenario", "requests", "concurrency", "seconds", "rate").forEach { key ->
+        providers.gradleProperty("nfr.$key").orNull?.let { systemProperty("nfr.$key", it) }
     }
 }
 

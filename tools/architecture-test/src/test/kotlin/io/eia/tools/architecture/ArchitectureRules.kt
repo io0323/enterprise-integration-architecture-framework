@@ -234,7 +234,9 @@ internal object ArchitectureRules {
 
     private const val TEST_SUPPORT_PACKAGE = "$BASE_PACKAGE.platform.testsupport"
     private const val TEST_SUPPORT_PATH = "platform/test-support/"
-    private val TEST_SOURCE_SET = Regex("""/src/(test|integrationTest|e2eTest|[A-Za-z0-9]+Test)/kotlin/""")
+
+    // 本番に載らないソースセット(テストと、手動の計測の measurement。ADR-0048)
+    private val TEST_SOURCE_SET = Regex("""/src/(test|integrationTest|e2eTest|measurement|[A-Za-z0-9]+Test)/kotlin/""")
 
     private val TEST_SUPPORT_QUALIFIED_USE = Regex("""(?<![\w.])${Regex.escape(TEST_SUPPORT_PACKAGE)}\.""")
     private val IMPORT_OR_PACKAGE_LINE = Regex("""^\s*(import|package)\s.*$""", RegexOption.MULTILINE)
