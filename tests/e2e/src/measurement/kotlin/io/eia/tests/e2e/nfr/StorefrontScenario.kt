@@ -23,8 +23,35 @@ private const val STOREFRONT = "$GATEWAY/storefront/v1/graphql"
 private val CALLER_SCOPES = setOf("bff-graphql-audience", "sales.order:read", "inventory.stock:read", "shipping.shipment:read")
 private const val FULL_ORDER = "id status lines { sku stock { available } } shipment { status shipmentId }"
 
-/** 計らない慣らしの送信の長さ(秒)。 */
-internal const val WARM_UP_SECONDS = 15
+/** 計らない慣らしの送信の 1 回の長さ(秒)。 */
+private const val WARM_UP_SECONDS = 15
+
+/** 慣らしの最大の回数(15 秒 × 8 回 = 2 分)。 */
+private const val WARM_UP_ROUNDS = 8
+
+/** 慣らしを終える、完全な応答の割合。 */
+private const val WARM_UP_COMPLETE_RATIO = 0.95
+
+/**
+ * 計らない慣らしの送信。[WARM_UP_SECONDS] 秒ずつ送り、完全な応答が [WARM_UP_COMPLETE_RATIO] 以上の回が出るまで繰り返す
+ * (最長 [WARM_UP_ROUNDS] 回)。gRPC の提供側は最初の呼び出しが遅く、bff-graphql の試行の時間切れ(1.5 秒)で Circuit Breaker が
+ * 開き、温まるまで部分応答が続く(#199 と同じ種類)。温まりきらなければ、その旨を [report] に書いて続ける。
+ */
+internal fun warmUpStorefront(
+    report: Report,
+    ids: List<String>,
+    rate: Double,
+) {
+    var rounds = 0
+    var ratio: Double
+    do {
+        val results = loadStorefront(StorefrontQuery.SINGLE, ids, listOf(Client.A), rate, WARM_UP_SECONDS)
+        ratio = results.outcomes.get("200 complete").toDouble() / results.outcomes.total().coerceAtLeast(1)
+        rounds++
+    } while (ratio < WARM_UP_COMPLETE_RATIO && rounds < WARM_UP_ROUNDS)
+    val warm = if (ratio >= WARM_UP_COMPLETE_RATIO) "温まった" else "温まりきらなかった(計測の値に注意)"
+    report.value("warm-up", "$rounds 回 × ${WARM_UP_SECONDS}s。最後の回の完全な応答 ${"%.1f".format(ratio * 100)}%。$warm")
+}
 
 /** 画面の代表のクエリと複雑度(ADR-0043 §4 の数え方。1 明細の注文でも 5 明細と仮定して数える)。 */
 internal enum class StorefrontQuery(
@@ -163,8 +190,8 @@ internal fun storefront(
     // 画面のスコープを持つ E2E のクライアントは eiaf-e2e だけ。複雑度の枠はクライアントごとなので、1 クライアントの枠の中で送る
     val clients = listOf(Client.A)
     report.value("storefront orders", "${ids.size} 件(SHIPPED)")
-    // 計らない: JIT と接続を温め、Gateway の系列を作ってから窓を始める
-    loadStorefront(StorefrontQuery.SINGLE, ids, clients, rate, WARM_UP_SECONDS)
+    // 計らない: JIT・接続・gRPC の提供側を温め、Gateway の系列を作ってから窓を始める
+    warmUpStorefront(report, ids, rate)
     Prometheus.startWindow(report)
     // 1. 注文 1 件の詳細: クライアントごとに複雑度 7 × rate / 秒(枠の戻りは 60 / 秒)
     val single = loadStorefront(StorefrontQuery.SINGLE, ids, clients, rate, seconds)
