@@ -27,7 +27,7 @@ internal fun loadOrderApi(
     val next = AtomicInteger()
     // 計らない: サービスの JIT と接続のプールを温める
     warmUp(requests = minOf(200, requests), concurrency = concurrency, run = "$run-warmup")
-    report.windowStart = java.time.Instant.now()
+    Prometheus.startWindow(report)
     val pool = Executors.newFixedThreadPool(concurrency)
     val started = System.nanoTime()
     repeat(concurrency) {

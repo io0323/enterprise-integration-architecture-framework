@@ -156,6 +156,15 @@ internal object Prometheus {
         Thread.sleep(35_000)
     }
 
+    /**
+     * 計測の窓を始める。慣らしの送信で作られた系列を Prometheus が 1 回 scrape してから、[Report.windowStart] を今にする。
+     * 作り直した直後の Gateway(枠を上げるため)は系列が 0 から始まり、窓の前の値がないと `increase` が窓の中の増分を取りこぼす。
+     */
+    fun startWindow(report: Report) {
+        awaitScrape()
+        report.windowStart = Instant.now()
+    }
+
     /** 計測の窓([from] から今まで。秒。scrape の分の余裕を足す)。 */
     fun window(from: Instant): String =
         "${java.time.Duration
