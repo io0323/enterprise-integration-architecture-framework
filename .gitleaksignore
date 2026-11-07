@@ -17,3 +17,8 @@ b4cb46cfabcdb8b4591b8f8e12e8b53f18f80a9d:platform/security/src/test/kotlin/io/ei
 
 # verify.sh の Kafka Connect の誤ったパスワードの検査のダミーの値(-u eiaf-admin:wrong-password)。次のコミットで書き方を変えた
 ab772732c800ccc9116c59db4b86aeb74a09c27a:infra/local/scripts/verify.sh:curl-auth-user:2085
+
+# nfr-preflight.sh・nfr-postcheck.sh の Kafka Connect の REST の認証(-u "eiaf-admin:${CONNECT_REST_PASSWORD:-}"。値は環境変数で、
+# リテラルの資格情報ではない)。次のコミットで verify.sh と同じ URL の形に変えた
+be7bf6fc1f01f8da1d71ccf8535df847cc301701:infra/local/scripts/nfr-preflight.sh:curl-auth-user:78
+160bd1584a79703bae67e4a5155aacde7a859d2d:infra/local/scripts/nfr-postcheck.sh:curl-auth-user:27
