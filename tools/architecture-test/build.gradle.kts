@@ -19,6 +19,9 @@ tasks.test {
                 include("infra/local/prometheus/rules/*.rules.yml")
                 include("docs/runbooks/*.md")
                 include("contracts/catalog/*.yaml")
+                // NFR のレポートの連携の一覧(ADR-0048)
+                include("docs/reports/p14-nfr.md")
+                include("docs/reports/p14-nfr-integrations.json")
                 exclude("**/build/**", ".gradle/**", "**/.kotlin/**", "**/node_modules/**")
             },
         ).withPathSensitivity(PathSensitivity.RELATIVE)
