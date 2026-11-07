@@ -1,0 +1,1 @@
+{"scenario":"cdc","startedAt":"2026-11-07T06:49:50.318758Z","finishedAt":"2026-11-07T06:51:17.334998Z","results":{"INT-SALES-003 changes":"legacy-sim の seed 50 と advance 50 を 4 回(受注 200 件)","INT-SALES-003 legacy commit → Kafka (record time)":{"count":400,"p50Ms":2998.0,"p95Ms":12409.0,"p99Ms":13485.0,"maxMs":13530.0}}}

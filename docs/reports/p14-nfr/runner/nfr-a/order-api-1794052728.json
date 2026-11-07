@@ -1,0 +1,154 @@
+{
+  "scenario": "order-api",
+  "startedAt": "2026-11-07T11:58:48.143285331Z",
+  "finishedAt": "2026-11-07T12:00:33.594974212Z",
+  "results": {
+    "INT-SALES-001 requests": "POST+GET 3000組 / 並列 16 / 16.7s",
+    "INT-SALES-001 throughput (req/s)": "359.7",
+    "INT-SALES-001 status": {
+      "GET 200": 3000,
+      "POST 201": 3000
+    },
+    "INT-SALES-001 POST (client)": {
+      "count": 3000,
+      "p50Ms": 68.882977,
+      "p95Ms": 115.142865,
+      "p99Ms": 177.358932,
+      "maxMs": 307.461343
+    },
+    "INT-SALES-001 GET (client)": {
+      "count": 3000,
+      "p50Ms": 13.580228,
+      "p95Ms": 28.604105,
+      "p99Ms": 45.167471,
+      "maxMs": 157.888671
+    },
+    "INT-SALES-001 POST > 500ms ratio": "0.0000",
+    "INT-SALES-001 GET > 500ms ratio": "0.0000",
+    "saga records read": {
+      "inventory.stock.cmd-reserve.v1": 6400,
+      "inventory.stock.reserved.v1": 6400,
+      "payment.payment.authorized.v1": 6400,
+      "payment.payment.cmd-authorize.v1": 6400,
+      "sales.order.created.v1": 6400,
+      "sales.order.status-changed.v1": 12800,
+      "shipping.shipment.cmd-arrange.v1": 6400,
+      "shipping.shipment.shipped.v1": 6400
+    },
+    "saga correlation sample": "読んだ nfr-1794052427-warmup-5, nfr-1794052427-warmup-11, nfr-1794052427-warmup-13 / 送った nfr-1794052728-2429, nfr-1794052728-2428, nfr-1794052728-2427",
+    "saga orders": "3000 件中 3000 件が SHIPPED まで届いた",
+    "publish sales.order.created.v1 (Outbox → Kafka)": {
+      "count": 3000,
+      "p50Ms": 222.0,
+      "p95Ms": 475.0,
+      "p99Ms": 500.0,
+      "maxMs": 547.0
+    },
+    "publish sales.order.status-changed.v1 (Outbox → Kafka)": {
+      "count": 6000,
+      "p50Ms": 2.0,
+      "p95Ms": 423.0,
+      "p99Ms": 483.0,
+      "maxMs": 545.0
+    },
+    "publish inventory.stock.cmd-reserve.v1 (Outbox → Kafka)": {
+      "count": 3000,
+      "p50Ms": 221.0,
+      "p95Ms": 474.0,
+      "p99Ms": 498.0,
+      "maxMs": 546.0
+    },
+    "publish inventory.stock.reserved.v1 (Outbox → Kafka)": {
+      "count": 3000,
+      "p50Ms": 211.0,
+      "p95Ms": 468.0,
+      "p99Ms": 496.0,
+      "maxMs": 535.0
+    },
+    "publish payment.payment.cmd-authorize.v1 (Outbox → Kafka)": {
+      "count": 3000,
+      "p50Ms": 3.0,
+      "p95Ms": 452.0,
+      "p99Ms": 489.0,
+      "maxMs": 506.0
+    },
+    "publish payment.payment.authorized.v1 (Outbox → Kafka)": {
+      "count": 3000,
+      "p50Ms": 103.0,
+      "p95Ms": 431.0,
+      "p99Ms": 484.0,
+      "maxMs": 508.0
+    },
+    "publish shipping.shipment.cmd-arrange.v1 (Outbox → Kafka)": {
+      "count": 3000,
+      "p50Ms": 57.0,
+      "p95Ms": 448.0,
+      "p99Ms": 489.0,
+      "maxMs": 509.0
+    },
+    "publish shipping.shipment.shipped.v1 (Outbox → Kafka)": {
+      "count": 3000,
+      "p50Ms": 170.0,
+      "p95Ms": 443.0,
+      "p99Ms": 477.0,
+      "maxMs": 506.0
+    },
+    "INT-INVENTORY-001 (cmd-reserve → reserved)": {
+      "count": 3000,
+      "p50Ms": 761.0,
+      "p95Ms": 1087.0,
+      "p99Ms": 1197.0,
+      "maxMs": 1271.0
+    },
+    "INT-INVENTORY-002 (reserved → cmd-authorize)": {
+      "count": 3000,
+      "p50Ms": 8939.0,
+      "p95Ms": 12778.0,
+      "p99Ms": 14290.0,
+      "maxMs": 14672.0
+    },
+    "INT-PAYMENT-001 (cmd-authorize → authorized)": {
+      "count": 3000,
+      "p50Ms": 571.0,
+      "p95Ms": 1011.0,
+      "p99Ms": 1474.0,
+      "maxMs": 1477.0
+    },
+    "INT-PAYMENT-002 (authorized → cmd-arrange)": {
+      "count": 3000,
+      "p50Ms": 4074.0,
+      "p95Ms": 10057.0,
+      "p99Ms": 11911.0,
+      "maxMs": 12204.0
+    },
+    "INT-SHIPPING-001 (cmd-arrange → shipped)": {
+      "count": 3000,
+      "p50Ms": 731.0,
+      "p95Ms": 1193.0,
+      "p99Ms": 1212.0,
+      "maxMs": 1216.0
+    },
+    "INT-SHIPPING-002 (shipped → status SHIPPED)": {
+      "count": 3000,
+      "p50Ms": 2690.0,
+      "p95Ms": 4987.0,
+      "p99Ms": 6987.0,
+      "maxMs": 7430.0
+    },
+    "Saga total (created → status SHIPPED)": {
+      "count": 3000,
+      "p50Ms": 18323.0,
+      "p95Ms": 24109.0,
+      "p99Ms": 25033.0,
+      "maxMs": 25232.0
+    },
+    "gateway sales-order-api p50 (ms, histogram)": "34.0",
+    "gateway sales-order-api p99 (ms, histogram)": "183.6",
+    "gateway sales-order-api 5xx / all": "0 / 7138"
+  },
+  "pipelineCheck": {
+    "kafkaDetached": 0,
+    "connectors": "inventory-outbox=RUNNING/RUNNING order-outbox=RUNNING/RUNNING payment-outbox=RUNNING/RUNNING shipping-outbox=RUNNING/RUNNING",
+    "usable": true
+  }
+}

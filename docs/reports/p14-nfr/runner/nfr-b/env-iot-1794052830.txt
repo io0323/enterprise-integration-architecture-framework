@@ -1,0 +1,68 @@
+段階: before-measure
+時刻: 2026-11-07T12:01:30Z
+コミット: 173c279
+ホスト: Linux 7.0.0-1019-azure / メモリ 15 GiB / CPU 4 コア
+CPU の機種(lscpu):
+  Architecture:                            x86_64
+  CPU(s):                                  4
+  Model name:                              Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz
+  Thread(s) per core:                      2
+  Core(s) per socket:                      2
+  Socket(s):                               1
+  CPU max MHz:                             2800.0000
+  Hypervisor vendor:                       Microsoft
+  L3 cache:                                48 MiB (1 instance)
+load average(1 分): 0.61(上限 6。NFR_MAX_LOAD)
+負荷の落ち着き: 60 秒で落ち着いた(1 分前 0.70 → 0.61)
+Docker: 29.4.2 / VM の CPU 4 / VM のメモリ 16758398976 バイト
+compose プロジェクト: eiaf
+発行の経路:
+  Kafka の切り離し(直近 300 秒の heartbeat の時間切れ): 0 回
+  コネクタ integration-flow-outbox: RUNNING / タスク RUNNING
+  コネクタ legacy-juchu: RUNNING / タスク RUNNING
+  コネクタ webhook-receiver-outbox: RUNNING / タスク RUNNING
+動いていたコンテナ(名前 / メモリ / CPU):
+  eiaf-apicurio-1 263.1MiB / 640MiB 1.34%
+  eiaf-apisix-1 52.23MiB / 256MiB 0.16%
+  eiaf-grafana-1 273.5MiB / 512MiB 0.53%
+  eiaf-integration-flow-1 212.5MiB / 256MiB 0.66%
+  eiaf-iot-bridge-1 189.6MiB / 256MiB 0.11%
+  eiaf-kafka-1 468MiB / 768MiB 2.64%
+  eiaf-kafka-connect-1 552.3MiB / 1GiB 1.14%
+  eiaf-kafka-exporter-1 9.43MiB / 64MiB 1.84%
+  eiaf-keycloak-1 562.8MiB / 896MiB 0.11%
+  eiaf-legacy-order-acl-1 189.3MiB / 384MiB 0.46%
+  eiaf-loki-1 102.8MiB / 384MiB 2.97%
+  eiaf-mosquitto-1 4.91MiB / 384MiB 0.02%
+  eiaf-mosquitto-exporter-1 76.55MiB / 512MiB 0.11%
+  eiaf-otel-collector-1 76.15MiB / 256MiB 0.36%
+  eiaf-postgres-1 159.7MiB / 512MiB 0.01%
+  eiaf-postgres-exporter-1 10.18MiB / 64MiB 0.00%
+  eiaf-prometheus-1 100.5MiB / 384MiB 0.68%
+  eiaf-saas-mock-1 89.5MiB / 256MiB 0.09%
+  eiaf-tempo-1 216.6MiB / 512MiB 0.34%
+  eiaf-webhook-receiver-1 162.1MiB / 256MiB 0.10%
+基盤を起動する前の記録: tests/e2e/build/nfr/env-before-up-1794051853.txt
+  | 段階: before-up
+  | 時刻: 2026-11-07T11:44:13Z
+  | コミット: 173c279
+  | ホスト: Linux 7.0.0-1019-azure / メモリ 15 GiB / CPU 4 コア
+  | CPU の機種(lscpu):
+  |   Architecture:                            x86_64
+  |   CPU(s):                                  4
+  |   Model name:                              Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz
+  |   Thread(s) per core:                      2
+  |   Core(s) per socket:                      2
+  |   Socket(s):                               1
+  |   CPU max MHz:                             2800.0000
+  |   Hypervisor vendor:                       Microsoft
+  |   L3 cache:                                48 MiB (1 instance)
+  | load average(1 分): 1.97(上限 2。コア数の半分)
+  | Docker: 29.4.2 / VM の CPU 4 / VM のメモリ 16758398976 バイト
+  | compose プロジェクト: eiaf
+  | 動いていたコンテナ(名前 / メモリ / CPU):
+計測の後の確認:
+  Kafka の切り離し(計測の間の heartbeat の時間切れ): 0 回
+  Kafka Connect のコネクタ: integration-flow-outbox=RUNNING/RUNNING legacy-juchu=RUNNING/RUNNING webhook-receiver-outbox=RUNNING/RUNNING
+  この回を使うか: 使う
+  結果: tests/e2e/build/nfr/iot-1794052900.json

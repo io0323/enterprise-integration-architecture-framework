@@ -1,0 +1,20 @@
+{
+  "scenario": "iot",
+  "startedAt": "2026-11-07T11:59:17.991011319Z",
+  "finishedAt": "2026-11-07T12:00:23.078700518Z",
+  "results": {
+    "INT-IOT-001 sent": "600 件(10.0 件/秒、QoS 1)/ 失敗 0",
+    "INT-IOT-001+002 device publish → Kafka readable (host clock)": {
+      "count": 600,
+      "p50Ms": 9.303438,
+      "p95Ms": 12.986591,
+      "p99Ms": 20.033062,
+      "maxMs": 280.95618
+    }
+  },
+  "pipelineCheck": {
+    "kafkaDetached": 0,
+    "connectors": "integration-flow-outbox=RUNNING/RUNNING legacy-juchu=RUNNING/RUNNING webhook-receiver-outbox=RUNNING/RUNNING",
+    "usable": true
+  }
+}

@@ -1,0 +1,18 @@
+段階: before-up
+時刻: 2026-11-07T11:44:13Z
+コミット: 173c279
+ホスト: Linux 7.0.0-1019-azure / メモリ 15 GiB / CPU 4 コア
+CPU の機種(lscpu):
+  Architecture:                            x86_64
+  CPU(s):                                  4
+  Model name:                              Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz
+  Thread(s) per core:                      2
+  Core(s) per socket:                      2
+  Socket(s):                               1
+  CPU max MHz:                             2800.0000
+  Hypervisor vendor:                       Microsoft
+  L3 cache:                                48 MiB (1 instance)
+load average(1 分): 1.97(上限 2。コア数の半分)
+Docker: 29.4.2 / VM の CPU 4 / VM のメモリ 16758398976 バイト
+compose プロジェクト: eiaf
+動いていたコンテナ(名前 / メモリ / CPU):
