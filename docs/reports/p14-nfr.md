@@ -2,7 +2,16 @@
 
 ROADMAP P14 の「Tier 別 NFR(Framework 18 章)の計測レポート」。計測の方法と判断は ADR-0048。
 
-> 計測中。数値は `make nfr-measure` の結果を書き写す。
+> 計測中。数値は GitHub Actions の `nfr` ワークフローの成果物から書き写す(P14 ⑩b)。
+
+## 計測の動かし方
+- **主な値**: GitHub Actions の `nfr` ワークフロー(`.github/workflows/nfr.yml`)を手動で動かす(Actions のタブ → nfr → Run workflow)。
+  A(`order saga bff`)・B(`cdc iot saas`)・C(`order saga bff`、`E2E=1`)を別のジョブで並列に測り、結果の JSON と環境の記録(CPU の機種を含む)を成果物 `nfr-a`・`nfr-b`・`nfr-c` に残す。
+  入力は、測る段(`stages`)・各シナリオの回数(`runs`、既定 2)・起動した後の load average の上限(`max_load`)。
+- **手元(補助)**: `make nfr-up PROFILE="order saga bff"` で起動し、`make nfr-measure PROFILE="order saga bff" SCENARIO=order-api` で測る。
+  シナリオは `order-api`・`storefront`(A)、`webhook`・`iot`・`cdc`(B。`PROFILE="cdc iot saas"`)、`caller-deadline`(C。`E2E=1`)。
+  手元の値は「ローカルの参照実装での目安」で、本番の性能値ではない。
+- 計測の前後の確認・Gateway の枠の扱い・遅延の測り方は ADR-0048 §2〜§4。計測の間に Kafka が切り離された回は、結果の JSON に `pipelineCheck.usable: false` が付き、使わない。
 
 ## 連携ごとの結果
 表は `python3 scripts/reports/nfr-table.py --write` がカタログ(`contracts/catalog`)と計測の結果(`docs/reports/p14-nfr-integrations.json`)から作る。

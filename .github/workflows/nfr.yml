@@ -1,0 +1,137 @@
+name: nfr
+# Tier 別の NFR の計測(P14 ⑩。ADR-0048。docs/reports/p14-nfr.md)。手動でだけ動かす。
+# 時間を測る値を合否に使わないため、push・PR では動かさず、Ruleset の必須チェックにも入れない(ADR-0048 §1)。
+# A・B・C は別のジョブ(GitHub の標準のランナーはジョブごとに別の仮想マシン)で並列に測る。結果と環境の記録は成果物に残す。
+on:
+  workflow_dispatch:
+    inputs:
+      stages:
+        description: 測る段(a = order saga bff、b = cdc iot saas、c = order saga bff E2E=1 の caller_deadline)。カンマ区切り
+        type: string
+        default: a,b,c
+      runs:
+        description: 各シナリオを測る回数
+        type: number
+        default: 2
+      max_load:
+        description: 基盤を起動した後の load average の上限(NFR_MAX_LOAD。nfr-preflight.sh before-measure)
+        type: string
+        default: "6"
+permissions:
+  contents: read
+concurrency:
+  group: nfr
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - name: Plan the stages
+        id: plan
+        env:
+          STAGES: ${{ inputs.stages }}
+        run: |
+          python3 - <<'EOF' >> "$GITHUB_OUTPUT"
+          import json, os
+          all_stages = {
+              "a": {"stage": "a", "profile": "order saga bff", "e2e": "", "scenarios": "order-api storefront"},
+              "b": {"stage": "b", "profile": "cdc iot saas", "e2e": "", "scenarios": "webhook iot cdc"},
+              "c": {"stage": "c", "profile": "order saga bff", "e2e": "1", "scenarios": "caller-deadline"},
+          }
+          wanted = [s.strip() for s in os.environ["STAGES"].split(",") if s.strip()]
+          unknown = sorted(set(wanted) - set(all_stages))
+          if unknown or not wanted:
+              raise SystemExit(f"stages は a・b・c をカンマ区切りで指定してください: {os.environ['STAGES']}")
+          print("matrix=" + json.dumps({"include": [all_stages[s] for s in all_stages if s in wanted]}))
+          EOF
+
+  measure:
+    name: measure (${{ matrix.stage }})
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      PROFILE: ${{ matrix.profile }}
+      E2E: ${{ matrix.e2e }}
+      SCENARIOS: ${{ matrix.scenarios }}
+      RUNS: ${{ inputs.runs }}
+      MAX_LOAD: ${{ inputs.max_load }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-provider: basic
+      # ランナーのディスクを空ける(ci.yml の e2e と同じ)
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker system prune --all --force >/dev/null
+      # 計測の道具を先にコンパイルする(最初の計測の直前にコンパイルの負荷がかからないように)
+      - name: Compile the measurement
+        run: ./gradlew :tests:e2e:measurementClasses
+      # 起動の前の確認(ほかのコンテナがなく、load average がコア数の半分以下)に通るまで待つ。準備の負荷が残っていることがあるため
+      - name: Wait for an idle runner
+        run: |
+          for attempt in $(seq 1 20); do
+            if infra/local/scripts/nfr-preflight.sh before-up "tests/e2e/build/nfr/env-wait-$attempt.txt"; then exit 0; fi
+            echo "落ち着くのを待ちます($attempt / 20)"
+            sleep 30
+          done
+          echo "::error::10 分待っても、起動の前の確認に通りませんでした"
+          exit 1
+      - name: Up
+        run: make nfr-up PROFILE="$PROFILE" E2E="$E2E"
+      - name: Measure
+        run: |
+          failed=0
+          for scenario in $SCENARIOS; do
+            for run in $(seq 1 "$RUNS"); do
+              echo "::group::$scenario($run / $RUNS)"
+              if ! NFR_MAX_LOAD="$MAX_LOAD" make nfr-measure PROFILE="$PROFILE" E2E="$E2E" SCENARIO="$scenario" NFR_ARGS="-q"; then
+                echo "::error::$scenario の $run 回目が失敗しました"
+                failed=$((failed + 1))
+              fi
+              echo "::endgroup::"
+            done
+          done
+          exit $((failed > 0))
+      - name: Memory
+        if: ${{ !cancelled() }}
+        run: make stats | tee tests/e2e/build/nfr/stats.md
+      - name: Summary
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "# NFR の計測: ${{ matrix.stage }}(PROFILE=\"$PROFILE\" E2E=\"$E2E\")"
+            echo
+            python3 scripts/reports/nfr-summary.py tests/e2e/build/nfr
+            echo
+            if [ -f tests/e2e/build/nfr/stats.md ]; then cat tests/e2e/build/nfr/stats.md; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      # 結果の JSON・環境の記録(CPU の機種を含む)・メモリの使用量。秘密情報は含まない(.env は含めない)
+      - name: Upload the results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nfr-${{ matrix.stage }}
+          path: tests/e2e/build/nfr/
+          if-no-files-found: warn
+          retention-days: 90
+      - name: Logs on failure
+        if: ${{ failure() }}
+        run: make ps
+      - name: Down
+        if: ${{ always() }}
+        run: make down
