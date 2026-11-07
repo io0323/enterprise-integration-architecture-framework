@@ -1,0 +1,134 @@
+{
+  "INT-B2B-001": {
+    "measured": "no",
+    "result": "TBD",
+    "verdict": "—",
+    "reason": "TBD"
+  },
+  "INT-B2B-002": {
+    "measured": "no",
+    "result": "TBD",
+    "verdict": "—",
+    "reason": "TBD"
+  },
+  "INT-B2B-003": {
+    "measured": "no",
+    "result": "TBD",
+    "verdict": "—",
+    "reason": "TBD"
+  },
+  "INT-INTEGRATION-001": {
+    "measured": "no",
+    "result": "TBD",
+    "verdict": "—",
+    "reason": "TBD"
+  },
+  "INT-INVENTORY-001": {
+    "measured": "no",
+    "result": "TBD",
+    "verdict": "—",
+    "reason": "TBD"
+  },
+  "INT-INVENTORY-002": {
+    "measured": "no",
+    "result": "TBD",
+    "verdict": "—",
+    "reason": "TBD"
+  },
+  "INT-INVENTORY-003": {
+    "measured": "no",
+    "result": "TBD",
+    "verdict": "—",
+    "reason": "TBD"
+  },
+  "INT-IOT-001": {
+    "measured": "no",
+    "result": "TBD",
+    "verdict": "—",
+    "reason": "TBD"
+  },
+  "INT-IOT-002": {
+    "measured": "no",
+    "result": "TBD",
+    "verdict": "—",
+    "reason": "TBD"
+  },
+  "INT-PAYMENT-001": {
+    "measured": "no",
+    "result": "TBD",
+    "verdict": "—",
+    "reason": "TBD"
+  },
+  "INT-PAYMENT-002": {
+    "measured": "no",
+    "result": "TBD",
+    "verdict": "—",
+    "reason": "TBD"
+  },
+  "INT-SALES-001": {
+    "measured": "no",
+    "result": "TBD",
+    "verdict": "—",
+    "reason": "TBD"
+  },
+  "INT-SALES-002": {
+    "measured": "no",
+    "result": "TBD",
+    "verdict": "—",
+    "reason": "TBD"
+  },
+  "INT-SALES-003": {
+    "measured": "no",
+    "result": "TBD",
+    "verdict": "—",
+    "reason": "TBD"
+  },
+  "INT-SALES-004": {
+    "measured": "no",
+    "result": "TBD",
+    "verdict": "—",
+    "reason": "TBD"
+  },
+  "INT-SALES-005": {
+    "measured": "no",
+    "result": "TBD",
+    "verdict": "—",
+    "reason": "TBD"
+  },
+  "INT-SALES-006": {
+    "measured": "no",
+    "result": "TBD",
+    "verdict": "—",
+    "reason": "TBD"
+  },
+  "INT-SALES-007": {
+    "measured": "no",
+    "result": "TBD",
+    "verdict": "—",
+    "reason": "TBD"
+  },
+  "INT-SHIPPING-001": {
+    "measured": "no",
+    "result": "TBD",
+    "verdict": "—",
+    "reason": "TBD"
+  },
+  "INT-SHIPPING-002": {
+    "measured": "no",
+    "result": "TBD",
+    "verdict": "—",
+    "reason": "TBD"
+  },
+  "INT-SHIPPING-003": {
+    "measured": "no",
+    "result": "TBD",
+    "verdict": "—",
+    "reason": "TBD"
+  },
+  "INT-STOREFRONT-001": {
+    "measured": "no",
+    "result": "TBD",
+    "verdict": "—",
+    "reason": "TBD"
+  }
+}
