@@ -3,10 +3,15 @@
 [Enterprise Integration Architecture Framework](docs/architecture/EIA-Framework.md) のローカル参照実装。
 Kotlin / Kotlin Multiplatform / Clean Architecture、Cloud Agnostic(Docker Compose で完結)。
 
+**状態**: ロードマップの P00〜P14(API / Event / CDC / Batch / File / SaaS / B2B / IoT / gRPC・GraphQL / Resilience・SLO)をすべて実装した(2026-11-07)。残りの Issue と理由は、ロードマップの「P14 の後に残る Issue」。
+
 - ロードマップ: [docs/implementation/ROADMAP.md](docs/implementation/ROADMAP.md)
 - モジュール設計: [docs/implementation/MODULE_DESIGN.md](docs/implementation/MODULE_DESIGN.md)
 - 標準: [docs/standards/](docs/standards/)
 - ADR: [docs/adr/](docs/adr/)
+- 検証・計測のレポート: [docs/reports/](docs/reports/)(障害シナリオ: [p14-resilience.md](docs/reports/p14-resilience.md)、Tier 別の NFR: [p14-nfr.md](docs/reports/p14-nfr.md))
+- 運用の Runbook: [docs/runbooks/](docs/runbooks/)(すべてのアラートが Runbook に紐づく)
+- ローカルで縮退している範囲(本番での置き換え): [ADR-0008](docs/adr/0008-local-scope-reductions.md)
 - Claude Code 用プロンプト: [docs/prompts/PROMPTS.md](docs/prompts/PROMPTS.md)
 
 ## 開発環境の前提
@@ -31,5 +36,14 @@ make verify              # 全コンテナが healthy で、各機能が疎通�
 ./gradlew build
 ./gradlew :services:order:app:run
 ```
+
+E2E と障害注入のシナリオ(tests/e2e。CI の `e2e` のジョブと同じ):
+
+```bash
+make up PROFILE="order cdc saga batch file b2b saas iot bff" E2E=1
+make e2e
+```
+
+Tier 別の NFR の計測は手動でだけ動かし、CI の合否には使わない(ADR-0048)。主な値は GitHub Actions の `nfr` ワークフロー(Run workflow)で取り、手元の `make nfr-up` / `make nfr-measure` は補助([docs/reports/p14-nfr.md](docs/reports/p14-nfr.md))。
 
 このリポジトリにはまだ LICENSE がないため、著作権法上すべての権利が作者に留保され、他の人はコードを利用・複製・改変・再配布できません(GitHub の規約による閲覧と fork は可能です)。
