@@ -23,6 +23,9 @@ private const val STOREFRONT = "$GATEWAY/storefront/v1/graphql"
 private val CALLER_SCOPES = setOf("bff-graphql-audience", "sales.order:read", "inventory.stock:read", "shipping.shipment:read")
 private const val FULL_ORDER = "id status lines { sku stock { available } } shipment { status shipmentId }"
 
+/** 計らない慣らしの送信の長さ(秒)。 */
+internal const val WARM_UP_SECONDS = 15
+
 /** 画面の代表のクエリと複雑度(ADR-0043 §4 の数え方。1 明細の注文でも 5 明細と仮定して数える)。 */
 internal enum class StorefrontQuery(
     val complexity: Int,
@@ -160,6 +163,9 @@ internal fun storefront(
     // 画面のスコープを持つ E2E のクライアントは eiaf-e2e だけ。複雑度の枠はクライアントごとなので、1 クライアントの枠の中で送る
     val clients = listOf(Client.A)
     report.value("storefront orders", "${ids.size} 件(SHIPPED)")
+    // 計らない: JIT と接続を温め、Gateway の系列を作ってから窓を始める
+    loadStorefront(StorefrontQuery.SINGLE, ids, clients, rate, WARM_UP_SECONDS)
+    Prometheus.startWindow(report)
     // 1. 注文 1 件の詳細: クライアントごとに複雑度 7 × rate / 秒(枠の戻りは 60 / 秒)
     val single = loadStorefront(StorefrontQuery.SINGLE, ids, clients, rate, seconds)
     report.value(
@@ -180,7 +186,7 @@ internal fun storefront(
     report.value("OVER-BUCKET outcomes", burst.outcomes.json())
 
     Prometheus.awaitScrape()
-    val window = Prometheus.window(report.startedAt)
+    val window = Prometheus.window(report.windowStart)
     gatewayView(report, "storefront-graphql", window)
     val grpc = listOf("rpc_client_call_duration_seconds" to "bff-graphql", "rpc_server_call_duration_seconds" to "provider")
     grpc.forEach { (metric, side) ->

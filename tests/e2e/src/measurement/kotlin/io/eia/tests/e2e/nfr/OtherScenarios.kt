@@ -250,6 +250,9 @@ internal fun callerDeadlineSweep(
 ) {
     val ids = shippedOrders(20)
     val settings = listOf(0 to 0, 600 to 400, 1000 to 600, 1300 to 600)
+    // 計らない: 温めて、caller_deadline の系列を作ってから始める(各段の後の scrape が、次の段の窓の前の値になる)
+    loadStorefront(StorefrontQuery.SINGLE, ids, listOf(Client.A), rate, WARM_UP_SECONDS)
+    Prometheus.awaitScrape()
     settings.forEach { (latency, jitter) ->
         if (latency > 0) toxic(latency, jitter)
         val phaseStart = Instant.now()

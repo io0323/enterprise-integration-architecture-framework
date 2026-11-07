@@ -184,9 +184,9 @@ nfr-up: env ## NFR の計測のための基盤の起動。起動の前に、ほ�
 nfr-measure: env ## NFR の計測(手動。例: make nfr-measure PROFILE="order saga bff" SCENARIO=order-api NFR_ARGS="-Pnfr.requests=3000"。docs/reports/p14-nfr.md)
 	@test -n "$(SCENARIO)" || { echo "SCENARIO を指定してください(order-api / storefront / webhook / iot / cdc / caller-deadline)" >&2; exit 2; }
 	@# 計測の前の確認(eiaf 以外のコンテナ。起動直後の負荷が落ち着くのを待ち、load average が NFR_MAX_LOAD(既定 6)以下)と、
-	@# 開始時の環境の記録。NFR_FORCE=1 で警告だけにして続ける
+	@# 発行の経路(コネクタがすべて RUNNING、直近 5 分に Kafka の切り離しがない)と、開始時の環境の記録。NFR_FORCE=1 で警告だけにして続ける
 	@env_file=tests/e2e/build/nfr/env-$(SCENARIO)-$$(date +%s).txt; \
-	NFR_FORCE=$(NFR_FORCE) $(INFRA)/scripts/nfr-preflight.sh before-measure "$$env_file" || exit $$?; \
+	(set -a && . $(INFRA)/.env && set +a && NFR_FORCE=$(NFR_FORCE) $(INFRA)/scripts/nfr-preflight.sh before-measure "$$env_file") || exit $$?; \
 	echo "環境の記録: $$env_file"; \
 	restore() { echo "Gateway の枠を通常の値に戻します"; $(COMPOSE) $(COMPOSE_PROFILES_ARGS) up -d --no-deps --wait apisix; }; \
 	trap restore EXIT; \

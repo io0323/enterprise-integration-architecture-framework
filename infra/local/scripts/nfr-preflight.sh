@@ -8,6 +8,9 @@
 # - before-up: ホストの 1 分の load average が、CPU のコア数の半分を超えていれば止める(ほかからの負荷を見る)。
 # - before-measure: 起動直後の負荷が落ち着くまで待つ(1 分の load average を 15 秒ごとに見て、1 分前より 0.2 以上
 #   下がらなくなるまで。最長 NFR_SETTLE_MAX 秒。既定 600)。落ち着いた値が NFR_MAX_LOAD(既定 6)を超えていれば止める。
+# - before-measure: 発行の経路が健全かも確かめる。Kafka Connect が動いていれば、登録したコネクタとタスクがすべて RUNNING。
+#   Kafka のログに、直近 NFR_KAFKA_QUIET 秒(既定 300)の間、ブローカーの切り離し(heartbeat の RPC の時間切れ)がない。
+#   切り離されると Connect の割り当てが外れ、既定 5 分の間イベントが発行されない(#215)。Connect の REST は CONNECT_REST_PASSWORD で認証する。
 # - 止めるときは終了コード 3。NFR_FORCE=1 で警告だけにして続ける(警告は環境の記録にも書く)。
 # - 計測の開始時の環境(load average と上限・Docker のメモリの割り当て・動いていたコンテナ)をファイルに書く(レポートに書き写す)。
 #   before-measure は、最後の before-up の記録も含める。秘密情報は書かない(コンテナの名前とメモリ・CPU の使用量だけ)。
@@ -58,6 +61,46 @@ else
   done
   load="${samples[${#samples[@]} - 1]}"
 fi
+pipeline=()
+pipeline_problems=()
+if [[ "$stage" == before-measure ]]; then
+  service_container() { docker ps -q --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=$1" | head -1; }
+  kafka_quiet="${NFR_KAFKA_QUIET:-300}"
+  kafka="$(service_container kafka)"
+  if [[ -n "$kafka" ]]; then
+    detached="$(docker logs --since "${kafka_quiet}s" "$kafka" 2>&1 | grep -c 'Unable to send a heartbeat' || true)"
+    pipeline+=("Kafka の切り離し(直近 ${kafka_quiet} 秒の heartbeat の時間切れ): ${detached} 回")
+    if ((detached > 0)); then
+      pipeline_problems+=("直近 ${kafka_quiet} 秒に Kafka が ${detached} 回切り離されています(heartbeat の時間切れ)。落ち着いてから測ってください")
+    fi
+  fi
+  if [[ -n "$(service_container kafka-connect)" ]]; then
+    connectors="$(curl -sf -u "eiaf-admin:${CONNECT_REST_PASSWORD:-}" 'http://localhost:19083/connectors?expand=status' || echo 'error')"
+    states="$(echo "$connectors" | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except ValueError:
+    sys.exit("error")
+for name, item in sorted(data.items()):
+    status = item["status"]
+    tasks = ",".join(task["state"] for task in status["tasks"]) or "タスクなし"
+    print(name, status["connector"]["state"], tasks)
+' 2>&1 || true)"
+    if [[ "$states" == error || -z "$states" ]]; then
+      pipeline+=("Kafka Connect のコネクタ: 状態を取れない")
+      pipeline_problems+=("Kafka Connect のコネクタの状態を取れません(REST の応答なし、またはコネクタがない)")
+    else
+      while read -r name state tasks; do
+        pipeline+=("コネクタ $name: $state / タスク $tasks")
+        # コネクタと、すべてのタスクが RUNNING(タスクの状態は , 区切り)
+        if [[ "$state" != RUNNING || "$(tr ',' '\n' <<< "$tasks" | sort -u)" != RUNNING ]]; then
+          pipeline_problems+=("コネクタ $name が RUNNING ではありません(コネクタ $state / タスク $tasks)。Connect の割り当て直しを待ってから測ってください")
+        fi
+      done <<< "$states"
+    fi
+  fi
+fi
 others="$(docker ps --format '{{.Names}} {{.Label "com.docker.compose.project"}}' | awk -v p="$project" '$2 != p {print $1}')"
 
 {
@@ -69,6 +112,10 @@ others="$(docker ps --format '{{.Names}} {{.Label "com.docker.compose.project"}}
   if [[ -n "$settle_note" ]]; then echo "負荷の落ち着き: $settle_note"; fi
   docker info --format 'Docker: {{.ServerVersion}} / VM の CPU {{.NCPU}} / VM のメモリ {{.MemTotal}} バイト'
   echo "compose プロジェクト: $project"
+  if ((${#pipeline[@]} > 0)); then
+    echo "発行の経路:"
+    printf '  %s\n' "${pipeline[@]}"
+  fi
   echo "動いていたコンテナ(名前 / メモリ / CPU):"
   docker stats --no-stream --format '{{.Name}} {{.MemUsage}} {{.CPUPerc}}' | sort | sed 's/^/  /'
   if [[ "$stage" == before-measure ]]; then
@@ -81,6 +128,7 @@ cat "$out"
 
 problems=()
 [[ -n "$others" ]] && problems+=("eiaf 以外のコンテナが動いています: $(echo "$others" | paste -sd ' ' -)")
+if ((${#pipeline_problems[@]} > 0)); then problems+=("${pipeline_problems[@]}"); fi
 gt "$load" "$max_load" && problems+=("ホストの load average($load)が上限($max_load)を超えています。重いアプリを閉じて、落ち着いてから測ってください")
 if ((${#problems[@]} > 0)); then
   for p in "${problems[@]}"; do echo "警告: $p" | tee -a "$out" >&2; done
