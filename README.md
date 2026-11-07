@@ -46,4 +46,5 @@ make e2e
 
 Tier 別の NFR の計測は手動でだけ動かし、CI の合否には使わない(ADR-0048)。主な値は GitHub Actions の `nfr` ワークフロー(Run workflow)で取り、手元の `make nfr-up` / `make nfr-measure` は補助([docs/reports/p14-nfr.md](docs/reports/p14-nfr.md))。
 
-このリポジトリにはまだ LICENSE がないため、著作権法上すべての権利が作者に留保され、他の人はコードを利用・複製・改変・再配布できません(GitHub の規約による閲覧と fork は可能です)。
+## ライセンス
+[Apache License 2.0](LICENSE)(Copyright 2026 io0323)。ライセンスの条件に従えば、コードを利用・複製・改変・再配布できる。リポジトリに写して含めている第三者のもの(`tools/contract-check` の AsyncAPI のスキーマ)は、それぞれのライセンスに従う。

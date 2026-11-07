@@ -78,6 +78,8 @@ Ruleset `main protection`(ID 24095263)を設定した。
 ### 5. ライセンスはこの ADR では決めない
 LICENSE を置いていないため、著作権法上、すべての権利が作者に留保される。GitHub の規約による閲覧と fork はできるが、利用・複製・改変・再配布はできない。README の末尾にそう書いた。ライセンスはリポジトリの所有者が決め、決めたら LICENSE を追加して README を直す。
 
+**2026-11-08: Apache License 2.0 に決めた。** リポジトリの直下に、apache.org の原文の LICENSE を置いた(付録の雛形の著作権の行だけを `Copyright 2026 io0323` にした)。README の末尾を、Apache-2.0 で利用できる旨に直した。
+
 ## Alternatives Considered
 - **private のまま、課金の上限を上げる**: CI は動くが、GitHub Free の private リポジトリでは Ruleset を使えない問題が残る。不採用。
 - **private のまま、有料のプラン(Team など)にする**: Ruleset も使えるが、個人の参照実装に対して費用が見合わない。不採用。
@@ -108,4 +110,4 @@ LICENSE を置いていないため、著作権法上、すべての権利が作
 - 2026-10-14: #24 で、ci の統合テストをモジュールのグループ(sales・platform・participants。`scripts/ci/integration-groups.py`)ごとの matrix のジョブ `integration (<グループ>)` に分けた。必須チェックの名前 `integration (Testcontainers)` は、グループのジョブの結果をまとめるジョブが持つ(Ruleset は変えない)。まとめるジョブは常に走り、グループのジョブがすべて成功したか、変更がなくスキップされたときだけ成功する。`changes` が失敗したとき(グループが走らなかったとき)は失敗にする(§3 の抜け道を作らない)。全体のカバレッジの閾値(ルートの `:koverVerify`)は、集約の対象のモジュールの統合テストを同じ Gradle の実行で測る必要があるので、集約の対象をすべて sales のグループに入れ、そこで検証する。グループの分け方の漏れ・重複は、各グループのジョブの最初に `--check` で検査する。
   - あわせて、build と統合テストのジョブの Gradle のキャッシュを、setup-gradle の `basic` から `actions/cache` の restore / save に変えた。`basic` のキーはビルドファイルのハッシュだけで前の版に戻れず(ビルドファイルを変えた PR は全部をコンパイルし直す)、build・integration・e2e が同じキーを取り合い、build の分が保存されないことがあった(`Unable to reserve cache ... another job may be creating this cache`)。ジョブごとのキーにし、前の版に接頭辞で戻れるようにし、main への push のときだけ保存する(PR は main の最新を復元して使う)。
 - 2026-10-14: #105 のマージの後、main の 2 回目の実行で、sales と participants の統合テストが実行されずにビルドキャッシュから結果を取っていた(`FROM-CACHE`)。統合テストは Gradle の入力に宣言していないファイル(`infra/local/kafka/topics.conf`・コネクタの設定・契約など)と実際のミドルウェアの振る舞いに依存するので、統合テスト(`integrationTest`)と E2E(`e2eTest`)の結果は、ビルドキャッシュから取らず、前回の結果でも済ませない(毎回実行する)。コンパイルなどはキャッシュを使う。build-logic の TestKit のテストで確かめる。
-
+- 2026-11-08: §5 のライセンスを Apache License 2.0 に決め、LICENSE を置いた(v1.0.0 の前)。
