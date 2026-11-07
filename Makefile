@@ -1,7 +1,7 @@
 # EIAF ローカル開発用コマンド(CLAUDE.md §7)
 GRADLE := ./gradlew
 
-.PHONY: nfr-measure order-republish help setup build check arch-test contract-check schemas alerts-test integration-test format env not-root certs pgp-keys order-dist legacy-dist saga-dist batch-dist file-dist b2b-dist saas-dist iot-dist up down logs ps verify stats clean e2e audit-verify legacy-simulate dlq-replay batch-etl file-exchange b2b-codes iot-reprocess-dlq
+.PHONY: nfr-up nfr-measure order-republish help setup build check arch-test contract-check schemas alerts-test integration-test format env not-root certs pgp-keys order-dist legacy-dist saga-dist batch-dist file-dist b2b-dist saas-dist iot-dist up down logs ps verify stats clean e2e audit-verify legacy-simulate dlq-replay batch-etl file-exchange b2b-codes iot-reprocess-dlq
 
 # ローカル基盤(infra/local。ADR-0016)
 # PROFILE: core / cdc / iot / file / b2b / chaos / order / saga / batch / saas / bff / secure。core は常に含まれる(積み上げ方式)。空白区切りで複数指定できる。
@@ -171,16 +171,22 @@ dlq-replay: ## DLQ のメッセージを元のトピックに戻す。既定は 
 # NFR の計測(P14 ⑩。docs/reports/p14-nfr.md・ADR-0048)。時間を測るので CI では実行しない。
 # 計測の間だけ、Gateway のクライアントごとの枠を上げる(サービス側の性能を測るため)。.env は書き換えず、apisix をこの値で作り直し、
 # 終わったら(失敗・中断でも)通常の値で作り直す。PROFILE と E2E は make up と同じ値を渡す。
-# 始める前に、eiaf 以外のコンテナが動いていないか・ホストの load average がコア数の半分(NFR_MAX_LOAD)以下かを確かめる(nfr-preflight.sh)
+# 確認は 2 段(nfr-preflight.sh): 基盤を起動する前(make nfr-up)は、ほかのコンテナがなく load average がコア数の半分以下。
+# 起動した後(make nfr-measure)は、ほかのコンテナがなく、負荷が落ち着くのを待ってから load average が NFR_MAX_LOAD(既定 6)以下
 NFR_RATE_LIMIT_CLIENTS := eiaf-e2e=1000000,eiaf-e2e-b=1000000,eiaf-bff-graphql=1000000
 SCENARIO ?=
 NFR_ARGS ?=
 NFR_FORCE ?=
+nfr-up: env ## NFR の計測のための基盤の起動。起動の前に、ほかの負荷がないことを確かめる(例: make nfr-up PROFILE="order saga bff"。docs/reports/p14-nfr.md)
+	@NFR_FORCE=$(NFR_FORCE) $(INFRA)/scripts/nfr-preflight.sh before-up tests/e2e/build/nfr/env-before-up-$$(date +%s).txt
+	@$(MAKE) up PROFILE="$(PROFILE)" E2E="$(E2E)"
+
 nfr-measure: env ## NFR の計測(手動。例: make nfr-measure PROFILE="order saga bff" SCENARIO=order-api NFR_ARGS="-Pnfr.requests=3000"。docs/reports/p14-nfr.md)
 	@test -n "$(SCENARIO)" || { echo "SCENARIO を指定してください(order-api / storefront / webhook / iot / cdc / caller-deadline)" >&2; exit 2; }
-	@# 計測の前の確認(eiaf 以外のコンテナ・ホストの load average)と、開始時の環境の記録。NFR_FORCE=1 で警告だけにして続ける
+	@# 計測の前の確認(eiaf 以外のコンテナ。起動直後の負荷が落ち着くのを待ち、load average が NFR_MAX_LOAD(既定 6)以下)と、
+	@# 開始時の環境の記録。NFR_FORCE=1 で警告だけにして続ける
 	@env_file=tests/e2e/build/nfr/env-$(SCENARIO)-$$(date +%s).txt; \
-	NFR_FORCE=$(NFR_FORCE) $(INFRA)/scripts/nfr-preflight.sh "$$env_file" || exit $$?; \
+	NFR_FORCE=$(NFR_FORCE) $(INFRA)/scripts/nfr-preflight.sh before-measure "$$env_file" || exit $$?; \
 	echo "環境の記録: $$env_file"; \
 	restore() { echo "Gateway の枠を通常の値に戻します"; $(COMPOSE) $(COMPOSE_PROFILES_ARGS) up -d --no-deps --wait apisix; }; \
 	trap restore EXIT; \
