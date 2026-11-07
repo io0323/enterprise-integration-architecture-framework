@@ -14,9 +14,9 @@ on:
         type: number
         default: 2
       max_load:
-        description: 基盤を起動した後の load average の上限(NFR_MAX_LOAD。nfr-preflight.sh before-measure)
+        description: 基盤を起動した後の load average の上限(NFR_MAX_LOAD。nfr-preflight.sh before-measure)。既定の 2 は、ランナーで基盤が何もしていないときの実測(0.43〜1.19)に余裕を足した値(ADR-0048 §7.4)
         type: string
-        default: "6"
+        default: "2"
 permissions:
   contents: read
 concurrency:

@@ -18,7 +18,7 @@ ROADMAP P14 の「Tier 別 NFR(Framework 18 章)の計測レポート」。計�
 | ランナー | `ubuntu-latest`(Linux 7.0.0-1019-azure)、4 コア、メモリ 15 GiB、Docker 29.4.2(VM を挟まない) |
 | CPU の機種(`lscpu`) | A: Intel Xeon Platinum 8573C / B: Intel Xeon Platinum 8370C / C: AMD EPYC 7763。ジョブごとに違う。同じジョブの 2 回は同じ機械なので、2 回の差は機種の違いではない |
 | 起動する前の確認 | ほかのコンテナがなく、load average がコア数の半分(2)以下。準備の直後の負荷(1.3〜3.7)で 1〜2 分待ってから通った |
-| 計測を始める前の load average | A 0.65〜0.96、B 0.48〜1.71、C 0.55〜0.59(上限 `max_load` は既定の 6) |
+| 計測を始める前の load average | A 0.65〜0.96、B 0.48〜1.71、C 0.55〜0.59(上限 `max_load` は当時の既定の 6。今の既定は 2。ADR-0048 §7.4) |
 | 発行の経路 | 12 回すべて、計測の前後でコネクタが RUNNING、計測の間の Kafka の切り離しは 0 回(`pipelineCheck.usable: true`) |
 | コンテナのメモリ | 合計 A 4.2 GB、B 3.9 GB、C 4.4 GB(`make stats`) |
 | Gateway の枠 | 計測の間だけ `EIAF_RATE_LIMIT_CLIENTS=eiaf-e2e=1000000,eiaf-e2e-b=1000000,eiaf-bff-graphql=1000000`。**「Gateway の枠で止められない状態での、サービス側の性能」**。Webhook のルートの枠(remote_addr ごとに 60 秒 120 件)は変えていない |
