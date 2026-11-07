@@ -4,24 +4,26 @@
 サンプル業務ドメイン: **EC 受注 → 在庫引当 → 決済 → 出荷**(Framework 1.6 のシナリオ)。
 構成の改訂履歴: ADR-0009(P00 キックオフレビュー)。
 
-| Phase | 名称 | 主な Framework 章 |
-|---|---|---|
-| P00 | Repository Bootstrap | 16, 19 |
-| P01 | Shared Kernel & Canonical Model (KMP) | 15 |
-| P02 | Contracts & Governance CI | 5, 6, 15, 16 |
-| P03 | Local Infrastructure | 2, 17 |
-| P04a | Platform: Observability, Security & Audit | 12, 14 |
-| P04b | Platform: Resilience | 13 |
-| P05 | API Integration: order-service | 5, 12 |
-| P06 | Outbox & CDC | 8 |
-| P07 | Event Integration + Saga | 4, 6, 13 |
-| P08 | Batch & ELT/ETL | 7 |
-| P09 | File Integration | 9 |
-| P10 | SaaS / Webhook / iPaaS-like Flow | 10 |
-| P11 | IoT (MQTT) & KMP SDK | 6, 17.3 |
-| P12 | B2B / EDI Gateway | 11 |
-| P13 | gRPC & GraphQL BFF | 3, 5, 12 |
-| P14 | Resilience, E2E & SLO | 13, 14, 18 |
+| Phase | 名称 | 主な Framework 章 | 状態 |
+|---|---|---|---|
+| P00 | Repository Bootstrap | 16, 19 | 完了(2026-09-25) |
+| P01 | Shared Kernel & Canonical Model (KMP) | 15 | 完了(2026-09-25) |
+| P02 | Contracts & Governance CI | 5, 6, 15, 16 | 完了(2026-09-26) |
+| P03 | Local Infrastructure | 2, 17 | 完了(2026-09-26) |
+| P04a | Platform: Observability, Security & Audit | 12, 14 | 完了(2026-09-29) |
+| P04b | Platform: Resilience | 13 | 完了(2026-09-30) |
+| P05 | API Integration: order-service | 5, 12 | 完了(2026-10-02) |
+| P06 | Outbox & CDC | 8 | 完了(2026-10-08) |
+| P07 | Event Integration + Saga | 4, 6, 13 | 完了(2026-10-10) |
+| P08 | Batch & ELT/ETL | 7 | 完了(2026-10-15) |
+| P09 | File Integration | 9 | 完了(2026-10-20) |
+| P10 | SaaS / Webhook / iPaaS-like Flow | 10 | 完了(2026-10-23) |
+| P11 | IoT (MQTT) & KMP SDK | 6, 17.3 | 完了(2026-10-30) |
+| P12 | B2B / EDI Gateway | 11 | 完了(2026-11-02) |
+| P13 | gRPC & GraphQL BFF | 3, 5, 12 | 完了(2026-11-03) |
+| P14 | Resilience, E2E & SLO | 13, 14, 18 | 完了(2026-11-07) |
+
+状態の日付は、GitHub の Milestone を閉じた日(UTC)。P00〜P14 をすべて実装した。残りの Issue は末尾の「P14 の後に残る Issue」。
 
 共通ルール:
 - `tests/e2e` は P05 で骨組みを作り、以降の各フェーズで DoD のシナリオを追加する(P14 はまとめ)。
@@ -144,3 +146,26 @@
 - Tier 別 NFR(Framework 18 章)の計測レポート(`docs/reports/p14-nfr.md`)。ADR-0008 で範囲外にした項目も明記する
 - 障害シナリオごとに「期待挙動 / 観測方法 / 結果」を `docs/reports/p14-resilience.md` に記録する
 - **DoD**: 全シナリオが自動実行でき、ダッシュボードで可視化される。全アラートが Runbook に紐づいている。
+
+---
+## P14 の後に残る Issue
+P14 を閉じた時点(2026-11-07)で開いている Issue と、残す理由・待つ条件。
+
+| Issue | 内容 | 残す理由・待つ条件 |
+|---|---|---|
+| #19 | detekt 2.0 安定版への移行 | detekt 2.0 の安定版が出て、使っている Kotlin(2.4.20)に対応するのを待つ |
+| #76 | Outbox の保持期間の方式(日ごとのパーティションと DROP) | 行を残す必要のあるサービスが出たら実装する(ADR-0007 §2)。#80 の再発行をより忠実にする方式としても記録した(ADR-0046) |
+| #82 | CDC: レガシーの受注の明細の表を結合する(状態を持つ ACL) | 明細(注文全体)を必要とする消費者が出てくるのを待つ。方式はその時点で ADR で決める |
+| #139・#145・#148・#161 | pin-check: 上流がタグを別のダイジェストに付け直した(DEBIAN・POSTGRES・MOSQUITTO・PROBE) | 固定したダイジェストは取れる(付け直しの通知)。上流が頻繁に付け直すので、イメージの更新(infra/local/README.md の「イメージの更新」)でまとめて直す |
+| #205 | CI: macOS のジョブがランナーの空き不足で動かない | 2026-11-04 の後、macOS のジョブは 6 回続けて成功している。再発しなければ閉じる |
+| #213 | ローカルの Kafka のデータが volume に残らない | P14 ⑩ の後に直す(`KAFKA_LOG_DIRS` を volume の付け先に合わせる) |
+| #215 | Saga の段の期限と Kafka Connect の割り当て直しの待ち時間 | 期限・送り直しの間隔と Connect の待ち時間の関係を比べて、ADR(ADR-0029 の改訂など)で決める。`docs/reports/p14-nfr.md` の既知の問題 3 |
+
+### Issue にしていない持ち越し
+必要になったら Issue にする。
+
+- 画面の部分応答の割合を SLI にする(遅延が大きいときの部分応答が、どのアラートにも映らない。ADR-0048 §7.3、`docs/reports/p14-nfr.md` の既知の問題 4)
+- order-service の Saga の消費側の流れ(3,000 件を一度に受けた直後に、返事から次のコマンドまで p99 12〜19 秒。既知の問題 1)
+- BFF → Gateway(ADR-0043 §9)と b2b-gateway → Gateway で、トレースが分かれる
+- 各サービスが自分の利用者で Kafka に接続する(`secure` profile では、コンテナ間のリスナーは平文のまま。ADR-0047 §3)
+- ランナーでの計測の起動した後の上限(`max_load`)の既定(今は 6。ランナーで何もしていないときの負荷は 0.43〜1.71。ADR-0048 §7.4)
