@@ -76,7 +76,7 @@ if [[ "$stage" == before-measure ]]; then
     fi
   fi
   if [[ -n "$(service_container kafka-connect)" ]]; then
-    connectors="$(curl -sf -u "eiaf-admin:${CONNECT_REST_PASSWORD:-}" 'http://localhost:19083/connectors?expand=status' || echo 'error')"
+    connectors="$(curl -sf "http://eiaf-admin:${CONNECT_REST_PASSWORD:-}@localhost:19083/connectors?expand=status" || echo 'error')"
     states="$(echo "$connectors" | python3 -c '
 import json, sys
 try:
