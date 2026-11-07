@@ -13,7 +13,10 @@ private fun property(
     default: String,
 ): String = System.getProperty("nfr.$name")?.takeIf { it.isNotBlank() } ?: default
 
-/** 起動直後の Keycloak は最初のトークンの応答が遅いので、負荷の前に取れるまで待つ(取れたトークンは使い回される)。 */
+/**
+ * 起動直後の Keycloak は最初のトークンの応答が遅いので、負荷の前に取れるまで待つ(取れたトークンは使い回される)。
+ * その後、注文 API がトークンを受け付けるまで待つ。
+ */
 private fun warmTokens() {
     // 画面のスコープを持つのは eiaf-e2e だけ(eiaf-e2e-b は注文のスコープだけ)
     val wanted =
@@ -33,6 +36,16 @@ private fun warmTokens() {
             } ?: error("${client.id} のトークンを取れません")
         }
     }
+    // 注文 API が署名の鍵を Keycloak から取れるまでは、正しいトークンでも 401 になる。ない注文を読み、401 でなくなるまで待つ
+    eventually(Duration.ofMinutes(3), Duration.ofSeconds(5)) {
+        val status = E2eEnvironment.send(E2eEnvironment.request("${E2eEnvironment.ORDERS}/nfr-warm-up").GET()).statusCode()
+        if (status == 401 || status >= 500) {
+            println("  注文 API がトークンを受け付けるのを待っています(HTTP $status)")
+            null
+        } else {
+            status
+        }
+    } ?: error("注文 API がトークンを受け付けません")
 }
 
 /**
