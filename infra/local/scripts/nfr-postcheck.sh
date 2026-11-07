@@ -24,6 +24,7 @@ fi
 connectors="Kafka Connect なし"
 connectors_ok=true
 if [[ -n "$(service_container kafka-connect)" ]]; then
+  # Python のコードはシェルの単一引用符の中にあるので、コードの中では単一引用符を使わない
   connectors="$(curl -sf "http://eiaf-admin:${CONNECT_REST_PASSWORD:-}@localhost:19083/connectors?expand=status" | python3 -c '
 import json, sys
 try:
@@ -33,9 +34,10 @@ except ValueError:
 states = []
 for name, item in sorted(data.items()):
     status = item["status"]
+    state = status["connector"]["state"]
     tasks = [task["state"] for task in status["tasks"]]
-    states.append(f"{name}={status['connector']['state']}/{','.join(tasks) or 'タスクなし'}")
-    if status["connector"]["state"] != "RUNNING" or not tasks or set(tasks) != {"RUNNING"}:
+    states.append(name + "=" + state + "/" + (",".join(tasks) or "タスクなし"))
+    if state != "RUNNING" or not tasks or set(tasks) != {"RUNNING"}:
         print("NG " + " ".join(states))
         sys.exit(0)
 print("OK " + " ".join(states))
