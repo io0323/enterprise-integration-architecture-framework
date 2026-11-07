@@ -1,134 +1,134 @@
 {
   "INT-B2B-001": {
     "measured": "no",
-    "result": "TBD",
+    "result": "—",
     "verdict": "—",
-    "reason": "TBD"
+    "reason": "SLO は受信から処理までの時間枠(15 分)で、流量の計測では意味のある値にならない。動作は B2bGatewayE2E で確かめている"
   },
   "INT-B2B-002": {
     "measured": "no",
-    "result": "TBD",
+    "result": "—",
     "verdict": "—",
-    "reason": "TBD"
+    "reason": "INT-B2B-001 と同じ(時間枠 15 分)"
   },
   "INT-B2B-003": {
     "measured": "no",
-    "result": "TBD",
+    "result": "—",
     "verdict": "—",
-    "reason": "TBD"
+    "reason": "INT-B2B-001 と同じ(時間枠 1 時間)"
   },
   "INT-INTEGRATION-001": {
-    "measured": "no",
-    "result": "TBD",
-    "verdict": "—",
-    "reason": "TBD"
+    "measured": "yes",
+    "result": "received → customer.changed を Outbox に書く p99 947 / 926ms(各 200 件、欠けなし)",
+    "verdict": "満たした",
+    "reason": "B(webhook)"
   },
   "INT-INVENTORY-001": {
-    "measured": "no",
-    "result": "TBD",
-    "verdict": "—",
-    "reason": "TBD"
+    "measured": "partial",
+    "result": "cmd-reserve → reserved p99 1,230 / 1,197ms(各 3,000 件)",
+    "verdict": "満たした",
+    "reason": "引当のコマンドだけ。解放(cmd-release)は補償の経路で、正常の負荷では流れないので測っていない"
   },
   "INT-INVENTORY-002": {
-    "measured": "no",
-    "result": "TBD",
-    "verdict": "—",
-    "reason": "TBD"
+    "measured": "yes",
+    "result": "発行 p99 496 / 496ms。reserved → 次のコマンド(order-service が cmd-authorize を出す)p99 18.6 / 14.3s",
+    "verdict": "満たさない(消費側)",
+    "reason": "3,000 件を 17〜24 秒で受けた直後の、order-service の Saga の待ち行列(既知の問題 1)。最大 19.2s で、段の期限(30s)には届いていない"
   },
   "INT-INVENTORY-003": {
-    "measured": "no",
-    "result": "TBD",
-    "verdict": "—",
-    "reason": "TBD"
+    "measured": "yes",
+    "result": "提供側の p99 9.5 / 5.0ms",
+    "verdict": "満たした",
+    "reason": "A(storefront)"
   },
   "INT-IOT-001": {
-    "measured": "no",
-    "result": "TBD",
-    "verdict": "—",
-    "reason": "TBD"
+    "measured": "yes",
+    "result": "機器の送信 → Kafka で読める p99 20 / 12ms(各 600 件、10 件/秒、QoS 1、失敗 0)",
+    "verdict": "満たした",
+    "reason": "INT-IOT-002 と合わせた区間(ホストの時計)"
   },
   "INT-IOT-002": {
-    "measured": "no",
-    "result": "TBD",
-    "verdict": "—",
-    "reason": "TBD"
+    "measured": "yes",
+    "result": "INT-IOT-001 と同じ区間で計測",
+    "verdict": "満たした",
+    "reason": "Bridge から Kafka への発行は、機器の送信からの区間に含めて測った"
   },
   "INT-PAYMENT-001": {
-    "measured": "no",
-    "result": "TBD",
-    "verdict": "—",
-    "reason": "TBD"
+    "measured": "partial",
+    "result": "cmd-authorize → authorized p99 1,912 / 1,474ms",
+    "verdict": "満たした",
+    "reason": "承認のコマンドだけ。取消(cmd-void)は補償の経路で測っていない"
   },
   "INT-PAYMENT-002": {
-    "measured": "no",
-    "result": "TBD",
-    "verdict": "—",
-    "reason": "TBD"
+    "measured": "yes",
+    "result": "発行 p99 492 / 484ms。authorized → 次のコマンド(cmd-arrange)p99 17.7 / 11.9s",
+    "verdict": "満たさない(消費側)",
+    "reason": "INT-INVENTORY-002 と同じく order-service の Saga の待ち行列(既知の問題 1)"
   },
   "INT-SALES-001": {
-    "measured": "no",
-    "result": "TBD",
-    "verdict": "—",
-    "reason": "TBD"
+    "measured": "yes",
+    "result": "クライアントで POST p99 239 / 177ms、GET p99 67 / 45ms(並列 16、247 / 360 件/秒)。Gateway p99 414 / 184ms。5xx 0 件",
+    "verdict": "カタログは満たした。Framework の 300ms は Gateway の 1 回目で超えた",
+    "reason": "並列 16 で送り続けた、ランナーの上限に近い負荷。SLO の扱いは ADR-0048 §7.1"
   },
   "INT-SALES-002": {
-    "measured": "no",
-    "result": "TBD",
-    "verdict": "—",
-    "reason": "TBD"
+    "measured": "yes",
+    "result": "Outbox → Kafka p99: created 505 / 500ms、status-changed 489 / 483ms",
+    "verdict": "満たした",
+    "reason": "発行までの区間。消費側の遅れは Saga の各段(INVENTORY / PAYMENT / SHIPPING)の行に書いた"
   },
   "INT-SALES-003": {
-    "measured": "no",
-    "result": "TBD",
-    "verdict": "—",
-    "reason": "TBD"
+    "measured": "yes",
+    "result": "旧システムのコミット → Kafka p99 1,141 / 1,239ms(変更 400 / 532 件)",
+    "verdict": "満たした",
+    "reason": "50 件ずつまとめてコミットする変更。2 回目の件数には、1 回目の受注の変更が含まれる(計測の道具が 5 分前から読むため)"
   },
   "INT-SALES-004": {
     "measured": "no",
-    "result": "TBD",
+    "result": "—",
     "verdict": "—",
-    "reason": "TBD"
+    "reason": "SLO はバッチの時間枠(8 時間)。再実行の安全性と Checkpoint は統合テストと BatchE2E で確かめている"
   },
   "INT-SALES-005": {
-    "measured": "no",
-    "result": "TBD",
-    "verdict": "—",
-    "reason": "TBD"
+    "measured": "yes",
+    "result": "受け付け(Gateway 経由)p99 19 / 14ms(各 200 件、すべて 204)",
+    "verdict": "満たした",
+    "reason": "Gateway の webhook のルートの枠(remote_addr ごとに 60 秒 120 件)に収まる間隔(550ms)で送った"
   },
   "INT-SALES-006": {
     "measured": "no",
-    "result": "TBD",
+    "result": "—",
     "verdict": "—",
-    "reason": "TBD"
+    "reason": "相手は手元の模擬(saas-mock)で、外部の SaaS の性能を表さない。定期の同期で読む API で、利用者の待ち時間にもならない"
   },
   "INT-SALES-007": {
-    "measured": "no",
-    "result": "TBD",
-    "verdict": "—",
-    "reason": "TBD"
+    "measured": "yes",
+    "result": "Outbox → Kafka p99 494 / 493ms(各 200 件)",
+    "verdict": "満たした",
+    "reason": "B(webhook)"
   },
   "INT-SHIPPING-001": {
-    "measured": "no",
-    "result": "TBD",
-    "verdict": "—",
-    "reason": "TBD"
+    "measured": "partial",
+    "result": "cmd-arrange → shipped p99 1,645 / 1,212ms",
+    "verdict": "満たした",
+    "reason": "手配のコマンドだけ。取消(cmd-cancel)は補償の経路で測っていない"
   },
   "INT-SHIPPING-002": {
-    "measured": "no",
-    "result": "TBD",
-    "verdict": "—",
-    "reason": "TBD"
+    "measured": "yes",
+    "result": "発行 p99 490 / 477ms。shipped → 注文の状態 SHIPPED p99 13.6 / 7.0s",
+    "verdict": "満たさない(消費側)",
+    "reason": "INT-INVENTORY-002 と同じく order-service の Saga の待ち行列(既知の問題 1)"
   },
   "INT-SHIPPING-003": {
-    "measured": "no",
-    "result": "TBD",
-    "verdict": "—",
-    "reason": "TBD"
+    "measured": "yes",
+    "result": "提供側の p99 9.3 / 5.0ms",
+    "verdict": "満たした",
+    "reason": "A(storefront)"
   },
   "INT-STOREFRONT-001": {
-    "measured": "no",
-    "result": "TBD",
-    "verdict": "—",
-    "reason": "TBD"
+    "measured": "yes",
+    "result": "SINGLE p99 44 / 22ms(1s 超 0%)、LIST20 p99 58 / 31ms。部分応答 0 件、5xx 0 件",
+    "verdict": "満たした",
+    "reason": "8 件/秒(複雑度 56/秒)。枠を超える送り方の結果は ADR-0048 §7.2"
   }
 }

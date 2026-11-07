@@ -1,0 +1,20 @@
+{
+  "scenario": "cdc",
+  "startedAt": "2026-11-07T12:05:06.308968885Z",
+  "finishedAt": "2026-11-07T12:06:19.904951504Z",
+  "results": {
+    "INT-SALES-003 changes": "legacy-sim の seed 50 と advance 50 を 4 回(受注 200 件)",
+    "INT-SALES-003 legacy commit → Kafka (record time)": {
+      "count": 400,
+      "p50Ms": 484.0,
+      "p95Ms": 1048.0,
+      "p99Ms": 1141.0,
+      "maxMs": 1157.0
+    }
+  },
+  "pipelineCheck": {
+    "kafkaDetached": 0,
+    "connectors": "integration-flow-outbox=RUNNING/RUNNING legacy-juchu=RUNNING/RUNNING webhook-receiver-outbox=RUNNING/RUNNING",
+    "usable": true
+  }
+}

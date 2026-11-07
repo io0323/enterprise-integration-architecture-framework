@@ -1,0 +1,1 @@
+{"scenario":"iot","startedAt":"2026-11-07T06:42:54.182886Z","finishedAt":"2026-11-07T06:44:04.583060Z","results":{"INT-IOT-001 sent":"600 件(10.0 件/秒、QoS 1)/ 失敗 0","INT-IOT-001+002 device publish → Kafka readable (host clock)":{"count":600,"p50Ms":15.272875,"p95Ms":2317.501167,"p99Ms":4678.230834,"maxMs":5321.339833}}}

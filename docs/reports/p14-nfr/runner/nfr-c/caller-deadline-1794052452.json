@@ -1,0 +1,72 @@
+{
+  "scenario": "caller-deadline",
+  "startedAt": "2026-11-07T11:54:12.375527973Z",
+  "finishedAt": "2026-11-07T12:03:31.188583411Z",
+  "results": {
+    "warm-up": "1 回 × 15s。最後の回の完全な応答 100.0%。温まった",
+    "delay 0±0ms outcomes": {
+      "200 complete": 540
+    },
+    "delay 0±0ms > 1s ratio": "0.0000",
+    "delay 0±0ms (client)": {
+      "count": 540,
+      "p50Ms": 21.854865,
+      "p95Ms": 36.452999,
+      "p99Ms": 49.483001,
+      "maxMs": 65.713004
+    },
+    "delay 0±0ms caller_deadline bff-graphql/inventory": "0 / 577 (0.0000%)",
+    "delay 0±0ms caller_deadline bff-graphql/order-api": "0 / 577 (0.0000%)",
+    "delay 0±0ms caller_deadline bff-graphql/shipping": "0 / 577 (0.0000%)",
+    "delay 600±400ms outcomes": {
+      "200 complete": 540
+    },
+    "delay 600±400ms > 1s ratio": "0.0241",
+    "delay 600±400ms (client)": {
+      "count": 540,
+      "p50Ms": 621.414402,
+      "p95Ms": 965.281652,
+      "p99Ms": 1013.827076,
+      "maxMs": 1032.092627
+    },
+    "delay 600±400ms caller_deadline bff-graphql/inventory": "0 / 582 (0.0000%)",
+    "delay 600±400ms caller_deadline bff-graphql/order-api": "0 / 582 (0.0000%)",
+    "delay 600±400ms caller_deadline bff-graphql/shipping": "0 / 582 (0.0000%)",
+    "delay 1000±600ms outcomes": {
+      "200 complete": 499,
+      "200 partial UPSTREAM_UNAVAILABLE": 41
+    },
+    "delay 1000±600ms > 1s ratio": "0.5296",
+    "delay 1000±600ms (client)": {
+      "count": 540,
+      "p50Ms": 1032.119235,
+      "p95Ms": 2004.945348,
+      "p99Ms": 2007.943341,
+      "maxMs": 2016.69114
+    },
+    "delay 1000±600ms caller_deadline bff-graphql/inventory": "0 / 541 (0.0000%)",
+    "delay 1000±600ms caller_deadline bff-graphql/oauth-token-endpoint": "0 / 3 (0.0000%)",
+    "delay 1000±600ms caller_deadline bff-graphql/order-api": "9 / 623 (1.3904%)",
+    "delay 1000±600ms caller_deadline bff-graphql/shipping": "0 / 541 (0.0000%)",
+    "delay 1300±600ms outcomes": {
+      "200 complete": 32,
+      "200 partial UPSTREAM_UNAVAILABLE": 508
+    },
+    "delay 1300±600ms > 1s ratio": "0.0833",
+    "delay 1300±600ms (client)": {
+      "count": 540,
+      "p50Ms": 3.619035,
+      "p95Ms": 1347.606603,
+      "p99Ms": 1506.872469,
+      "maxMs": 2014.875928
+    },
+    "delay 1300±600ms caller_deadline bff-graphql/inventory": "0 / 34 (0.0000%)",
+    "delay 1300±600ms caller_deadline bff-graphql/order-api": "1 / 582 (0.1838%)",
+    "delay 1300±600ms caller_deadline bff-graphql/shipping": "0 / 34 (0.0000%)"
+  },
+  "pipelineCheck": {
+    "kafkaDetached": 0,
+    "connectors": "inventory-outbox=RUNNING/RUNNING order-outbox=RUNNING/RUNNING payment-outbox=RUNNING/RUNNING shipping-outbox=RUNNING/RUNNING",
+    "usable": true
+  }
+}

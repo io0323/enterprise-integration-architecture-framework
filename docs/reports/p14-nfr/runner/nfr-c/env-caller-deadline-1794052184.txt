@@ -1,0 +1,68 @@
+段階: before-measure
+時刻: 2026-11-07T11:54:00Z
+コミット: 173c279
+ホスト: Linux 7.0.0-1019-azure / メモリ 15 GiB / CPU 4 コア
+CPU の機種(lscpu):
+  Architecture:                            x86_64
+  CPU(s):                                  4
+  Model name:                              AMD EPYC 7763 64-Core Processor
+  Thread(s) per core:                      2
+  Core(s) per socket:                      2
+  Socket(s):                               1
+  Hypervisor vendor:                       Microsoft
+  L3 cache:                                32 MiB (1 instance)
+load average(1 分): 0.55(上限 6。NFR_MAX_LOAD)
+負荷の落ち着き: 255 秒で落ち着いた(1 分前 0.62 → 0.55)
+Docker: 29.4.2 / VM の CPU 4 / VM のメモリ 16759439360 バイト
+compose プロジェクト: eiaf
+発行の経路:
+  Kafka の切り離し(直近 300 秒の heartbeat の時間切れ): 0 回
+  コネクタ inventory-outbox: RUNNING / タスク RUNNING
+  コネクタ order-outbox: RUNNING / タスク RUNNING
+  コネクタ payment-outbox: RUNNING / タスク RUNNING
+  コネクタ shipping-outbox: RUNNING / タスク RUNNING
+動いていたコンテナ(名前 / メモリ / CPU):
+  eiaf-apicurio-1 252.9MiB / 640MiB 1.02%
+  eiaf-apisix-1 53.98MiB / 256MiB 0.21%
+  eiaf-bff-graphql-1 184.6MiB / 256MiB 1.40%
+  eiaf-grafana-1 484.4MiB / 512MiB 0.66%
+  eiaf-inventory-service-1 209.9MiB / 256MiB 0.28%
+  eiaf-kafka-1 516.2MiB / 768MiB 178.40%
+  eiaf-kafka-connect-1 477.6MiB / 1GiB 1.49%
+  eiaf-kafka-exporter-1 9.359MiB / 64MiB 0.02%
+  eiaf-keycloak-1 557.2MiB / 896MiB 0.12%
+  eiaf-loki-1 91.04MiB / 384MiB 0.49%
+  eiaf-order-service-1 221.2MiB / 384MiB 0.36%
+  eiaf-otel-collector-1 54.62MiB / 256MiB 0.12%
+  eiaf-payment-service-1 176.8MiB / 256MiB 0.30%
+  eiaf-postgres-1 208.6MiB / 512MiB 0.79%
+  eiaf-postgres-exporter-1 21.93MiB / 64MiB 0.00%
+  eiaf-prometheus-1 90.74MiB / 384MiB 0.28%
+  eiaf-seaweedfs-1 56.67MiB / 512MiB 0.23%
+  eiaf-seaweedfs-init-1 3.906MiB / 256MiB 0.00%
+  eiaf-shipping-service-1 215.6MiB / 256MiB 0.53%
+  eiaf-tempo-1 126.3MiB / 512MiB 3.33%
+  eiaf-toxiproxy-1 5.973MiB / 64MiB 0.05%
+基盤を起動する前の記録: tests/e2e/build/nfr/env-before-up-1794051866.txt
+  | 段階: before-up
+  | 時刻: 2026-11-07T11:44:26Z
+  | コミット: 173c279
+  | ホスト: Linux 7.0.0-1019-azure / メモリ 15 GiB / CPU 4 コア
+  | CPU の機種(lscpu):
+  |   Architecture:                            x86_64
+  |   CPU(s):                                  4
+  |   Model name:                              AMD EPYC 7763 64-Core Processor
+  |   Thread(s) per core:                      2
+  |   Core(s) per socket:                      2
+  |   Socket(s):                               1
+  |   Hypervisor vendor:                       Microsoft
+  |   L3 cache:                                32 MiB (1 instance)
+  | load average(1 分): 1.65(上限 2。コア数の半分)
+  | Docker: 29.4.2 / VM の CPU 4 / VM のメモリ 16759439360 バイト
+  | compose プロジェクト: eiaf
+  | 動いていたコンテナ(名前 / メモリ / CPU):
+計測の後の確認:
+  Kafka の切り離し(計測の間の heartbeat の時間切れ): 0 回
+  Kafka Connect のコネクタ: inventory-outbox=RUNNING/RUNNING order-outbox=RUNNING/RUNNING payment-outbox=RUNNING/RUNNING shipping-outbox=RUNNING/RUNNING
+  この回を使うか: 使う
+  結果: tests/e2e/build/nfr/caller-deadline-1794052452.json

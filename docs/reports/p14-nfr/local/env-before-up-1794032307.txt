@@ -1,0 +1,8 @@
+段階: before-up
+時刻: 2026-11-07T06:18:28Z
+コミット: 1248abc
+ホスト: Apple M3 / メモリ 8 GiB / macOS 26.3.1 / CPU 8 コア
+load average(1 分): 3.84(上限 4。コア数の半分)
+Docker: 29.8.0 / VM の CPU 8 / VM のメモリ 8319770624 バイト
+compose プロジェクト: eiaf-p14-check
+動いていたコンテナ(名前 / メモリ / CPU):

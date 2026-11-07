@@ -1,0 +1,44 @@
+{
+  "scenario": "webhook",
+  "startedAt": "2026-11-07T11:51:50.225299567Z",
+  "finishedAt": "2026-11-07T11:53:45.255939933Z",
+  "results": {
+    "INT-SALES-005 status": {
+      "HTTP 204": 200
+    },
+    "INT-SALES-005 webhook ack (client, via Gateway)": {
+      "count": 200,
+      "p50Ms": 8.062658,
+      "p95Ms": 12.498921,
+      "p99Ms": 19.251057,
+      "maxMs": 411.445234
+    },
+    "webhook events": "受け付け 200 / received 200 / changed 200",
+    "publish integration.crm-webhook.received.v1 (Outbox → Kafka)": {
+      "count": 200,
+      "p50Ms": 253.0,
+      "p95Ms": 478.0,
+      "p99Ms": 498.0,
+      "maxMs": 502.0
+    },
+    "INT-INTEGRATION-001 (received → customer.changed を Outbox に書く)": {
+      "count": 200,
+      "p50Ms": 527.0,
+      "p95Ms": 858.0,
+      "p99Ms": 947.0,
+      "maxMs": 988.0
+    },
+    "INT-SALES-007 publish sales.customer.changed.v1 (Outbox → Kafka)": {
+      "count": 200,
+      "p50Ms": 242.0,
+      "p95Ms": 471.0,
+      "p99Ms": 494.0,
+      "maxMs": 499.0
+    }
+  },
+  "pipelineCheck": {
+    "kafkaDetached": 0,
+    "connectors": "integration-flow-outbox=RUNNING/RUNNING legacy-juchu=RUNNING/RUNNING webhook-receiver-outbox=RUNNING/RUNNING",
+    "usable": true
+  }
+}

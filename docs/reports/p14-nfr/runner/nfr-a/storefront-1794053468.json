@@ -1,0 +1,52 @@
+{
+  "scenario": "storefront",
+  "startedAt": "2026-11-07T12:11:08.779037Z",
+  "finishedAt": "2026-11-07T12:17:36.444822522Z",
+  "results": {
+    "storefront orders": "40 件(SHIPPED)",
+    "warm-up": "1 回 × 15s。最後の回の完全な応答 100.0%。温まった",
+    "SINGLE load": "1 クライアント × 8.0 件/秒 × 120s(複雑度 7)",
+    "SINGLE outcomes": {
+      "200 complete": 960
+    },
+    "INT-STOREFRONT-001 SINGLE (client)": {
+      "count": 960,
+      "p50Ms": 11.086414,
+      "p95Ms": 17.020008,
+      "p99Ms": 21.630274,
+      "maxMs": 58.125547
+    },
+    "INT-STOREFRONT-001 SINGLE > 1s ratio": "0.0000",
+    "LIST20 load": "1 クライアント × 0.4 件/秒 × 120s(複雑度 140)",
+    "LIST20 outcomes": {
+      "200 complete": 48
+    },
+    "INT-STOREFRONT-001 LIST20 (client)": {
+      "count": 48,
+      "p50Ms": 11.777397,
+      "p95Ms": 16.836825,
+      "p99Ms": 30.572374,
+      "maxMs": 30.572374
+    },
+    "OVER-BUCKET load": "1 クライアント × 15 件/秒 × 60s(複雑度 105 / 秒)",
+    "OVER-BUCKET outcomes": {
+      "200 complete": 636,
+      "HTTP 429": 264
+    },
+    "gateway storefront-graphql p50 (ms, histogram)": "7.9",
+    "gateway storefront-graphql p99 (ms, histogram)": "19.8",
+    "gateway storefront-graphql 5xx / all": "0 / 2002",
+    "gRPC bff-graphql p99 bff-graphql null (ms)": "8.6",
+    "gRPC provider p99 shipping-service null (ms)": "5.0",
+    "gRPC provider p99 inventory-service null (ms)": "5.0",
+    "caller_deadline bff-graphql/inventory": "0 / 1678 (0.0000%)",
+    "caller_deadline bff-graphql/oauth-token-endpoint": "0 / 6 (0.0000%)",
+    "caller_deadline bff-graphql/order-api": "0 / 1678 (0.0000%)",
+    "caller_deadline bff-graphql/shipping": "0 / 1678 (0.0000%)"
+  },
+  "pipelineCheck": {
+    "kafkaDetached": 0,
+    "connectors": "inventory-outbox=RUNNING/RUNNING order-outbox=RUNNING/RUNNING payment-outbox=RUNNING/RUNNING shipping-outbox=RUNNING/RUNNING",
+    "usable": true
+  }
+}
