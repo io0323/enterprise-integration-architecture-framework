@@ -170,18 +170,22 @@ dlq-replay: ## DLQ のメッセージを元のトピックに戻す。既定は 
 
 # NFR の計測(P14 ⑩。docs/reports/p14-nfr.md・ADR-0048)。時間を測るので CI では実行しない。
 # 計測の間だけ、Gateway のクライアントごとの枠を上げる(サービス側の性能を測るため)。.env は書き換えず、apisix をこの値で作り直し、
-# 終わったら(失敗・中断でも)通常の値で作り直す。PROFILE と E2E は make up と同じ値を渡す
+# 終わったら(失敗・中断でも)通常の値で作り直す。PROFILE と E2E は make up と同じ値を渡す。
+# 始める前に、eiaf 以外のコンテナが動いていないか・ホストの load average がコア数の半分(NFR_MAX_LOAD)以下かを確かめる(nfr-preflight.sh)
 NFR_RATE_LIMIT_CLIENTS := eiaf-e2e=1000000,eiaf-e2e-b=1000000,eiaf-bff-graphql=1000000
 SCENARIO ?=
 NFR_ARGS ?=
+NFR_FORCE ?=
 nfr-measure: env ## NFR の計測(手動。例: make nfr-measure PROFILE="order saga bff" SCENARIO=order-api NFR_ARGS="-Pnfr.requests=3000"。docs/reports/p14-nfr.md)
 	@test -n "$(SCENARIO)" || { echo "SCENARIO を指定してください(order-api / storefront / webhook / iot / cdc / caller-deadline)" >&2; exit 2; }
-	@restore() { echo "Gateway の枠を通常の値に戻します"; $(COMPOSE) $(COMPOSE_PROFILES_ARGS) up -d --no-deps --wait apisix; }; \
+	@# 計測の前の確認(eiaf 以外のコンテナ・ホストの load average)と、開始時の環境の記録。NFR_FORCE=1 で警告だけにして続ける
+	@env_file=tests/e2e/build/nfr/env-$(SCENARIO)-$$(date +%s).txt; \
+	NFR_FORCE=$(NFR_FORCE) $(INFRA)/scripts/nfr-preflight.sh "$$env_file" || exit $$?; \
+	echo "環境の記録: $$env_file"; \
+	restore() { echo "Gateway の枠を通常の値に戻します"; $(COMPOSE) $(COMPOSE_PROFILES_ARGS) up -d --no-deps --wait apisix; }; \
 	trap restore EXIT; \
 	echo "Gateway の枠を計測の値にします: EIAF_RATE_LIMIT_CLIENTS=$(NFR_RATE_LIMIT_CLIENTS)"; \
 	EIAF_RATE_LIMIT_CLIENTS="$(NFR_RATE_LIMIT_CLIENTS)" $(COMPOSE) $(COMPOSE_PROFILES_ARGS) up -d --no-deps --wait apisix || exit 1; \
-	docker info --format '環境: Docker {{.ServerVersion}} / VM の CPU {{.NCPU}} / メモリ {{.MemTotal}} バイト'; \
-	sysctl -n machdep.cpu.brand_string hw.memsize 2>/dev/null | paste -sd ' ' - | sed 's/^/ホスト: /'; \
 	set -a && . $(INFRA)/.env && set +a && $(GRADLE) :tests:e2e:measureNfr -Pnfr.scenario=$(SCENARIO) $(NFR_ARGS)
 
 stats: ## 起動中コンテナのメモリ使用量(docker stats)
