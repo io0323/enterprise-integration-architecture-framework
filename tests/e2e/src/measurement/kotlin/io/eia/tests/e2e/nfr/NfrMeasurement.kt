@@ -8,6 +8,9 @@ import io.eia.tests.e2e.eventually
 import java.time.Duration
 import kotlin.system.exitProcess
 
+/** 注文 API を使うシナリオ(基盤に注文のサービスがある)。 */
+private val ORDER_API_SCENARIOS = setOf("order-api", "storefront", "caller-deadline")
+
 private fun property(
     name: String,
     default: String,
@@ -15,9 +18,10 @@ private fun property(
 
 /**
  * 起動直後の Keycloak は最初のトークンの応答が遅いので、負荷の前に取れるまで待つ(取れたトークンは使い回される)。
- * その後、注文 API がトークンを受け付けるまで待つ。
+ * 注文 API を使うシナリオ([waitForOrderApi])では、その後、注文 API がトークンを受け付けるまで待つ
+ * (注文のサービスのない基盤(B の `cdc iot saas`)では待たない)。
  */
-private fun warmTokens() {
+private fun warmTokens(waitForOrderApi: Boolean) {
     // 画面のスコープを持つのは eiaf-e2e だけ(eiaf-e2e-b は注文のスコープだけ)
     val wanted =
         listOf(
@@ -36,6 +40,7 @@ private fun warmTokens() {
             } ?: error("${client.id} のトークンを取れません")
         }
     }
+    if (!waitForOrderApi) return
     // 注文 API が署名の鍵を Keycloak から取れるまでは、正しいトークンでも 401 になる。ない注文を読み、401 でなくなるまで待つ
     eventually(Duration.ofMinutes(3), Duration.ofSeconds(5)) {
         val status = E2eEnvironment.send(E2eEnvironment.request("${E2eEnvironment.ORDERS}/nfr-warm-up").GET()).statusCode()
@@ -66,7 +71,7 @@ fun main() {
     val report = Report(scenario)
     println("NFR の計測: $scenario(${report.startedAt})")
     println("  JVM: ${System.getProperty("java.vendor")} ${System.getProperty("java.version")} ${System.getProperty("os.arch")}")
-    warmTokens()
+    warmTokens(waitForOrderApi = scenario in ORDER_API_SCENARIOS)
     when (scenario) {
         "order-api" -> {
             val run = "nfr-${report.startedAt.epochSecond}"
