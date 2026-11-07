@@ -185,6 +185,7 @@ nfr-measure: env ## NFR の計測(手動。例: make nfr-measure PROFILE="order 
 	@test -n "$(SCENARIO)" || { echo "SCENARIO を指定してください(order-api / storefront / webhook / iot / cdc / caller-deadline)" >&2; exit 2; }
 	@# 計測の前の確認(eiaf 以外のコンテナ。起動直後の負荷が落ち着くのを待ち、load average が NFR_MAX_LOAD(既定 6)以下)と、
 	@# 発行の経路(コネクタがすべて RUNNING、直近 5 分に Kafka の切り離しがない)と、開始時の環境の記録。NFR_FORCE=1 で警告だけにして続ける
+	@# 計測の後にも、計測の間に Kafka の切り離しがなく、コネクタが RUNNING のままかを確かめ、崩れていた回の結果に印を付ける(nfr-postcheck.sh)
 	@env_file=tests/e2e/build/nfr/env-$(SCENARIO)-$$(date +%s).txt; \
 	(set -a && . $(INFRA)/.env && set +a && NFR_FORCE=$(NFR_FORCE) $(INFRA)/scripts/nfr-preflight.sh before-measure "$$env_file") || exit $$?; \
 	echo "環境の記録: $$env_file"; \
@@ -192,7 +193,11 @@ nfr-measure: env ## NFR の計測(手動。例: make nfr-measure PROFILE="order 
 	trap restore EXIT; \
 	echo "Gateway の枠を計測の値にします: EIAF_RATE_LIMIT_CLIENTS=$(NFR_RATE_LIMIT_CLIENTS)"; \
 	EIAF_RATE_LIMIT_CLIENTS="$(NFR_RATE_LIMIT_CLIENTS)" $(COMPOSE) $(COMPOSE_PROFILES_ARGS) up -d --no-deps --wait apisix || exit 1; \
-	set -a && . $(INFRA)/.env && set +a && $(GRADLE) :tests:e2e:measureNfr -Pnfr.scenario=$(SCENARIO) $(NFR_ARGS)
+	since=$$(date +%s); \
+	set -a && . $(INFRA)/.env && set +a; \
+	$(GRADLE) :tests:e2e:measureNfr -Pnfr.scenario=$(SCENARIO) $(NFR_ARGS); status=$$?; \
+	$(INFRA)/scripts/nfr-postcheck.sh "$$env_file" "$$since" "$(SCENARIO)"; \
+	exit $$status
 
 stats: ## 起動中コンテナのメモリ使用量(docker stats)
 	@$(INFRA)/scripts/stats.sh

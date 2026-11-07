@@ -12,7 +12,8 @@
 #   Kafka のログに、直近 NFR_KAFKA_QUIET 秒(既定 300)の間、ブローカーの切り離し(heartbeat の RPC の時間切れ)がない。
 #   切り離されると Connect の割り当てが外れ、既定 5 分の間イベントが発行されない(#215)。Connect の REST は CONNECT_REST_PASSWORD で認証する。
 # - 止めるときは終了コード 3。NFR_FORCE=1 で警告だけにして続ける(警告は環境の記録にも書く)。
-# - 計測の開始時の環境(load average と上限・Docker のメモリの割り当て・動いていたコンテナ)をファイルに書く(レポートに書き写す)。
+# - 計測の開始時の環境(load average と上限・CPU の機種(lscpu があれば)・Docker のメモリの割り当て・動いていたコンテナ)を
+#   ファイルに書く(レポートに書き写す)。
 #   before-measure は、最後の before-up の記録も含める。秘密情報は書かない(コンテナの名前とメモリ・CPU の使用量だけ)。
 set -euo pipefail
 
@@ -108,6 +109,11 @@ others="$(docker ps --format '{{.Names}} {{.Label "com.docker.compose.project"}}
   echo "時刻: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "コミット: $(git rev-parse --short HEAD)$(git diff --quiet HEAD -- . ':!docs' || echo '(未コミットの変更あり)')"
   echo "ホスト: $host / CPU $cores コア"
+  # 同じ大きさの CI のランナーでも、実行ごとに CPU の機種が違うことがある(回ごとの差が機械の違いかを見分けるため)
+  if command -v lscpu >/dev/null; then
+    echo "CPU の機種(lscpu):"
+    lscpu | grep -E '^(Architecture|Model name|CPU\(s\)|Thread\(s\) per core|Core\(s\) per socket|Socket\(s\)|CPU max MHz|L3 cache|Hypervisor vendor):' | sed 's/^/  /' || true
+  fi
   echo "load average(1 分): $load(上限 $max_load。$([[ "$stage" == before-up ]] && echo 'コア数の半分' || echo 'NFR_MAX_LOAD'))"
   if [[ -n "$settle_note" ]]; then echo "負荷の落ち着き: $settle_note"; fi
   docker info --format 'Docker: {{.ServerVersion}} / VM の CPU {{.NCPU}} / VM のメモリ {{.MemTotal}} バイト'
