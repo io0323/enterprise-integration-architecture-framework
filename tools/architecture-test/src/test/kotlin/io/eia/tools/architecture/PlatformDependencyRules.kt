@@ -57,7 +57,8 @@ internal object PlatformDependencyRules {
     private const val RULE = "platform 間の依存"
     private const val CYCLE_RULE = "platform 間の循環"
 
-    private val TEST_SOURCE_SET = Regex("""/src/(test|integrationTest|e2eTest|[A-Za-z0-9]+Test)/kotlin/""")
+    // 本番に載らないソースセット(テストと、手動の計測の measurement。ADR-0048)
+    private val TEST_SOURCE_SET = Regex("""/src/(test|integrationTest|e2eTest|measurement|[A-Za-z0-9]+Test)/kotlin/""")
     private val IMPORT_OR_PACKAGE_LINE = Regex("""^\s*(import|package)\s.*$""", RegexOption.MULTILINE)
     private val MAIN_PROJECT_DEPENDENCY =
         Regex("""^\s*(api|implementation|compileOnly|compileOnlyApi|runtimeOnly)\s*\(\s*project\(\s*":platform:([\w-]+)"""")

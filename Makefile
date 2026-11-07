@@ -1,7 +1,7 @@
 # EIAF ローカル開発用コマンド(CLAUDE.md §7)
 GRADLE := ./gradlew
 
-.PHONY: order-republish help setup build check arch-test contract-check schemas alerts-test integration-test format env not-root certs pgp-keys order-dist legacy-dist saga-dist batch-dist file-dist b2b-dist saas-dist iot-dist up down logs ps verify stats clean e2e audit-verify legacy-simulate dlq-replay batch-etl file-exchange b2b-codes iot-reprocess-dlq
+.PHONY: nfr-measure order-republish help setup build check arch-test contract-check schemas alerts-test integration-test format env not-root certs pgp-keys order-dist legacy-dist saga-dist batch-dist file-dist b2b-dist saas-dist iot-dist up down logs ps verify stats clean e2e audit-verify legacy-simulate dlq-replay batch-etl file-exchange b2b-codes iot-reprocess-dlq
 
 # ローカル基盤(infra/local。ADR-0016)
 # PROFILE: core / cdc / iot / file / b2b / chaos / order / saga / batch / saas / bff / secure。core は常に含まれる(積み上げ方式)。空白区切りで複数指定できる。
@@ -167,6 +167,22 @@ order-republish: env order-dist ## 注文のイベントを再発行する。既
 
 dlq-replay: ## DLQ のメッセージを元のトピックに戻す。既定は dry-run(例: make dlq-replay ARGS="--topic <topic>.dlq --limit 10 [--execute]"。docs/runbooks/event-dlq-replay.md)
 	@$(INFRA)/scripts/dlq-replay.sh $(ARGS)
+
+# NFR の計測(P14 ⑩。docs/reports/p14-nfr.md・ADR-0048)。時間を測るので CI では実行しない。
+# 計測の間だけ、Gateway のクライアントごとの枠を上げる(サービス側の性能を測るため)。.env は書き換えず、apisix をこの値で作り直し、
+# 終わったら(失敗・中断でも)通常の値で作り直す。PROFILE と E2E は make up と同じ値を渡す
+NFR_RATE_LIMIT_CLIENTS := eiaf-e2e=1000000,eiaf-e2e-b=1000000,eiaf-bff-graphql=1000000
+SCENARIO ?=
+NFR_ARGS ?=
+nfr-measure: env ## NFR の計測(手動。例: make nfr-measure PROFILE="order saga bff" SCENARIO=order-api NFR_ARGS="-Pnfr.requests=3000"。docs/reports/p14-nfr.md)
+	@test -n "$(SCENARIO)" || { echo "SCENARIO を指定してください(order-api / storefront / webhook / iot / cdc / caller-deadline)" >&2; exit 2; }
+	@restore() { echo "Gateway の枠を通常の値に戻します"; $(COMPOSE) $(COMPOSE_PROFILES_ARGS) up -d --no-deps --wait apisix; }; \
+	trap restore EXIT; \
+	echo "Gateway の枠を計測の値にします: EIAF_RATE_LIMIT_CLIENTS=$(NFR_RATE_LIMIT_CLIENTS)"; \
+	EIAF_RATE_LIMIT_CLIENTS="$(NFR_RATE_LIMIT_CLIENTS)" $(COMPOSE) $(COMPOSE_PROFILES_ARGS) up -d --no-deps --wait apisix || exit 1; \
+	docker info --format '環境: Docker {{.ServerVersion}} / VM の CPU {{.NCPU}} / メモリ {{.MemTotal}} バイト'; \
+	sysctl -n machdep.cpu.brand_string hw.memsize 2>/dev/null | paste -sd ' ' - | sed 's/^/ホスト: /'; \
+	set -a && . $(INFRA)/.env && set +a && $(GRADLE) :tests:e2e:measureNfr -Pnfr.scenario=$(SCENARIO) $(NFR_ARGS)
 
 stats: ## 起動中コンテナのメモリ使用量(docker stats)
 	@$(INFRA)/scripts/stats.sh
